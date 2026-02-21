@@ -41,6 +41,11 @@ class DeployedInEdge(BaseModel):
     service_id: str
     deployment_id: str
 
+class ServiceExtractionResult(BaseModel):
+    services: List[ServiceNode]
+    calls: List[CallsEdge]
+
+
 class SystemTopology(BaseModel):
     services: List[ServiceNode]
     databases: List[DatabaseNode]

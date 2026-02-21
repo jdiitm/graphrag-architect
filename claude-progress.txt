@@ -1,0 +1,30 @@
+## 2026-02-21: parse_go_and_python_services — Green Phase Complete
+
+### Completed
+- Created orchestrator/app/config.py: ExtractionConfig frozen dataclass (GOOGLE_API_KEY, model_name, concurrency, token budget, retry params)
+- Added ServiceExtractionResult to orchestrator/app/extraction_models.py (services + calls contract)
+- Created orchestrator/app/llm_extraction.py: ServiceExtractor class with:
+  - filter_source_files() — static, keeps only .go/.py
+  - batch_by_token_budget() — static generator, greedy bin-packing by estimated tokens
+  - extract_batch() — async, builds system+human prompt, calls chain (ChatGoogleGenerativeAI.with_structured_output)
+  - extract_all() — async orchestrator: filter → batch → semaphore-gated gather → deduplicate by ServiceNode.id
+  - Retry: tenacity exponential backoff on google.api_core ResourceExhausted/ServiceUnavailable
+- Updated orchestrator/app/graph_builder.py: parse_go_and_python_services is now async, wired to ServiceExtractor
+- TDD: 11 tests written and passing (filter x3, batch x3, extract_batch x2, extract_all x3)
+- Infrastructure: .venv created, all deps + pytest + pytest-asyncio installed, google-api-core added
+
+### Architecture Decisions
+- LLM: Gemini via langchain-google-genai (Anthropic access is Cursor-proxied only, no standalone API key)
+- Default model: gemini-2.0-flash (fast extraction), overridable to gemini-2.5-pro via EXTRACTION_MODEL env var
+- self.chain = structured_llm.ainvoke (bound method) — allows direct AsyncMock in tests
+- Token estimation: len(content) // 4
+
+### Unresolved
+- load_workspace_files node is still a stub
+- parse_k8s_and_kafka_manifests node is still a stub
+- No integration test with real LLM (requires GOOGLE_API_KEY)
+- CallsEdge deduplication not yet implemented (only ServiceNode.id dedup)
+
+### Next Step
+- Implement load_workspace_files to recursively read a directory into raw_files
+- OR add integration test that calls Gemini with the Go/Python fixtures to validate prompt quality
