@@ -28,3 +28,46 @@
 ### Next Step
 - Implement load_workspace_files to recursively read a directory into raw_files
 - OR add integration test that calls Gemini with the Go/Python fixtures to validate prompt quality
+
+---
+
+## 2026-02-21: Go Kafka Ingestion Worker Pool — Green Phase Complete
+
+### Completed
+- Initialized architecture_state.md with full system design (Go workers + Python orchestrator + Kafka + Neo4j)
+- Created workers/ingestion/ Go module (github.com/jdiitm/graphrag-architect/workers/ingestion)
+- Created internal/domain/job.go: Job and Result value types
+- Created internal/processor/processor.go: DocumentProcessor interface
+- Created internal/dispatcher/dispatcher.go: Dispatcher with concurrent worker pool
+  - Run(ctx) launches NumWorkers goroutines reading from shared jobs channel
+  - processWithRetry() retries up to MaxRetries times, checks ctx on each failure
+  - Failed jobs (after max retries) routed to DLQ channel
+  - Graceful shutdown: context cancellation + sync.WaitGroup ensures in-flight jobs complete
+- Created internal/dlq/handler.go: DLQ Handler
+  - Run(ctx) drains results from channel, forwards each to DeadLetterSink interface
+  - Exits on context cancellation or closed channel
+- TDD Red-Green cycle complete: 8 tests written and passing
+  - Dispatcher: 6 tests (process, concurrency, retry, DLQ routing, graceful shutdown, drain)
+  - DLQ Handler: 2 tests (forward to sink, stop on closed channel)
+
+### Architecture Decisions
+- Worker pool pattern: N goroutines sharing a single buffered jobs channel (fan-out)
+- Retry is synchronous within each worker (no sleep, no backoff at dispatcher level)
+- DLQ is a buffered channel bridged by a separate Handler goroutine to a DeadLetterSink interface
+- Kafka library: franz-go selected (not yet imported — will be wired in consumer phase)
+- No external dependencies yet — pure stdlib for dispatcher and DLQ
+
+### Full Test Suite Status
+- Python: 11/11 passing (orchestrator/tests/test_service_extractor.py)
+- Go: 8/8 passing (dispatcher x6, dlq x2)
+- Total: 19/19 passing, 0 regressions
+
+### Unresolved
+- cmd/main.go entry point not yet created (signal handling, Kafka consumer wiring)
+- KafkaConsumer (franz-go) not yet integrated
+- ForwardingProcessor (HTTP POST to Python orchestrator) not yet implemented
+- KafkaDLQSink (publish to raw-documents.dlq topic) not yet implemented
+
+### Next Step
+- Wire cmd/main.go with signal handling, KafkaConsumer → Dispatcher → DLQ pipeline
+- OR implement ForwardingProcessor that HTTP POSTs to the Python orchestrator

@@ -35,31 +35,41 @@ A production-grade GraphRAG system that analyzes distributed systems by building
 | Event Bus | Apache Kafka 3.9 (KRaft) |
 | LLM Extraction | Gemini (via LangChain) |
 | Data Models | Pydantic v2 |
-| Ingestion Workers | Go (planned) |
+| Ingestion Workers | Go (worker pool + DLQ) |
 
 ## Project Structure
 
 ```
 graphrag-architect/
-├── orchestrator/
+├── orchestrator/                        # Python LLM extraction pipeline
 │   ├── app/
-│   │   ├── config.py               # ExtractionConfig (model, concurrency, token budget)
-│   │   ├── extraction_models.py     # Pydantic schemas (ServiceNode, CallsEdge, etc.)
-│   │   ├── graph_builder.py         # LangGraph DAG definition
-│   │   ├── llm_extraction.py        # ServiceExtractor (filter, batch, extract, deduplicate)
-│   │   └── schema_init.cypher       # Neo4j constraints and indexes
+│   │   ├── config.py                    # ExtractionConfig
+│   │   ├── extraction_models.py         # Pydantic schemas (ServiceNode, CallsEdge, etc.)
+│   │   ├── graph_builder.py             # LangGraph DAG definition
+│   │   ├── llm_extraction.py            # ServiceExtractor (filter, batch, extract)
+│   │   └── schema_init.cypher           # Neo4j constraints and indexes
 │   ├── tests/
-│   │   └── test_service_extractor.py
+│   │   └── test_service_extractor.py    # 11 tests
 │   └── requirements.txt
+├── workers/                             # Go high-throughput ingestion
+│   └── ingestion/
+│       ├── internal/
+│       │   ├── domain/job.go            # Job, Result value types
+│       │   ├── processor/processor.go   # DocumentProcessor interface
+│       │   ├── dispatcher/              # Worker pool (dispatcher + tests)
+│       │   └── dlq/                     # Dead Letter Queue (handler + tests)
+│       └── go.mod
 ├── infrastructure/
-│   └── docker-compose.yml           # Neo4j + Kafka
-├── CLAUDE.md                        # AI agent invariants
-└── claude-progress.txt              # Development progress log
+│   └── docker-compose.yml               # Neo4j + Kafka
+├── architecture_state.md                # System design document
+├── CLAUDE.md                            # AI agent invariants
+└── claude-progress.txt                  # Development progress log
 ```
 
 ## Prerequisites
 
 - Python 3.12+
+- Go 1.22+
 - Docker and Docker Compose
 - A Google API key with Gemini access
 
@@ -97,7 +107,11 @@ export EXTRACTION_TOKEN_BUDGET="200000"           # default: 200000
 ### 4. Run tests
 
 ```bash
+# Python tests (11 tests)
 python -m pytest orchestrator/tests/ -v
+
+# Go tests (8 tests)
+cd workers/ingestion && go test ./... -v
 ```
 
 ## Graph Schema
