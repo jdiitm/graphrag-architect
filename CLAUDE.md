@@ -32,3 +32,21 @@ For every task you undertake, you must execute the following Red-Green-Refactor 
 4.  **<implement_green>**: Write the minimal amount of code necessary to make the failing tests pass. Run the tests to confirm success.
 5.  **<refactor>**: Clean up the code, optimize logic, and enforce the formatting invariants from Section 3. Verify tests remain green.
 6.  **<document>**: Update `claude-progress.txt` with the completed actions and state the next step.
+
+## 6. Pre-Push / Pre-PR Quality Gates (Mandatory)
+Before any `git push` or `gh pr create`, you must pass ALL quality gates. This is non-negotiable.
+
+```bash
+# 1. Python lint (from repo root, inside venv)
+source .venv/bin/activate && pylint orchestrator/
+
+# 2. Python tests
+python -m pytest orchestrator/tests/ -v
+
+# 3. Go tests (from module root)
+cd workers/ingestion && go test ./... -v -count=1 -timeout 30s
+```
+
+* If ANY gate fails, stop. Fix it, re-run ALL gates, then proceed.
+* Never skip, disable, or add inline suppression comments to bypass a gate.
+* Always report results (e.g., "Pylint: 10/10, Python: 11/11, Go: 8/8").
