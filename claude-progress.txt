@@ -1,0 +1,73 @@
+## 2026-02-21: parse_go_and_python_services — Green Phase Complete
+
+### Completed
+- Created orchestrator/app/config.py: ExtractionConfig frozen dataclass (GOOGLE_API_KEY, model_name, concurrency, token budget, retry params)
+- Added ServiceExtractionResult to orchestrator/app/extraction_models.py (services + calls contract)
+- Created orchestrator/app/llm_extraction.py: ServiceExtractor class with:
+  - filter_source_files() — static, keeps only .go/.py
+  - batch_by_token_budget() — static generator, greedy bin-packing by estimated tokens
+  - extract_batch() — async, builds system+human prompt, calls chain (ChatGoogleGenerativeAI.with_structured_output)
+  - extract_all() — async orchestrator: filter → batch → semaphore-gated gather → deduplicate by ServiceNode.id
+  - Retry: tenacity exponential backoff on google.api_core ResourceExhausted/ServiceUnavailable
+- Updated orchestrator/app/graph_builder.py: parse_go_and_python_services is now async, wired to ServiceExtractor
+- TDD: 11 tests written and passing (filter x3, batch x3, extract_batch x2, extract_all x3)
+- Infrastructure: .venv created, all deps + pytest + pytest-asyncio installed, google-api-core added
+
+### Architecture Decisions
+- LLM: Gemini via langchain-google-genai (Anthropic access is Cursor-proxied only, no standalone API key)
+- Default model: gemini-2.0-flash (fast extraction), overridable to gemini-2.5-pro via EXTRACTION_MODEL env var
+- self.chain = structured_llm.ainvoke (bound method) — allows direct AsyncMock in tests
+- Token estimation: len(content) // 4
+
+### Unresolved
+- load_workspace_files node is still a stub
+- parse_k8s_and_kafka_manifests node is still a stub
+- No integration test with real LLM (requires GOOGLE_API_KEY)
+- CallsEdge deduplication not yet implemented (only ServiceNode.id dedup)
+
+### Next Step
+- Implement load_workspace_files to recursively read a directory into raw_files
+- OR add integration test that calls Gemini with the Go/Python fixtures to validate prompt quality
+
+---
+
+## 2026-02-21: Go Kafka Ingestion Worker Pool — Green Phase Complete
+
+### Completed
+- Initialized architecture_state.md with full system design (Go workers + Python orchestrator + Kafka + Neo4j)
+- Created workers/ingestion/ Go module (github.com/jdiitm/graphrag-architect/workers/ingestion)
+- Created internal/domain/job.go: Job and Result value types
+- Created internal/processor/processor.go: DocumentProcessor interface
+- Created internal/dispatcher/dispatcher.go: Dispatcher with concurrent worker pool
+  - Run(ctx) launches NumWorkers goroutines reading from shared jobs channel
+  - processWithRetry() retries up to MaxRetries times, checks ctx on each failure
+  - Failed jobs (after max retries) routed to DLQ channel
+  - Graceful shutdown: context cancellation + sync.WaitGroup ensures in-flight jobs complete
+- Created internal/dlq/handler.go: DLQ Handler
+  - Run(ctx) drains results from channel, forwards each to DeadLetterSink interface
+  - Exits on context cancellation or closed channel
+- TDD Red-Green cycle complete: 8 tests written and passing
+  - Dispatcher: 6 tests (process, concurrency, retry, DLQ routing, graceful shutdown, drain)
+  - DLQ Handler: 2 tests (forward to sink, stop on closed channel)
+
+### Architecture Decisions
+- Worker pool pattern: N goroutines sharing a single buffered jobs channel (fan-out)
+- Retry is synchronous within each worker (no sleep, no backoff at dispatcher level)
+- DLQ is a buffered channel bridged by a separate Handler goroutine to a DeadLetterSink interface
+- Kafka library: franz-go selected (not yet imported — will be wired in consumer phase)
+- No external dependencies yet — pure stdlib for dispatcher and DLQ
+
+### Full Test Suite Status
+- Python: 11/11 passing (orchestrator/tests/test_service_extractor.py)
+- Go: 8/8 passing (dispatcher x6, dlq x2)
+- Total: 19/19 passing, 0 regressions
+
+### Unresolved
+- cmd/main.go entry point not yet created (signal handling, Kafka consumer wiring)
+- KafkaConsumer (franz-go) not yet integrated
+- ForwardingProcessor (HTTP POST to Python orchestrator) not yet implemented
+- KafkaDLQSink (publish to raw-documents.dlq topic) not yet implemented
+
+### Next Step
+- Wire cmd/main.go with signal handling, KafkaConsumer → Dispatcher → DLQ pipeline
+- OR implement ForwardingProcessor that HTTP POSTs to the Python orchestrator

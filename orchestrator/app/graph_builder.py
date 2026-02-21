@@ -1,5 +1,10 @@
-from typing import List, Dict, Any, TypedDict
-from langgraph.graph import StateGraph, START, END
+from typing import Any, Dict, List, TypedDict
+
+from langgraph.graph import END, START, StateGraph
+
+from orchestrator.app.config import ExtractionConfig
+from orchestrator.app.llm_extraction import ServiceExtractor
+
 
 class IngestionState(TypedDict):
     directory_path: str
@@ -8,11 +13,16 @@ class IngestionState(TypedDict):
     extraction_errors: List[str]
     commit_status: str
 
+
 def load_workspace_files(state: IngestionState) -> dict:
     return {"raw_files": []}
 
-def parse_go_and_python_services(state: IngestionState) -> dict:
-    return {"extracted_nodes": []}
+
+async def parse_go_and_python_services(state: IngestionState) -> dict:
+    config = ExtractionConfig.from_env()
+    extractor = ServiceExtractor(config)
+    result = await extractor.extract_all(state["raw_files"])
+    return {"extracted_nodes": list(result.services) + list(result.calls)}
 
 def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
     return {"extracted_nodes": []}

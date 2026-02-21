@@ -23,11 +23,12 @@ We are implementing a **Hybrid VectorCypher Retrieval approach**:
 * **Extraction:** Prompt the LLM to extract explicit entities (Services, Pods, Topics, Databases) and relationships (`DEPENDS_ON`, `CONSUMES_FROM`, `WRITES_TO`) from raw text into structured Cypher queries for Neo4j.
 * **Global vs. Local Search:** Simple entity lookups should route to standard Vector Search. Complex structural questions (e.g., "If the Auth service fails, which Kafka topics will experience backpressure?") must trigger an agentic loop that generates Cypher graph traversals, pulls the localized subgraph, and synthesizes the topology.
 
-## 5. The Agentic Execution Loop
-For every task you undertake, you must execute the following cycle in order, using XML tags to structure your reasoning:
+## 5. The Agentic Execution Loop (Strict TDD)
+For every task you undertake, you must execute the following Red-Green-Refactor cycle in order, using XML tags to structure your reasoning:
 
-1.  **<explore>**: Run terminal commands to understand the current file state. Read the `architecture_state.md` and `claude-progress.txt` files to align with the current milestone.
-2.  **<plan>**: Outline your exact approach step-by-step. If designing a complex data flow, verify your logic against distributed systems principles (e.g., idempotency, fault tolerance, eventual consistency).
-3.  **<implement>**: Write or modify the code, strictly adhering to the invariants outlined in Section 3.
-4.  **<verify>**: Write a unit test or provide the bash/curl command to verify the logic end-to-end. If the test fails, you must return to the `<plan>` phase. Do not guess.
-5.  **<document>**: Update `claude-progress.txt` with your completed actions, note any unresolved edge cases, and explicitly state the immediate next step for the subsequent agent session.
+1.  **<explore>**: Run terminal commands to understand the current file state and read `claude-progress.txt`.
+2.  **<plan>**: Outline your exact approach. If defining a new feature, explicitly state the behaviors you will test.
+3.  **<test_red>**: Write the failing unit tests *first*. Run the test suite to prove they fail. You are strictly forbidden from writing implementation code during this step.
+4.  **<implement_green>**: Write the minimal amount of code necessary to make the failing tests pass. Run the tests to confirm success.
+5.  **<refactor>**: Clean up the code, optimize logic, and enforce the formatting invariants from Section 3. Verify tests remain green.
+6.  **<document>**: Update `claude-progress.txt` with the completed actions and state the next step.
