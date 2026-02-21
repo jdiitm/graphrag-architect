@@ -1,41 +1,45 @@
 ---
-description: Mandatory test gate before git push or PR creation
+description: Mandatory quality gates before git push or PR creation
 alwaysApply: true
 ---
 
-# Pre-Push / Pre-PR Test Gate
+# Pre-Push / Pre-PR Quality Gates
 
-Before executing `git push`, `gh pr create`, or any command that sends commits to a remote, you MUST run the full test suite and confirm every test passes. No exceptions.
+Before executing `git push`, `gh pr create`, or any command that sends commits to a remote, you MUST pass ALL quality gates below. No exceptions.
 
-## Required Test Commands
+## Required Gates
 
-Run these sequentially. Both must exit 0 before proceeding.
+Run these sequentially. ALL must exit 0 before proceeding.
 
 ```bash
-# 1. Python tests (from repo root)
-cd /home/j/side/graphrag-architect && source .venv/bin/activate && python -m pytest orchestrator/tests/ -v
+# 1. Python lint (from repo root, inside venv)
+cd /home/j/side/graphrag-architect && source .venv/bin/activate && pylint orchestrator/
 
-# 2. Go tests (from Go module root)
+# 2. Python tests (from repo root, inside venv)
+python -m pytest orchestrator/tests/ -v
+
+# 3. Go tests (from Go module root)
 cd /home/j/side/graphrag-architect/workers/ingestion && go test ./... -v -count=1 -timeout 30s
 ```
 
 ## Rules
 
-- If ANY test fails, STOP. Do not push or create a PR.
-- Fix the failing test first, re-run the full suite, then proceed.
-- Never skip, disable, or mark tests as expected-failure to bypass this gate.
-- Always include the raw test output in your response so the user can verify.
-- When reporting results, state the exact counts: "Python: X/Y passed, Go: A/B passed".
+- If ANY gate fails, STOP. Do not push or create a PR.
+- Fix the failure first, re-run ALL gates from the top, then proceed.
+- Never skip, disable, or mark tests as expected-failure to bypass a gate.
+- Never add pylint disable comments to bypass lint — fix the code or update pyproject.toml if the rule is genuinely inappropriate.
+- Always include the raw output in your response so the user can verify.
+- When reporting results, state: "Pylint: X/10, Python tests: A/B passed, Go tests: C/D passed".
 
 ## Setup Prerequisites
 
-If the venv or Go module is missing, set them up first:
+If the venv, pylint, or Go module is missing, set them up first:
 
 ```bash
 # Python venv (one-time)
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r orchestrator/requirements.txt pytest pytest-asyncio
+pip install -r orchestrator/requirements.txt pytest pytest-asyncio pylint
 
 # Go deps (one-time, from workers/ingestion/)
 go mod tidy

@@ -1,0 +1,14 @@
+[tool.pylint.main]
+ignore-patterns = ["test_.*\\.py"]
+
+[tool.pylint."messages control"]
+disable = [
+    "C0114",  # missing-module-docstring: self-documenting names per CLAUDE.md
+    "C0115",  # missing-class-docstring: Pydantic models and TypedDicts are self-describing
+    "C0116",  # missing-function-docstring: self-documenting names per CLAUDE.md
+    "R0903",  # too-few-public-methods: Pydantic BaseModel subclasses are data containers
+    "W0613",  # unused-argument: LangGraph node stubs must accept `state` per framework contract
+]
+
+[tool.pylint.format]
+max-line-length = 100

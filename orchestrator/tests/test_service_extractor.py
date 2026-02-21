@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import List, Dict
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
