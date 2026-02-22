@@ -63,7 +63,7 @@ graphrag-architect/
 │   │   ├── schema_validation.py         # Pydantic validation + correction loop
 │   │   ├── workspace_loader.py          # Filesystem workspace scanner
 │   │   └── schema_init.cypher           # Neo4j constraints and indexes
-│   ├── tests/                           # 204 tests across 11 test files
+│   ├── tests/                           # 207 tests across 11 test files
 │   │   ├── test_access_control.py
 │   │   ├── test_ingest_api.py
 │   │   ├── test_manifest_parser.py
@@ -87,10 +87,19 @@ graphrag-architect/
 │       │   ├── processor/                # DocumentProcessor interface + ForwardingProcessor
 │       │   ├── dispatcher/               # Worker pool (dispatcher + tests)
 │       │   ├── dlq/                      # Dead Letter Queue (handler + tests)
+│       │   ├── metrics/                 # Prometheus metrics (consumer lag, batch duration, DLQ, jobs)
 │       │   └── telemetry/               # OpenTelemetry TracerProvider + span helpers (FR-8)
 │       └── go.mod
 ├── infrastructure/
-│   └── docker-compose.yml               # Neo4j + Kafka
+│   ├── docker-compose.yml               # Neo4j + Kafka
+│   └── k8s/                             # Kubernetes deployment manifests
+│       ├── namespace.yaml
+│       ├── configmap.yaml
+│       ├── secrets.yaml
+│       ├── orchestrator-deployment.yaml
+│       ├── ingestion-worker-deployment.yaml
+│       ├── hpa.yaml
+│       └── neo4j-schema-job.yaml
 ├── architecture_state.md                # System design document
 ├── CLAUDE.md                            # AI agent invariants
 └── claude-progress.txt                  # Development progress log
@@ -137,10 +146,10 @@ export EXTRACTION_TOKEN_BUDGET="200000"           # default: 200000
 ### 4. Run tests
 
 ```bash
-# Python tests (204 tests)
+# Python tests (207 tests)
 python -m pytest orchestrator/tests/ -v
 
-# Go tests (37 tests)
+# Go tests (42 tests)
 cd workers/ingestion && go test ./... -v
 ```
 

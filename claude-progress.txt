@@ -514,11 +514,27 @@
 - Total: 19/19 passing, 0 regressions
 
 ### Unresolved
-- cmd/main.go entry point not yet created (signal handling, Kafka consumer wiring)
-- KafkaConsumer (franz-go) not yet integrated
-- ForwardingProcessor (HTTP POST to Python orchestrator) not yet implemented
-- KafkaDLQSink (publish to raw-documents.dlq topic) not yet implemented
+- (none remaining from Phase 1-3)
+
+---
+
+## Phase 3: Deployment Infrastructure (Complete)
+
+### Implemented
+- Orchestrator Dockerfile: multi-stage build, non-root user, correct package hierarchy
+- Ingestion worker Dockerfile: multi-stage build (builder + runtime), non-root user
+- Kubernetes manifests: namespace, configmap, secrets, orchestrator deployment, ingestion worker deployment, HPA, neo4j schema init job
+- Prometheus metrics: consumer lag, batch duration, DLQ routed, jobs processed — wired into dispatcher via PipelineObserver interface
+- OpenTelemetry trace sampling: configurable ParentBasedTraceIdRatio (default 0.1)
+- .dockerignore files for both containers
+
+### Quality Gates
+- Pylint: 10/10, Python: 207/207, Go: 42/42
+
+### Audit
+- Post-merge audit: GREEN. All Phase 1 FRs implemented. All Phase 2 FRs implemented ahead of schedule.
+- 2 LOW documentation findings (stale test counts, missing metrics/ in tree) — fixed.
 
 ### Next Step
-- Wire cmd/main.go with signal handling, KafkaConsumer → Dispatcher → DLQ pipeline
-- OR implement ForwardingProcessor that HTTP POSTs to the Python orchestrator
+- System is feature-complete for Phase 1-3. Candidate for production deployment.
+- Remaining follow-ups: wire RecordConsumerLag/RecordBatchDuration into consumer loop, custom error-aware sampler for NFR-8.
