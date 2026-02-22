@@ -147,8 +147,37 @@ spec:
         - podSelector:
             matchLabels:
               app: orchestrator
+        - podSelector:
+            matchLabels:
+              app: neo4j-schema-init
       ports:
         - port: 7687
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-schema-init-egress
+  namespace: graphrag
+spec:
+  podSelector:
+    matchLabels:
+      app: neo4j-schema-init
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: neo4j
+      ports:
+        - port: 7687
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

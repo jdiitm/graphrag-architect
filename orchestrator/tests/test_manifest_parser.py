@@ -446,6 +446,122 @@ class TestDagNodeIntegration:
         assert result["extracted_nodes"] == []
 
 
+class TestManifestACLExtraction:
+    def test_deployment_extracts_team_owner_from_label(self):
+        content = textwrap.dedent("""\
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: auth-service
+              namespace: production
+              labels:
+                graphrag.io/team-owner: platform
+            spec:
+              replicas: 3
+        """)
+        result = parse_k8s_manifests(content)
+        assert len(result) == 1
+        assert result[0].team_owner == "platform"
+
+    def test_deployment_extracts_namespace_acl_from_annotation(self):
+        content = textwrap.dedent("""\
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: auth-service
+              namespace: production
+              annotations:
+                graphrag.io/namespace-acl: "production,staging"
+            spec:
+              replicas: 3
+        """)
+        result = parse_k8s_manifests(content)
+        assert len(result) == 1
+        assert result[0].namespace_acl == ["production", "staging"]
+
+    def test_deployment_without_acl_labels_defaults(self):
+        content = textwrap.dedent("""\
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: plain-deploy
+              namespace: default
+            spec:
+              replicas: 1
+        """)
+        result = parse_k8s_manifests(content)
+        assert len(result) == 1
+        assert result[0].team_owner is None
+        assert result[0].namespace_acl == []
+
+    def test_kafka_topic_extracts_team_owner_from_label(self):
+        content = textwrap.dedent("""\
+            apiVersion: kafka.strimzi.io/v1beta2
+            kind: KafkaTopic
+            metadata:
+              name: user-events
+              labels:
+                graphrag.io/team-owner: data-team
+            spec:
+              partitions: 6
+              config:
+                retention.ms: "604800000"
+        """)
+        result = parse_kafka_topics(content)
+        assert len(result) == 1
+        assert result[0].team_owner == "data-team"
+
+    def test_kafka_topic_extracts_namespace_acl_from_annotation(self):
+        content = textwrap.dedent("""\
+            apiVersion: kafka.strimzi.io/v1beta2
+            kind: KafkaTopic
+            metadata:
+              name: user-events
+              annotations:
+                graphrag.io/namespace-acl: "production"
+            spec:
+              partitions: 6
+              config:
+                retention.ms: "604800000"
+        """)
+        result = parse_kafka_topics(content)
+        assert len(result) == 1
+        assert result[0].namespace_acl == ["production"]
+
+    def test_kafka_topic_without_acl_labels_defaults(self):
+        content = textwrap.dedent("""\
+            apiVersion: kafka.strimzi.io/v1beta2
+            kind: KafkaTopic
+            metadata:
+              name: plain-topic
+            spec:
+              partitions: 1
+        """)
+        result = parse_kafka_topics(content)
+        assert len(result) == 1
+        assert result[0].team_owner is None
+        assert result[0].namespace_acl == []
+
+    def test_deployment_both_team_and_namespace_acl(self):
+        content = textwrap.dedent("""\
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: full-acl-deploy
+              namespace: production
+              labels:
+                graphrag.io/team-owner: infra-team
+              annotations:
+                graphrag.io/namespace-acl: "production,staging,dev"
+            spec:
+              replicas: 2
+        """)
+        result = parse_k8s_manifests(content)
+        assert len(result) == 1
+        assert result[0].team_owner == "infra-team"
+        assert result[0].namespace_acl == ["production", "staging", "dev"]
+
+
 class TestMalformedYamlLogging:
     def test_malformed_yaml_logs_warning(self, caplog):
         import logging
