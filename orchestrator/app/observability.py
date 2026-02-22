@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, Sequence
 
+from opentelemetry import context as otel_context
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
@@ -11,11 +12,52 @@ from opentelemetry.sdk.trace.export import (
     SimpleSpanProcessor,
     SpanExporter,
 )
-from opentelemetry.sdk.trace.sampling import ParentBasedTraceIdRatio
-from opentelemetry.trace import StatusCode
+from opentelemetry.sdk.trace.sampling import (
+    Decision,
+    Sampler,
+    SamplingResult,
+    TraceIdRatioBased,
+)
+from opentelemetry.trace import SpanKind, StatusCode
+
+if TYPE_CHECKING:
+    from opentelemetry.context import Context
+    from opentelemetry.trace import Link
+    from opentelemetry.util.types import Attributes
 
 _SERVICE_NAME = "graphrag-orchestrator"
 _STATE: dict[str, trace.Tracer] = {}
+
+_SUPPRESS_KEY = otel_context.create_key("suppress-instrumentation")
+
+
+class RecordAllSampler(Sampler):
+    def __init__(self, ratio: float) -> None:
+        self._delegate = TraceIdRatioBased(ratio)
+
+    def should_sample(
+        self,
+        parent_context: Optional[Context],
+        trace_id: int,
+        name: str,
+        kind: Optional[SpanKind] = None,
+        attributes: Optional[Attributes] = None,
+        links: Optional[Sequence[Link]] = None,
+        trace_state: Optional["trace.TraceState"] = None,
+    ) -> SamplingResult:
+        result = self._delegate.should_sample(
+            parent_context, trace_id, name, kind, attributes, links, trace_state
+        )
+        if result.decision == Decision.DROP:
+            return SamplingResult(
+                Decision.RECORD_ONLY,
+                result.attributes,
+                result.trace_state,
+            )
+        return result
+
+    def get_description(self) -> str:
+        return f"RecordAllSampler({self._delegate.get_description()})"
 
 
 class ErrorForceExportProcessor(SimpleSpanProcessor):
@@ -23,9 +65,23 @@ class ErrorForceExportProcessor(SimpleSpanProcessor):
         super().__init__(span_exporter)
         self._error_exporter = span_exporter
 
-    def on_end(self, span: "ReadableSpan") -> None:
-        if span.status and span.status.status_code == StatusCode.ERROR:
+    def on_start(
+        self, span: "ReadableSpan", parent_context: Optional["Context"] = None
+    ) -> None:
+        pass
+
+    def on_end(self, span: ReadableSpan) -> None:
+        if not span.status or span.status.status_code != StatusCode.ERROR:
+            return
+        if not span.context or span.context.trace_flags.sampled:
+            return
+        token = otel_context.attach(otel_context.set_value(_SUPPRESS_KEY, True))
+        try:
             self._error_exporter.export((span,))
+        except Exception:  # pylint: disable=broad-except
+            pass
+        finally:
+            otel_context.detach(token)
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
@@ -34,20 +90,21 @@ class ErrorForceExportProcessor(SimpleSpanProcessor):
         pass
 
 
-def _build_sampler() -> ParentBasedTraceIdRatio:
-    rate = float(os.environ.get("OTEL_TRACES_SAMPLER_ARG", "0.1"))
-    return ParentBasedTraceIdRatio(rate)
+def _build_sampler(ratio: Optional[float] = None) -> RecordAllSampler:
+    if ratio is None:
+        ratio = float(os.environ.get("OTEL_TRACES_SAMPLER_ARG", "0.1"))
+    return RecordAllSampler(ratio)
 
 
 def configure_telemetry(
     exporter: Optional[SpanExporter] = None,
 ) -> TracerProvider:
-    sampler = _build_sampler() if exporter is None else None
-    provider = TracerProvider(sampler=sampler)
-
     if exporter is not None:
+        provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(exporter))
     else:
+        sampler = _build_sampler()
+        provider = TracerProvider(sampler=sampler)
         otlp_endpoint = os.environ.get(
             "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
         )
