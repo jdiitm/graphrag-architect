@@ -1,7 +1,9 @@
+import base64
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from starlette.testclient import TestClient
 
 from orchestrator.app.circuit_breaker import (
     CircuitBreaker,
@@ -9,6 +11,7 @@ from orchestrator.app.circuit_breaker import (
     CircuitOpenError,
 )
 from orchestrator.app.extraction_models import ServiceNode, CallsEdge
+from orchestrator.app.main import app
 from orchestrator.app.neo4j_client import GraphRepository
 from orchestrator.tests.conftest import mock_async_session
 
@@ -144,6 +147,90 @@ class TestIngestionDAGFlow:
             })
 
             assert result["commit_status"] == "failed"
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
+class TestHTTPThroughDAGIntegration:
+    @pytest.fixture(name="client")
+    def fixture_client(self):
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_post_ingest_runs_full_dag_and_commits(self, client):
+        mock_topology = MagicMock()
+        mock_topology.services = [
+            ServiceNode(
+                id="svc-1", name="auth", language="python",
+                framework="fastapi", opentelemetry_enabled=True,
+            ),
+        ]
+        mock_topology.calls = [
+            CallsEdge(
+                source_service_id="svc-1",
+                target_service_id="svc-2",
+                protocol="grpc",
+            ),
+        ]
+
+        mock_driver, mock_session = mock_async_session()
+
+        with (
+            patch.dict("os.environ", _ENV_VARS),
+            patch("orchestrator.app.graph_builder.ServiceExtractor") as mock_ext,
+            patch("orchestrator.app.graph_builder.get_driver", return_value=mock_driver),
+        ):
+            mock_extractor = AsyncMock()
+            mock_extractor.extract_all = AsyncMock(return_value=mock_topology)
+            mock_ext.return_value = mock_extractor
+
+            response = client.post("/ingest", json={
+                "documents": [
+                    {
+                        "file_path": "auth/main.py",
+                        "content": _b64("from fastapi import FastAPI"),
+                        "source_type": "source_code",
+                    },
+                ],
+            })
+
+            assert response.status_code == 200
+            body = response.json()
+            assert body["status"] == "success"
+            assert body["entities_extracted"] > 0
+            mock_extractor.extract_all.assert_awaited()
+            mock_session.execute_write.assert_awaited()
+
+    def test_post_ingest_neo4j_failure_returns_503(self, client):
+        mock_topology = MagicMock()
+        mock_topology.services = []
+        mock_topology.calls = []
+
+        with (
+            patch.dict("os.environ", _ENV_VARS),
+            patch("orchestrator.app.graph_builder.ServiceExtractor") as mock_ext,
+            patch(
+                "orchestrator.app.graph_builder.get_driver",
+                side_effect=OSError("connection refused"),
+            ),
+        ):
+            mock_extractor = AsyncMock()
+            mock_extractor.extract_all = AsyncMock(return_value=mock_topology)
+            mock_ext.return_value = mock_extractor
+
+            response = client.post("/ingest", json={
+                "documents": [
+                    {
+                        "file_path": "app.py",
+                        "content": _b64("x = 1"),
+                        "source_type": "source_code",
+                    },
+                ],
+            })
+
+            assert response.status_code == 503
+            assert response.json()["status"] == "failed"
 
 
 class TestQueryDAGRouting:

@@ -3,19 +3,28 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+import time
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
+
+DEFAULT_TOKEN_TTL_SECONDS = 3600
 
 
 class InvalidTokenError(Exception):
     pass
 
 
-def sign_token(payload: str, secret: str) -> str:
+def sign_token(
+    payload: str,
+    secret: str,
+    ttl_seconds: int = DEFAULT_TOKEN_TTL_SECONDS,
+) -> str:
+    now = int(time.time())
+    payload_with_claims = f"{payload},iat={now},exp={now + ttl_seconds}"
     signature = hmac.new(
-        secret.encode(), payload.encode(), hashlib.sha256
+        secret.encode(), payload_with_claims.encode(), hashlib.sha256
     ).hexdigest()
-    return f"{payload}.{signature}"
+    return f"{payload_with_claims}.{signature}"
 
 
 def _verify_signature(token: str, secret: str) -> str:
@@ -29,7 +38,25 @@ def _verify_signature(token: str, secret: str) -> str:
     ).hexdigest()
     if not hmac.compare_digest(provided_sig, expected_sig):
         raise InvalidTokenError("token signature invalid")
+    _check_expiration(payload)
     return payload
+
+
+def _check_expiration(payload: str) -> None:
+    fields: Dict[str, str] = {}
+    for pair in payload.split(","):
+        if "=" in pair:
+            key, value = pair.split("=", 1)
+            fields[key.strip()] = value.strip()
+    exp_str = fields.get("exp")
+    if exp_str is None:
+        raise InvalidTokenError("token missing expiration")
+    try:
+        exp = int(exp_str)
+    except ValueError as exc:
+        raise InvalidTokenError("token expiration is not a valid integer") from exc
+    if time.time() >= exp:
+        raise InvalidTokenError("token expired")
 
 
 @dataclass(frozen=True)

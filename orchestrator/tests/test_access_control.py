@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import time
 
 import pytest
 
@@ -200,15 +201,17 @@ class TestSignToken:
         assert "." in token
         parts = token.rsplit(".", 1)
         assert len(parts) == 2
-        assert parts[0] == payload
+        assert parts[0].startswith(payload)
+        assert ",iat=" in parts[0]
+        assert ",exp=" in parts[0]
 
     def test_signature_is_valid_hmac_sha256(self):
         payload = "team=ops,role=admin"
         secret = "test-secret-key"
         token = sign_token(payload, secret)
-        _, signature = token.rsplit(".", 1)
+        full_payload, signature = token.rsplit(".", 1)
         expected = hmac.new(
-            secret.encode(), payload.encode(), hashlib.sha256
+            secret.encode(), full_payload.encode(), hashlib.sha256
         ).hexdigest()
         assert signature == expected
 
@@ -217,6 +220,58 @@ class TestSignToken:
         token_a = sign_token(payload, "secret-a")
         token_b = sign_token(payload, "secret-b")
         assert token_a != token_b
+
+
+class TestTokenExpiration:
+    def test_sign_token_embeds_iat_and_exp(self):
+        token = sign_token("team=ops,role=admin", "secret", ttl_seconds=3600)
+        payload, _ = token.rsplit(".", 1)
+        fields = dict(pair.split("=", 1) for pair in payload.split(",") if "=" in pair)
+        assert "iat" in fields
+        assert "exp" in fields
+        iat = int(fields["iat"])
+        exp = int(fields["exp"])
+        assert exp - iat == 3600
+        assert abs(iat - int(time.time())) < 5
+
+    def test_expired_token_raises_invalid_token_error(self):
+        expired_payload = f"team=ops,role=admin,iat={int(time.time()) - 7200},exp={int(time.time()) - 3600}"
+        sig = hmac.new(
+            "secret".encode(), expired_payload.encode(), hashlib.sha256
+        ).hexdigest()
+        token = f"{expired_payload}.{sig}"
+        with pytest.raises(InvalidTokenError, match="token expired"):
+            SecurityPrincipal.from_header(
+                f"Bearer {token}", token_secret="secret"
+            )
+
+    def test_token_within_ttl_validates_successfully(self):
+        token = sign_token("team=ops,role=admin", "secret", ttl_seconds=3600)
+        principal = SecurityPrincipal.from_header(
+            f"Bearer {token}", token_secret="secret"
+        )
+        assert principal.team == "ops"
+        assert principal.role == "admin"
+
+    def test_token_at_exact_expiry_boundary_rejected(self):
+        now = int(time.time())
+        boundary_payload = f"team=ops,role=viewer,iat={now},exp={now}"
+        sig = hmac.new(
+            "secret".encode(), boundary_payload.encode(), hashlib.sha256
+        ).hexdigest()
+        token = f"{boundary_payload}.{sig}"
+        with pytest.raises(InvalidTokenError, match="token expired"):
+            SecurityPrincipal.from_header(
+                f"Bearer {token}", token_secret="secret"
+            )
+
+    def test_default_ttl_is_one_hour(self):
+        token = sign_token("team=ops,role=admin", "secret")
+        payload, _ = token.rsplit(".", 1)
+        fields = dict(pair.split("=", 1) for pair in payload.split(",") if "=" in pair)
+        iat = int(fields["iat"])
+        exp = int(fields["exp"])
+        assert exp - iat == 3600
 
 
 class TestHMACTokenVerification:

@@ -16,4 +16,5 @@ type Result struct {
 	Job      Job
 	Err      error
 	Attempts int
+	Done     chan struct{}
 }

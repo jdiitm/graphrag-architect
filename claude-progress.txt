@@ -1,3 +1,37 @@
+## Completed: Audit Mitigation — DLQ Durability, Token TTL, Ingest Auth, E2E Tests
+
+Branch: `fix/audit-mitigations`
+Quality Gates: Pylint 10/10, Python 354/354, Go 61/61
+
+### Critical Fixes Applied (TDD Red-Green-Refactor)
+
+- **B3 (DLQ Data Loss — CRITICAL)**: Dispatcher now waits for DLQ handler confirmation
+  before acking. Result.Done channel blocks offset commit until sink write is confirmed.
+  DLQ handler retries sink up to 3x with configurable delay and supports a fallback sink.
+  Files: domain/job.go, dispatcher/dispatcher.go, dlq/handler.go
+
+- **B5 (Token TTL — HIGH)**: sign_token() now embeds iat/exp epoch claims in the token
+  payload. _verify_signature() rejects expired tokens. Default TTL: 3600s (1 hour),
+  configurable via AUTH_TOKEN_TTL env var.
+  Files: access_control.py, config.py
+
+- **B2 (Ingest Auth — HIGH)**: /ingest endpoint now accepts optional Authorization
+  header. When AUTH_TOKEN_SECRET is configured, unauthenticated requests return 401.
+  Go ForwardingProcessor supports WithAuthToken() option, reads AUTH_TOKEN from env.
+  Files: main.py, forwarding.go, cmd/main.go
+
+- **B4 (E2E Test — MEDIUM)**: Added TestHTTPThroughDAGIntegration exercising
+  POST /ingest through the real LangGraph DAG (external deps mocked). Proves the
+  HTTP endpoint → load_workspace → parse → validate → commit flow is end-to-end correct.
+  Files: test_integration.py
+
+### Audit Finding B1 (Silent Data Drop) — Verified NOT a bug
+  load_workspace_files() at graph_builder.py:49-56 correctly preserves raw_files when
+  directory_path is empty. Existing integration test at test_integration.py:102-115
+  already proves this. The new E2E test provides additional HTTP-level confirmation.
+
+---
+
 ## Completed: K8s Security Context + Neo4j Commit Error Logging (Audit M-1, M-2)
 
 Branch: `feat/k8s-security-context-and-commit-logging`

@@ -1,6 +1,7 @@
 import base64
 import binascii
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
@@ -10,7 +11,10 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import Response
 
-from orchestrator.app.access_control import InvalidTokenError
+from orchestrator.app.access_control import (
+    InvalidTokenError,
+    SecurityPrincipal,
+)
 from orchestrator.app.graph_builder import ingestion_graph
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
 from orchestrator.app.neo4j_pool import close_driver, init_driver
@@ -61,8 +65,24 @@ def prometheus_metrics() -> Response:
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
+def _verify_ingest_auth(authorization: Optional[str]) -> None:
+    secret = os.environ.get("AUTH_TOKEN_SECRET", "")
+    if not secret:
+        return
+    if not authorization or not authorization.strip():
+        raise HTTPException(status_code=401, detail="missing authorization token")
+    try:
+        SecurityPrincipal.from_header(authorization, token_secret=secret)
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
 @app.post("/ingest", response_model=IngestResponse)
-async def ingest(request: IngestRequest) -> IngestResponse:
+async def ingest(
+    request: IngestRequest,
+    authorization: Optional[str] = Header(default=None),
+) -> IngestResponse:
+    _verify_ingest_auth(authorization)
     raw_files = _decode_documents(request)
     initial_state: Dict[str, Any] = {
         "directory_path": "",
