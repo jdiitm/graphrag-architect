@@ -5,7 +5,7 @@ description: Periodic full-system audit for graphrag-architect. Performs a deep,
 
 # System Audit
 
-Full-depth, full-width audit of the graphrag-architect system. Verdict must be evidence-based: GREEN when green, RED when red. No manufactured findings.
+Full-depth, full-width audit of the graphrag-architect system. Produces a single structured report covering every requirement, every file, every test, every doc.
 
 ## FSM Position
 
@@ -25,72 +25,86 @@ You are an independent auditor. You trust ONLY what you read from disk and what 
 If you have any memory of writing, reviewing, fixing, or syncing docs in this session, STOP — you are contaminated.
 Tell the user: "This skill must run in a new conversation to maintain isolation."
 
-## Honesty Invariants
-
-These are as non-negotiable as the integrity rules in the other skills:
-
-1. **Never manufacture a finding.** If a dimension is clean, it is clean. Do not invent issues to justify your existence. An all-green audit is a valid and valuable result.
-2. **Never inflate severity.** A style preference is not HIGH. A missing Phase 2 feature is not CRITICAL. Severity must match actual impact.
-3. **Never report a false positive.** Every finding must include the exact file, line, and evidence. If you cannot point to a specific line, it is not a finding.
-4. **Never suppress a real problem.** If tests fail, pylint scores below 10, or code contradicts the PRD, report it honestly regardless of how inconvenient it is.
-5. **Never count Phase 2 / spec'd-not-yet-planned items as gaps.** FR-4, FR-7, FR-8 are explicitly deferred in the PRD. Missing implementation of these is expected, not a finding. Only flag them if the PRD says they should be done now.
-6. **The verdict must follow mechanically from the evidence.** You do not get to "feel" like something is RED. Apply the verdict criteria below.
-
-## Verdict Criteria (Objective)
-
-Apply these rules mechanically. No judgment calls.
-
-| Verdict | Criteria |
-|---------|----------|
-| **RED** | ANY of: pylint < 10/10, ANY test failure, a Phase 1 FR with status Stub or Not Started, a CRITICAL finding with file:line evidence |
-| **YELLOW** | No RED triggers, but at least one HIGH finding with file:line evidence |
-| **GREEN** | All quality gates pass, all Phase 1 FRs implemented with tests, zero CRITICAL or HIGH findings |
-
-Phase 1 FRs (must be implemented): FR-1, FR-2, FR-3, FR-5, FR-6.
-Phase 2 FRs (deferred, not counted): FR-4, FR-7, FR-8.
-
 ## Precondition Gate
 
+Before doing ANY work, verify these conditions:
+
 ```bash
+# 1. Must be on main with clean working tree
 git branch --show-current   # must be "main"
 git status --porcelain      # must be empty
 ```
 
-**If not on main or dirty tree:** HALT. "Working tree is not clean on main. Resolve before auditing."
+**If not on main or dirty tree:** HALT. Tell the user: "Working tree is not clean on main. Resolve before auditing."
 
-## Step 1: Read the Specification
+If there are open PRs, that is fine — the audit still runs. It will note the open PR in the report.
 
-Read in full:
+## Schedule
 
-- `docs/prd/02_SYSTEM_REQUIREMENTS.md`
-- `docs/architecture/01_SYSTEM_DESIGN.md`
-- `docs/architecture/02_DATA_DICTIONARY.md`
-- `CLAUDE.md`
+This audit should run every ~30 minutes during active development. The user triggers it manually. The report replaces any prior audit report.
 
-Note which FRs are Phase 1 vs Phase 2.
+## Step 1: Read the Specification (Ground Truth)
+
+Read these files in full — they define what the system SHOULD be:
+
+```bash
+# Requirements spec
+docs/prd/02_SYSTEM_REQUIREMENTS.md
+
+# Architecture spec
+docs/architecture/01_SYSTEM_DESIGN.md
+docs/architecture/02_DATA_DICTIONARY.md
+
+# Coding invariants
+CLAUDE.md
+```
+
+Build a mental checklist of every FR-N (FR-1 through FR-8) and every NFR-N. These are your audit criteria.
 
 ## Step 2: Read the Entire Codebase
 
 Read every source file. Do not skip any. Do not skim.
 
+**Python orchestrator:**
+
 ```
-orchestrator/app/*.py
-orchestrator/tests/test_*.py
-orchestrator/requirements.txt
-workers/ingestion/internal/**/*.go
-workers/ingestion/go.mod
+orchestrator/app/*.py          — every module
+orchestrator/tests/test_*.py   — every test file
+orchestrator/requirements.txt  — dependencies
+```
+
+**Go workers:**
+
+```
+workers/ingestion/internal/**/*.go   — every source and test file
+workers/ingestion/go.mod             — dependencies
+```
+
+**Infrastructure:**
+
+```
 infrastructure/docker-compose.yml
+```
+
+**Configuration:**
+
+```
 pyproject.toml
 .github/workflows/*.yml
 ```
 
+For each file, note: what it implements, what it tests, what it imports, what it exports.
+
 ## Step 3: Read All Documentation
+
+Read every documentation file — these are what the audit checks for staleness:
 
 ```
 README.md
 architecture_state.md
 claude-progress.txt
 docs/prd/01_VISION_AND_SCOPE.md
+docs/prd/02_SYSTEM_REQUIREMENTS.md
 docs/architecture/01_SYSTEM_DESIGN.md
 docs/architecture/02_DATA_DICTIONARY.md
 ```
@@ -103,94 +117,116 @@ Execute and capture full raw output:
 cd /home/j/side/graphrag-architect
 source .venv/bin/activate
 
+# Gate 1: Pylint
 pylint orchestrator/
+
+# Gate 2: Python tests
 python -m pytest orchestrator/tests/ -v
+
+# Gate 3: Go tests
 cd /home/j/side/graphrag-architect/workers/ingestion && go test ./... -v -count=1 -timeout 30s
 ```
 
-Record: `Pylint: X/10, Python: A/B passed, Go: C/D passed`.
-
-**These are objective facts.** If all pass, they pass. Do not second-guess passing tests.
+Record exact counts: `Pylint: X/10, Python: A/B passed, Go: C/D passed`.
 
 ## Step 5: Audit Dimensions
 
-For each dimension, look for actual problems. If a dimension is clean, move on — do not force findings.
+Evaluate each dimension systematically. For every finding, record severity and evidence.
 
-### 5a. Requirement Coverage (Phase 1 FRs only)
+### 5a. Requirement Coverage (FR-1 through FR-8)
 
-For each Phase 1 FR (FR-1, FR-2, FR-3, FR-5, FR-6):
+For each FR-N, determine:
 
-| Status | Meaning | Verdict Impact |
-|--------|---------|----------------|
-| **Implemented** | Code exists, tests exist, tests pass | None (green) |
-| **Partial** | Code exists but incomplete, or tests missing | HIGH |
-| **Stub** | Function/node exists but is a no-op | RED trigger |
-| **Not Started** | No code at all | RED trigger |
+| Status | Meaning |
+|--------|---------|
+| **Implemented** | Code exists, tests exist, tests pass |
+| **Partial** | Code exists but incomplete, or tests missing |
+| **Stub** | Function/node exists but is a no-op or placeholder |
+| **Not Started** | No code at all |
 
-Phase 2 FRs (FR-4, FR-7, FR-8): note status for informational purposes only. NOT a finding.
+Check every node in the LangGraph DAG (`graph_builder.py`) — is it a real implementation or a stub?
 
 ### 5b. Test Coverage Gaps
 
-For every **public** function in `orchestrator/app/*.py` and every **exported** function in Go:
-- Is there at least one test that exercises it?
+For every public function in `orchestrator/app/*.py` and every exported function in `workers/ingestion/internal/**/*.go`:
 
-Only flag functions with **zero** test coverage. A function tested via integration (called by a tested function) counts as covered.
+- Is there at least one test?
+- Does the test cover happy path, error path, and edge cases?
+- Are mocks testing contracts (not just confirming mock calls)?
+
+List any untested public functions.
 
 ### 5c. Integrity Violations
 
+Search the entire codebase for:
+
 ```bash
+# Inline suppressions
 rg -n 'pylint.*disable|noqa|nolint' orchestrator/ workers/
-rg -n 'pytest\.mark\.skip|unittest\.skip|xfail|expected_failure' orchestrator/tests/ workers/
-rg -n 'except\s*:' orchestrator/ workers/
-rg -n 'time\.sleep|asyncio\.sleep' orchestrator/tests/
+
+# Skipped tests
+rg -n 'skip|xfail|expected_failure|Skip\(' orchestrator/tests/ workers/
+
+# Swallowed exceptions
+rg -n 'except.*:.*pass$|except:' orchestrator/ workers/
+
+# Timing workarounds
+rg -n 'time\.sleep|asyncio\.sleep' orchestrator/tests/ workers/
 ```
 
-**Investigate every match.** Many patterns have legitimate uses:
-- `skip` in a variable name or string literal is NOT a violation
-- `except SomeSpecificError:` is NOT a bare except
-- `sleep` in implementation code (not tests) may be legitimate
-
-Only flag confirmed violations with the exact line content.
+Flag every match. Investigate whether each is a genuine violation.
 
 ### 5d. Documentation Accuracy
 
-Compare each doc's factual claims against reality:
-- Project structure trees match actual files?
-- Test counts match actual test output?
-- DAG node status table matches actual implementation?
-- Config fields match actual code?
+Cross-reference each doc against the code:
 
-Only flag **material factual errors** — wrong file names, wrong counts, missing modules, incorrect status. Do NOT flag style or phrasing preferences.
+| Check | How |
+|-------|-----|
+| README project structure tree | Compare against actual `find` output |
+| README test counts | Compare against actual test runner output |
+| README file descriptions | Compare against actual file contents |
+| architecture_state.md component status | Compare against actual implementation status |
+| claude-progress.txt latest entry | Compare against actual git log and test counts |
+| Architecture doc DAG diagram | Compare against actual `graph_builder.py` nodes and edges |
+| Architecture doc node status table | Compare against actual implementation |
+
+List every discrepancy.
 
 ### 5e. Code Quality
 
-Check against CLAUDE.md invariants:
-- Type annotations on all function signatures?
-- No inline comments?
-- Frozen dataclass config pattern?
-- Pydantic models for data contracts?
-
-Only flag actual violations of stated project standards.
+- All Python functions have complete type annotations?
+- No inline comments (per CLAUDE.md)?
+- Frozen dataclass config pattern followed?
+- Pydantic models for all data contracts?
+- Go: context propagation, channel safety, defer cleanup?
 
 ### 5f. Security
 
-- Hardcoded secrets in code? (grep for API keys, passwords, tokens)
-- String-interpolated Cypher queries? (must be parameterized)
-- Error messages leaking internal paths or stack traces to HTTP callers?
-
-Only flag with evidence.
+- No hardcoded secrets, API keys, or passwords in code?
+- Parameterized Cypher queries only (no string interpolation)?
+- Error messages don't leak internal state?
+- No overly permissive file reads (path traversal)?
 
 ### 5g. Stale Code
+
+- Any dead imports?
+- Any functions defined but never called?
+- Any TODO/FIXME/HACK comments?
+- Any files that exist but aren't referenced?
 
 ```bash
 rg -n 'TODO|FIXME|HACK|XXX' orchestrator/ workers/
 ```
 
-Flag only confirmed dead code or stale markers.
+### 5h. Dependency Health
+
+- Are all imports in `requirements.txt` actually used?
+- Are all Go imports in `go.mod` actually used?
+- Any known vulnerable versions?
 
 ## Step 6: Generate Report
 
-Write to `audit-report.md`. **Only include sections that have findings.** Omit empty sections entirely.
+Produce the report in this exact format. Write it to `audit-report.md` in the repo root:
 
 ```markdown
 # System Audit Report
@@ -202,61 +238,64 @@ Write to `audit-report.md`. **Only include sections that have findings.** Omit e
 ## Executive Summary
 
 - Quality Gates: Pylint X/10, Python A/B, Go C/D
-- Phase 1 FRs: N/5 implemented
+- Requirement Coverage: N/8 FRs implemented, M/8 partial, P/8 not started
 - Findings: X CRITICAL, Y HIGH, Z LOW
-- **Verdict: RED / YELLOW / GREEN**
-```
 
-**If GREEN:** The report ends after the Executive Summary. Add:
+## Requirement Coverage Matrix
 
-```markdown
-All quality gates pass. All Phase 1 requirements implemented with tests.
-No CRITICAL or HIGH findings. System is healthy.
+| FR | Status | Implementation | Tests | Notes |
+|----|--------|---------------|-------|-------|
+| FR-1 | ... | ... | ... | ... |
+| FR-2 | ... | ... | ... | ... |
+| ... | ... | ... | ... | ... |
+
+## CRITICAL Findings
+
+1. **[CRITICAL-001]** <file:line> — <description>
+
+## HIGH Findings
+
+1. **[HIGH-001]** <file:line> — <description>
+
+## LOW Findings
+
+1. **[LOW-001]** <file:line> — <description>
+
+## Documentation Discrepancies
+
+| Document | Section | Says | Reality |
+|----------|---------|------|---------|
+| ... | ... | ... | ... |
+
+## Test Coverage Gaps
+
+| Module | Function | Test Status |
+|--------|----------|-------------|
+| ... | ... | Missing / Partial |
+
+## Stale Code
+
+| File | Item | Issue |
+|------|------|-------|
+| ... | ... | Dead import / Unused function / TODO |
+
+## Recommendations (Priority Order)
+
+1. ...
+2. ...
+3. ...
 
 ## Verdict
 
-**Status:** GREEN
-**Action:** No action needed
+**Status:** RED / YELLOW / GREEN
+**Action:** Trigger `@tdd-feature-cycle` / No action needed
 ```
 
-**If YELLOW or RED:** Add only the sections that have findings:
-
-```markdown
-## Findings
-
-### CRITICAL (if any)
-
-1. **[CRITICAL-001]** `file:line` — <description with evidence>
-
-### HIGH (if any)
-
-1. **[HIGH-001]** `file:line` — <description with evidence>
-
-### LOW (if any, briefly)
-
-1. **[LOW-001]** `file:line` — <description>
-
-## Requirement Gaps (if any Phase 1 FR is not Implemented)
-
-| FR | Status | What's Missing |
-|----|--------|---------------|
-| FR-N | Partial/Stub/Not Started | <specific gap> |
-
-## Verdict
-
-**Status:** RED / YELLOW
-**Action:** Trigger `@tdd-feature-cycle` (RED) / Review at discretion (YELLOW)
-**Priority:** <highest-priority item to address>
-```
-
-**Rules for the report:**
-- Every finding must have `file:line` and evidence. No vague findings.
-- Do NOT include a Requirement Coverage Matrix row for FRs that are Implemented — only gaps.
-- Do NOT include Documentation Discrepancies, Test Coverage Gaps, or Stale Code sections if they are empty.
-- Do NOT include Phase 2 FRs in the gaps table.
-- Do NOT pad the report. Shorter is better. Actionable is everything.
+Also present the full report content in your response to the user.
 
 ## Step 7: HALT — Always Emit → DOC_SYNC
+
+The audit always transitions to `@cron-doc-sync`. The verdict (RED/YELLOW/GREEN) is persisted in `audit-report.md`. The doc-sync skill reads it and decides whether to trigger `@tdd-feature-cycle` or stop.
 
 **HALT. Your job is done. Do NOT continue. Do NOT trigger `@tdd-feature-cycle` directly.**
 
