@@ -7,6 +7,8 @@ from fastapi import FastAPI, HTTPException
 
 from orchestrator.app.graph_builder import ingestion_graph
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
+from orchestrator.app.query_engine import query_graph
+from orchestrator.app.query_models import QueryRequest, QueryResponse
 
 logger = logging.getLogger(__name__)
 
@@ -55,4 +57,33 @@ async def ingest(request: IngestRequest) -> IngestResponse:
         status=result.get("commit_status", "unknown"),
         entities_extracted=len(result.get("extracted_nodes", [])),
         errors=result.get("extraction_errors", []),
+    )
+
+
+@app.post("/query", response_model=QueryResponse)
+async def query(request: QueryRequest) -> QueryResponse:
+    initial_state: Dict[str, Any] = {
+        "query": request.query,
+        "max_results": request.max_results,
+        "complexity": "",
+        "retrieval_path": "",
+        "candidates": [],
+        "cypher_query": "",
+        "cypher_results": [],
+        "iteration_count": 0,
+        "answer": "",
+        "sources": [],
+    }
+    try:
+        result = await query_graph.ainvoke(initial_state)
+    except Exception as exc:
+        logger.exception("Query graph failed")
+        raise HTTPException(
+            status_code=500, detail="Internal query error"
+        ) from exc
+    return QueryResponse(
+        answer=result.get("answer", ""),
+        sources=result.get("sources", []),
+        complexity=result.get("complexity", "entity_lookup"),
+        retrieval_path=result.get("retrieval_path", "vector"),
     )

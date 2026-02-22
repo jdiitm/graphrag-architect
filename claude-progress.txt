@@ -1,3 +1,52 @@
+## 2026-02-22: FR-4 Hybrid Query Routing — Classifier, Router DAG, /query Endpoint — Complete
+
+### Completed
+- Created orchestrator/app/query_models.py:
+  - QueryComplexity enum: entity_lookup, single_hop, multi_hop, aggregate
+  - QueryRequest: query (min_length=1), max_results (1-100, default 10)
+  - QueryResponse: answer, sources, complexity, retrieval_path
+  - QueryState TypedDict for LangGraph DAG state
+- Created orchestrator/app/query_classifier.py:
+  - Keyword-based query complexity classification using regex patterns
+  - Aggregate > Multi-hop > Single-hop > Entity lookup (priority order)
+  - Patterns from architecture doc: "blast radius", "downstream", "produces", "top N", etc.
+  - Case-insensitive matching
+- Created orchestrator/app/query_engine.py:
+  - LangGraph StateGraph: classify → route → {vector|cypher|hybrid}_retrieve → synthesize → END
+  - classify_query_node: maps query text to complexity + retrieval_path
+  - route_query: conditional edge routing to correct retrieval node
+  - vector_retrieve: Neo4j fulltext index query for entity lookups
+  - cypher_retrieve: LLM generates Cypher, executes against Neo4j, returns results
+  - hybrid_retrieve: vector pre-filter candidates, then LLM-generated Cypher aggregation
+  - synthesize_answer: LLM produces NL answer grounded in retrieved context
+  - query_graph: compiled StateGraph exposed for import
+- Modified orchestrator/app/main.py:
+  - POST /query endpoint accepting QueryRequest, returning QueryResponse
+  - Delegates to query_graph.ainvoke with full QueryState initialization
+  - Generic error message on failure (consistent with /ingest pattern)
+
+### TDD: 36 new tests
+- test_query_classifier.py (18 tests): entity lookup (3), single hop (4), multi hop (5), aggregate (4), case insensitivity (2)
+- test_query_engine.py (12 tests): classify node (2), route query (4), vector retrieve (2), cypher retrieve (1), hybrid retrieve (1), synthesize (2)
+- test_query_api.py (6 tests): validation (2), success (2), custom max_results (1), error (1)
+
+### Architecture Decisions
+- Keyword-based classifier first (deterministic, fully testable) — LLM classifier can enhance later
+- Neo4j fulltext index for vector path (doesn't require embedding infrastructure yet)
+- All 3 retrieval paths implemented with proper Neo4j + LLM mocking in tests
+- LLM calls (Cypher generation, synthesis) use Gemini via LangChain, mockable for testing
+
+### Quality Gates
+- Pylint: 10/10
+- Python tests: 153/153 passing (36 new + 117 existing)
+- Go tests: 26/26 passing (no regressions)
+- Total: 179/179 passing
+
+### Next Step
+- FR-7: Access Control (Phase 2) or FR-8: Observability
+
+---
+
 ## 2026-02-22: FR-1 Kafka Pipeline — ForwardingProcessor, Consumer, cmd/main.go — Complete
 
 ### Completed
