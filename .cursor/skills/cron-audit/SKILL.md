@@ -19,7 +19,7 @@ Your only exit: HALT and emit `→ DOC_SYNC`. Always. The verdict is written to 
 
 ## Model Requirement
 
-This skill runs on **Claude Opus 4 (Thinking)**. When opening a new chat to trigger this skill, select `claude-4-opus-thinking` from the model picker.
+This skill runs on **Claude Opus 4.6 Thinking**. When opening a new chat to trigger this skill, select `claude-4.6-opus-thinking` from the model picker.
 
 ## Isolation Protocol
 
@@ -306,6 +306,6 @@ The audit always transitions to `@cron-doc-sync`. The verdict (RED/YELLOW/GREEN)
 Tell the user exactly this:
 
 > Audit complete. Report written to `audit-report.md`. **Verdict: RED / YELLOW / GREEN.**
-> **Next:** Open a new chat **(model: claude-4-opus-thinking)** and trigger `@cron-doc-sync`.
+> **Next:** Open a new chat **(model: claude-4.6-opus-thinking)** and trigger `@cron-doc-sync`.
 
 Then STOP. Do not write another word or call another tool.
