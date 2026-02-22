@@ -62,8 +62,9 @@ graphrag-architect/
 │   │   ├── query_models.py              # QueryRequest/Response/State models (FR-4)
 │   │   ├── schema_validation.py         # Pydantic validation + correction loop
 │   │   ├── workspace_loader.py          # Filesystem workspace scanner
+│   │   ├── circuit_breaker.py           # Three-state circuit breaker (NFR-6)
 │   │   └── schema_init.cypher           # Neo4j constraints and indexes
-│   ├── tests/                           # 207 tests across 11 test files
+│   ├── tests/                           # 233 tests across 12 test files
 │   │   ├── test_access_control.py
 │   │   ├── test_ingest_api.py
 │   │   ├── test_manifest_parser.py
@@ -74,7 +75,9 @@ graphrag-architect/
 │   │   ├── test_query_engine.py
 │   │   ├── test_schema_validation.py
 │   │   ├── test_service_extractor.py
-│   │   └── test_workspace_loader.py
+│   │   ├── test_workspace_loader.py
+│   │   ├── test_circuit_breaker.py
+│   │   └── test_integration.py
 │   └── requirements.txt
 ├── workers/                             # Go high-throughput ingestion
 │   └── ingestion/
@@ -98,7 +101,12 @@ graphrag-architect/
 │       ├── secrets.yaml
 │       ├── orchestrator-deployment.yaml
 │       ├── ingestion-worker-deployment.yaml
+│       ├── neo4j-statefulset.yaml
+│       ├── kafka-statefulset.yaml
 │       ├── hpa.yaml
+│       ├── ingress.yaml
+│       ├── network-policies.yaml
+│       ├── alerting.yaml
 │       └── neo4j-schema-job.yaml
 ├── architecture_state.md                # System design document
 ├── CLAUDE.md                            # AI agent invariants
@@ -146,10 +154,10 @@ export EXTRACTION_TOKEN_BUDGET="200000"           # default: 200000
 ### 4. Run tests
 
 ```bash
-# Python tests (207 tests)
+# Python tests (233 tests)
 python -m pytest orchestrator/tests/ -v
 
-# Go tests (42 tests)
+# Go tests (46 tests)
 cd workers/ingestion && go test ./... -v
 ```
 
