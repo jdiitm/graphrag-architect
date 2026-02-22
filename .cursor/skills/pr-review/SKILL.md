@@ -10,12 +10,11 @@ Act as an independent senior engineer on the team. You have **zero context** fro
 ## FSM Position
 
 ```
-AUDIT → DOC_SYNC → [RED + no PR] → TDD → **REVIEW** ─┬─ [changes] → FIX → REVIEW
-                   [open PR]     → **REVIEW** ─────────┤  [merged]  → AUDIT → ...
-                   [GREEN]       → idle                 └──────────────────────┘
+AUDIT → TDD → **REVIEW** ─┬─ [merged]  → AUDIT → TDD → ...
+                           └─ [changes] → FIX → REVIEW
 ```
 
-You are in the **REVIEW** state. You were triggered either by TDD (new PR) or by doc-sync (existing open PR).
+You are in the **REVIEW** state. You were triggered by TDD (new PR) or by a re-review cycle after FIX.
 Your exits: HALT and emit `→ FIX` (issues found) or `→ AUDIT` (merged).
 
 ## Isolation Protocol
@@ -237,6 +236,6 @@ git checkout main && git pull origin main
 Tell the user exactly this:
 
 > PR #N merged. Local main is up to date.
-> **Next:** Open a new chat and trigger `@system-audit`.
+> **Next:** Open a **new chat** and trigger `@system-audit`.
 
 Then STOP. Do not write another word or call another tool.

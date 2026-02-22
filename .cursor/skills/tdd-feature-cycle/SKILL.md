@@ -1,22 +1,21 @@
 ---
 name: tdd-feature-cycle
-description: Autonomous end-to-end feature development cycle for graphrag-architect. Discovers the next missing PRD requirement, implements it with strict TDD (red-green-refactor), performs a staff-level self-review, and raises a Pull Request. Use when asked to implement the next feature, build the next component, continue development, or pick up the next task.
+description: Autonomous end-to-end feature development cycle for graphrag-architect. Checks for an independent audit report (Phase 0), discovers the highest-priority missing requirement, implements it with strict TDD (red-green-refactor), performs a staff-level self-review, and raises a Pull Request. Use when asked to implement the next feature, build the next component, continue development, pick up the next task, or start a new development cycle.
 ---
 
 # TDD Feature Cycle
 
-Autonomous workflow: discover the next missing feature from the PRD, implement it via strict TDD, self-review, and raise a PR. Halt after PR creation -- never merge your own PRs.
+Autonomous workflow: check the independent audit report, discover the next missing feature, implement it via strict TDD, self-review, and raise a PR. Halt after PR creation -- never merge your own PRs.
 
 ## FSM Position
 
 ```
-AUDIT → DOC_SYNC → [RED + no PR] → **TDD** → REVIEW ─┬─ [merged]  → AUDIT → ...
-                   [open PR]     → REVIEW ─────────────┤  [changes] → FIX → REVIEW
-                   [GREEN]       → idle                 └────────────────────────┘
+AUDIT (separate session) → **TDD** ─┬─ [RED]  → implement → PR → REVIEW ─┬─ [merged]  → AUDIT → TDD
+                                     └─ [!RED] → idle                      └─ [changes] → FIX → REVIEW
 ```
 
-You are in the **TDD** state. You were triggered because doc-sync routed here (audit verdict RED, no open PR).
-Your only exit: HALT and emit `→ REVIEW`.
+You are in the **TDD** state. You are the primary entry point for development cycles.
+Phase 0 verifies an independent audit exists. The audit MUST have run in a separate chat — never in this session.
 
 ## Isolation Protocol
 
@@ -36,14 +35,10 @@ git branch --show-current  # must output "main"
 
 # 2. No open PRs (would mean a review/fix cycle is in progress)
 gh pr list --state open --limit 1  # must be empty
-
-# 3. Audit verdict must be RED (this skill only runs when there's work to do)
-cat audit-report.md  # read the Verdict section
 ```
 
 **If not on main:** HALT. Tell the user: "Not on main branch. Resolve the current branch first."
 **If open PRs exist:** HALT. Tell the user: "Open PR detected. Complete the review/fix cycle first via `@pr-review`."
-**If audit-report.md is missing or verdict is not RED:** HALT. Tell the user: "Audit verdict is not RED. No high-priority work to do. Run `@system-audit` to re-assess."
 
 ## Integrity Invariants (Non-Negotiable)
 
@@ -60,13 +55,40 @@ These rules are absolute. Violating any of them is a **showstopper** — stop, u
 9. **Never swallow exceptions silently.** No bare `except:`, no `except Exception: pass`. Every error path must be explicit and tested.
 10. **Never merge with failing tests.** Zero tolerance. The full suite must be green before any push.
 
+## Phase 0: Audit Gate (Independent Verification)
+
+The system audit MUST have been performed by `@system-audit` in a **separate chat session** — a different agent with its own fresh context. You must NEVER audit and implement in the same session. That would make you both judge and executor, which is a rubber stamp.
+
+```bash
+cat audit-report.md   # must exist — produced by @system-audit in a prior session
+```
+
+**If `audit-report.md` does not exist:** HALT. Tell the user:
+
+> No audit report found. The audit must run independently.
+> **Next:** Open a **new chat** and trigger `@system-audit`. Then come back here.
+
+Then STOP.
+
+**If `audit-report.md` exists:** Read the `## Verdict` section.
+
+- **If verdict is GREEN or YELLOW:** HALT. Delete the report and tell the user:
+  ```bash
+  rm audit-report.md
+  ```
+  > Audit verdict is [VERDICT]. No RED-priority work. System is healthy.
+
+  Then STOP.
+
+- **If verdict is RED:** Continue to Phase 1. The report identifies what needs building.
+
 ## Phase 1: Discovery & Branching
 
-1. Read these files in parallel:
+1. Read `audit-report.md` — identify the **highest-priority missing feature** from the Requirement Gaps table.
+2. Read these files for context:
    - `docs/prd/02_SYSTEM_REQUIREMENTS.md`
    - `docs/architecture/01_SYSTEM_DESIGN.md`
    - `claude-progress.txt`
-2. Cross-reference requirements (FR-1 through FR-8) against implemented code to identify the **highest-priority missing feature**.
 3. Explore the codebase to confirm what exists vs. what is stubbed.
 4. Formulate a concrete plan: new files, modified files, test plan, Cypher/query templates if applicable.
 5. Create a branch:
@@ -187,7 +209,13 @@ EOF
 git checkout main
 ```
 
-5. **HALT. Your job is done. Do NOT continue.**
+5. Delete the ephemeral audit report:
+
+```bash
+rm audit-report.md
+```
+
+6. **HALT. Your job is done. Do NOT continue.**
 
 Do NOT merge your own PR. Do NOT review your own PR. Do NOT trigger any other skill.
 
