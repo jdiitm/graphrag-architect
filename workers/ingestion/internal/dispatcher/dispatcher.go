@@ -20,6 +20,7 @@ type Dispatcher struct {
 	processor processor.DocumentProcessor
 	jobs      chan domain.Job
 	dlq       chan domain.Result
+	acks      chan struct{}
 	wg        sync.WaitGroup
 }
 
@@ -29,6 +30,7 @@ func New(cfg Config, proc processor.DocumentProcessor) *Dispatcher {
 		processor: proc,
 		jobs:      make(chan domain.Job, cfg.JobBuffer),
 		dlq:       make(chan domain.Result, cfg.DLQBuffer),
+		acks:      make(chan struct{}, cfg.JobBuffer),
 	}
 }
 
@@ -38,6 +40,10 @@ func (d *Dispatcher) Jobs() chan<- domain.Job {
 
 func (d *Dispatcher) DLQ() <-chan domain.Result {
 	return d.dlq
+}
+
+func (d *Dispatcher) Acks() <-chan struct{} {
+	return d.acks
 }
 
 func (d *Dispatcher) Run(ctx context.Context) {
@@ -61,6 +67,11 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			result := d.processWithRetry(ctx, job)
 			if result.Err != nil {
 				d.dlq <- result
+			}
+			select {
+			case d.acks <- struct{}{}:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}

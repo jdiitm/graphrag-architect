@@ -37,6 +37,8 @@ func (s *stubJobSource) Poll(_ context.Context) ([]domain.Job, error) {
 	return batch, nil
 }
 
+func (s *stubJobSource) Commit(_ context.Context) error { return nil }
+
 func (s *stubJobSource) Close() {}
 
 func TestEndToEnd_ConsumerDispatcherForwarding(t *testing.T) {
@@ -91,7 +93,7 @@ func TestEndToEnd_ConsumerDispatcherForwarding(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cons := consumer.New(source, disp.Jobs())
+	cons := consumer.New(source, disp.Jobs(), disp.Acks())
 
 	go disp.Run(ctx)
 	go dlqHandler.Run(ctx)
@@ -147,7 +149,7 @@ func TestEndToEnd_FailedJobRoutesToDLQ(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cons := consumer.New(source, disp.Jobs())
+	cons := consumer.New(source, disp.Jobs(), disp.Acks())
 
 	go disp.Run(ctx)
 	go dlqHandler.Run(ctx)

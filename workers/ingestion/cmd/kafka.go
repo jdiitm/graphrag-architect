@@ -57,18 +57,16 @@ func (s *KafkaJobSource) Poll(ctx context.Context) ([]domain.Job, error) {
 		})
 	})
 
-	if len(jobs) > 0 {
-		s.client.AllowRebalance()
-		if err := s.client.CommitUncommittedOffsets(ctx); err != nil {
-			log.Printf("offset commit failed: %v", err)
-		}
-	}
-
 	if len(jobs) == 0 {
 		return nil, consumer.ErrSourceClosed
 	}
 
 	return jobs, nil
+}
+
+func (s *KafkaJobSource) Commit(ctx context.Context) error {
+	s.client.AllowRebalance()
+	return s.client.CommitUncommittedOffsets(ctx)
 }
 
 func (s *KafkaJobSource) Close() {
