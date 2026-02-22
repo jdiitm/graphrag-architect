@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
 
+from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from orchestrator.app.extraction_models import (
     CallsEdge,
     ConsumesEdge,
@@ -131,15 +132,24 @@ def _partition_entities(
 
 
 class GraphRepository:
-    def __init__(self, driver: AsyncDriver) -> None:
+    def __init__(
+        self,
+        driver: AsyncDriver,
+        circuit_breaker: Optional[CircuitBreaker] = None,
+    ) -> None:
         self._driver = driver
+        self._cb = circuit_breaker or CircuitBreaker(CircuitBreakerConfig())
 
     async def commit_topology(self, entities: List[Any]) -> None:
         if not entities:
             return
 
         nodes, edges = _partition_entities(entities)
+        await self._cb.call(self._execute_commit, nodes, edges)
 
+    async def _execute_commit(
+        self, nodes: List[Any], edges: List[Any]
+    ) -> None:
         async with self._driver.session() as session:
             await session.execute_write(
                 self._merge_all, nodes=nodes, edges=edges
