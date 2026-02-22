@@ -129,6 +129,77 @@ func TestConsumer_StopsOnSourceClosed(t *testing.T) {
 	}
 }
 
+func TestConsumer_AckTimeoutPreventsIndefiniteBlock(t *testing.T) {
+	src := &stubSource{
+		batches: [][]domain.Job{
+			{sampleJob("slow")},
+		},
+	}
+	jobs := make(chan domain.Job, 10)
+	acks := make(chan struct{}, 10)
+
+	c := consumer.New(src, jobs, acks, consumer.WithAckTimeout(100*time.Millisecond))
+
+	go func() {
+		<-jobs
+	}()
+
+	err := c.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected ack timeout error, got nil")
+	}
+	if !errors.Is(err, consumer.ErrAckTimeout) {
+		t.Fatalf("expected ErrAckTimeout, got %v", err)
+	}
+}
+
+func TestConsumer_AckTimeoutDefaultIsZeroMeansNoTimeout(t *testing.T) {
+	src := &stubSource{
+		batches: [][]domain.Job{
+			{sampleJob("fast")},
+		},
+	}
+	jobs := make(chan domain.Job, 10)
+	acks := make(chan struct{}, 10)
+
+	c := consumer.New(src, jobs, acks)
+
+	go func() {
+		<-jobs
+		time.Sleep(10 * time.Millisecond)
+		acks <- struct{}{}
+	}()
+
+	err := c.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil with no ack timeout configured, got %v", err)
+	}
+}
+
+func TestConsumer_AckTimeoutDoesNotFireWhenAcksFast(t *testing.T) {
+	src := &stubSource{
+		batches: [][]domain.Job{
+			{sampleJob("a"), sampleJob("b")},
+		},
+	}
+	jobs := make(chan domain.Job, 10)
+	acks := make(chan struct{}, 10)
+
+	c := consumer.New(src, jobs, acks, consumer.WithAckTimeout(5*time.Second))
+
+	go func() {
+		for range 2 {
+			<-jobs
+			acks <- struct{}{}
+		}
+	}()
+
+	err := c.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil when acks are fast, got %v", err)
+	}
+}
+
 type commitTrackingSource struct {
 	batches  [][]domain.Job
 	index    int

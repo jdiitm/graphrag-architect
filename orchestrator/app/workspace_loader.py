@@ -1,6 +1,10 @@
+import logging
 import os
 from pathlib import PurePosixPath
-from typing import Dict, List
+from typing import Dict, Generator, List, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 EXCLUDED_DIRS: frozenset[str] = frozenset({
@@ -24,24 +28,17 @@ INCLUDED_EXTENSIONS: frozenset[str] = frozenset({
 
 MAX_FILE_SIZE_BYTES: int = 1_048_576
 
+DEFAULT_CHUNK_SIZE: int = 50
 
-def load_directory(directory_path: str) -> List[Dict[str, str]]:
-    if not directory_path or not directory_path.strip():
-        return []
 
-    root = os.path.abspath(directory_path)
-    if not os.path.isdir(root):
-        return []
-
-    results: List[Dict[str, str]] = []
-
+def _iter_files(root: str) -> Generator[Dict[str, str], None, None]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [
             d for d in dirnames
             if d not in EXCLUDED_DIRS
         ]
 
-        for filename in filenames:
+        for filename in sorted(filenames):
             _, ext = os.path.splitext(filename)
             if ext not in INCLUDED_EXTENSIONS:
                 continue
@@ -64,7 +61,49 @@ def load_directory(directory_path: str) -> List[Dict[str, str]]:
 
             relative = os.path.relpath(full_path, root)
             normalized = str(PurePosixPath(*relative.split(os.sep)))
-            results.append({"path": normalized, "content": content})
+            yield {"path": normalized, "content": content}
 
+
+def load_directory_chunked(
+    directory_path: str,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    max_total_bytes: Optional[int] = None,
+) -> Generator[List[Dict[str, str]], None, None]:
+    if not directory_path or not directory_path.strip():
+        return
+
+    root = os.path.abspath(directory_path)
+    if not os.path.isdir(root):
+        return
+
+    chunk: List[Dict[str, str]] = []
+    total_bytes = 0
+
+    for entry in _iter_files(root):
+        entry_bytes = len(entry["content"].encode("utf-8"))
+
+        if max_total_bytes is not None and total_bytes + entry_bytes > max_total_bytes:
+            logger.warning(
+                "Workspace loading stopped at %d bytes (limit: %d). "
+                "Remaining files skipped to prevent OOM.",
+                total_bytes, max_total_bytes,
+            )
+            break
+
+        chunk.append(entry)
+        total_bytes += entry_bytes
+
+        if len(chunk) >= chunk_size:
+            yield chunk
+            chunk = []
+
+    if chunk:
+        yield chunk
+
+
+def load_directory(directory_path: str) -> List[Dict[str, str]]:
+    results: List[Dict[str, str]] = []
+    for chunk in load_directory_chunked(directory_path, chunk_size=1000):
+        results.extend(chunk)
     results.sort(key=lambda entry: entry["path"])
     return results
