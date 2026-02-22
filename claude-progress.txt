@@ -1,3 +1,35 @@
+## Completed: Cypher Allowlist + Prometheus Scraping (Audit 3.1 + 3.2)
+
+Branch: `feat/cypher-allowlist-and-prometheus-scraping`
+Quality Gates: Pylint 10/10, Python 299/299, Go 56/56
+
+### Audit Findings Addressed
+
+1. **Audit 3.1** — Cypher validator does not block APOC procedure calls or LOAD CSV
+   - Replaced narrow `CALL {` subquery blocklist with general `CALL` procedure blocker
+   - Added `ALLOWED_PROCEDURES` frozenset allowlist for safe built-in procedures
+     (`db.index.fulltext.queryNodes`, `db.labels`, `db.relationshipTypes`, etc.)
+   - Added `LOAD CSV` blocker regex
+   - All non-allowlisted `CALL proc(...)` patterns now raise `CypherValidationError`
+   - Closes the APOC file exfiltration vector (`apoc.load.csv`, `apoc.load.json`, etc.)
+   - 16 new tests (6 APOC rejection, 3 LOAD CSV rejection, 7 allowlist verification)
+
+2. **Audit 3.2** — Prometheus cannot scrape orchestrator, Kafka, or Neo4j
+   - Added `prometheus.io/scrape`, `prometheus.io/port`, `prometheus.io/path` annotations
+     to orchestrator deployment pod template (port 8000)
+   - Added Prometheus annotations to Neo4j StatefulSet pod template (port 7474)
+   - Added three NetworkPolicy resources permitting monitoring namespace ingress:
+     `allow-orchestrator-metrics` (port 8000), `allow-kafka-metrics` (port 5556),
+     `allow-neo4j-metrics` (port 7474)
+   - All four previously non-functional alerting rules now have reachable scrape targets
+
+### Architecture Decision: Allowlist vs Blocklist
+Switched from blocklist (block specific dangerous patterns) to allowlist (block all
+procedures by default, explicitly permit known-safe ones). This is defense-in-depth:
+any future Neo4j plugin or procedure is blocked until explicitly allowed.
+
+---
+
 ## Completed: Neo4j Driver Pool + RBAC Integration (HIGH-01 + HIGH-02)
 
 Branch: `feat/neo4j-pool-and-rbac-integration`
