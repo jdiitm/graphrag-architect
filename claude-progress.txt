@@ -1,3 +1,38 @@
+## Completed: DLQ Silent Loss Fix + Infra Gaps (HIGH-001, HIGH-002, LOW-001)
+
+Branch: `fix/dlq-silent-loss-and-infra-gaps`
+Quality Gates: Pylint 10/10, Python 394/394, Go 69/69
+
+### Audit Findings Addressed
+
+1. **HIGH-001** — DLQ handler `processResult` unconditionally closed Done channel
+   via `defer close(result.Done)` even when sink fails and no fallback exists.
+   This allowed silent message loss: dispatcher unblocked, offset committed,
+   but message neither processed nor persisted in DLQ.
+   Fix: Removed unconditional defer. Done now only closed on confirmed sink success
+   or confirmed fallback success. On failure without fallback (or fallback failure),
+   Done stays open so dispatcher blocks and offset is NOT committed.
+   Existing test `TestDLQHandlerClosesDoneAfterRetriesExhausted` encoded the buggy
+   behavior — replaced with `TestDLQHandlerDoneNotClosedWhenSinkFailsNoFallback`.
+
+2. **HIGH-002** — K8s kafka-statefulset.yaml missing KAFKA_LISTENER_SECURITY_PROTOCOL_MAP.
+   Fix: Added `CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT` matching docker-compose.yml.
+
+3. **LOW-001** — secrets.yaml missing AUTH_TOKEN_SECRET placeholder.
+   Fix: Added `AUTH_TOKEN_SECRET: "REPLACE_ME"` to stringData.
+
+### Changes
+1. `workers/ingestion/internal/dlq/handler.go`: Removed unconditional `defer close(result.Done)`,
+   added `closeDone` helper called only on confirmed sink/fallback success
+2. `workers/ingestion/internal/dlq/handler_test.go`: Fixed spec-error test, added 2 new tests
+3. `infrastructure/k8s/kafka-statefulset.yaml`: Added KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+4. `infrastructure/k8s/secrets.yaml`: Added AUTH_TOKEN_SECRET placeholder
+5. `orchestrator/tests/test_infra_security.py`: 5 new tests (3 protocol map, 2 secrets)
+
+### New Tests: 7 total (2 Go, 5 Python)
+
+---
+
 ## Completed: Kafka Infrastructure Fixes (CRITICAL-001, CRITICAL-002)
 
 Branch: `feat/kafka-infrastructure-fixes`
