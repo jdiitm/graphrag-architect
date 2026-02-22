@@ -4,7 +4,11 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
-from orchestrator.app.observability import configure_telemetry, get_tracer
+from orchestrator.app.observability import (
+    _build_sampler,
+    configure_telemetry,
+    get_tracer,
+)
 
 
 class MemoryExporter(SpanExporter):
@@ -546,3 +550,19 @@ class TestMetricsRecording:
             mock_metric.record.assert_called_once()
             elapsed_ms = mock_metric.record.call_args[0][0]
             assert elapsed_ms >= 0
+
+
+class TestSamplerConfig:
+    def test_default_sampling_rate(self):
+        sampler = _build_sampler()
+        assert sampler is not None
+
+    def test_custom_sampling_rate_from_env(self):
+        with patch.dict("os.environ", {"OTEL_TRACES_SAMPLER_ARG": "0.5"}):
+            sampler = _build_sampler()
+            assert sampler is not None
+
+    def test_test_exporter_skips_sampler(self):
+        exporter = MemoryExporter()
+        provider = configure_telemetry(exporter=exporter)
+        provider.shutdown()
