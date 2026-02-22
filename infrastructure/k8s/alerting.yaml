@@ -23,6 +23,19 @@ spec:
               ({{ $value | humanizePercentage }} of threshold).
               Check ingestion worker logs for processing failures.
 
+        - alert: DLQSinkFailure
+          expr: rate(ingestion_dlq_sink_error_total[5m]) > 0
+          for: 1m
+          labels:
+            severity: critical
+            channel: pagerduty
+          annotations:
+            summary: "DLQ sink publish failing — messages at risk of loss"
+            description: >
+              DLQ sink publish error rate is {{ $value | humanize }}/s.
+              Messages that fail processing AND fail DLQ publish are silently lost.
+              Investigate ingestion worker logs immediately.
+
         - alert: HighConsumerLag
           expr: ingestion_consumer_lag > 1000
           for: 60s
