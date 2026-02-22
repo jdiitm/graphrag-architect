@@ -8,6 +8,7 @@ from orchestrator.app.config import ExtractionConfig, Neo4jConfig
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.manifest_parser import parse_all_manifests
 from orchestrator.app.neo4j_client import GraphRepository
+from orchestrator.app.observability import get_tracer
 from orchestrator.app.schema_validation import validate_topology
 from orchestrator.app.workspace_loader import load_directory
 
@@ -25,17 +26,25 @@ class IngestionState(TypedDict):
 
 
 def load_workspace_files(state: IngestionState) -> dict:
-    directory_path = state.get("directory_path", "")
-    if not directory_path:
-        return {"raw_files": state.get("raw_files", [])}
-    return {"raw_files": load_directory(directory_path)}
+    tracer = get_tracer()
+    with tracer.start_as_current_span("ingestion.load_workspace") as span:
+        directory_path = state.get("directory_path", "")
+        if not directory_path:
+            files = state.get("raw_files", [])
+            span.set_attribute("file_count", len(files))
+            return {"raw_files": files}
+        files = load_directory(directory_path)
+        span.set_attribute("file_count", len(files))
+        return {"raw_files": files}
 
 
 async def parse_go_and_python_services(state: IngestionState) -> dict:
-    config = ExtractionConfig.from_env()
-    extractor = ServiceExtractor(config)
-    result = await extractor.extract_all(state["raw_files"])
-    return {"extracted_nodes": list(result.services) + list(result.calls)}
+    tracer = get_tracer()
+    with tracer.start_as_current_span("ingestion.parse_services"):
+        config = ExtractionConfig.from_env()
+        extractor = ServiceExtractor(config)
+        result = await extractor.extract_all(state["raw_files"])
+        return {"extracted_nodes": list(result.services) + list(result.calls)}
 
 def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
     existing = list(state.get("extracted_nodes", []))
@@ -43,8 +52,10 @@ def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
     return {"extracted_nodes": existing + manifest_entities}
 
 def validate_extracted_schema(state: IngestionState) -> dict:
-    errors = validate_topology(state.get("extracted_nodes", []))
-    return {"extraction_errors": errors}
+    tracer = get_tracer()
+    with tracer.start_as_current_span("ingestion.validate_schema"):
+        errors = validate_topology(state.get("extracted_nodes", []))
+        return {"extraction_errors": errors}
 
 def route_validation(state: IngestionState) -> str:
     if state.get("extraction_errors"):
@@ -65,18 +76,20 @@ async def fix_extraction_errors(state: IngestionState) -> dict:
     }
 
 async def commit_to_neo4j(state: IngestionState) -> dict:
-    config = Neo4jConfig.from_env()
-    driver = AsyncGraphDatabase.driver(
-        config.uri, auth=(config.username, config.password)
-    )
-    try:
-        repo = GraphRepository(driver)
-        await repo.commit_topology(state.get("extracted_nodes", []))
-        return {"commit_status": "success"}
-    except (Neo4jError, OSError):
-        return {"commit_status": "failed"}
-    finally:
-        await driver.close()
+    tracer = get_tracer()
+    with tracer.start_as_current_span("ingestion.commit_neo4j"):
+        config = Neo4jConfig.from_env()
+        driver = AsyncGraphDatabase.driver(
+            config.uri, auth=(config.username, config.password)
+        )
+        try:
+            repo = GraphRepository(driver)
+            await repo.commit_topology(state.get("extracted_nodes", []))
+            return {"commit_status": "success"}
+        except (Neo4jError, OSError):
+            return {"commit_status": "failed"}
+        finally:
+            await driver.close()
 
 builder = StateGraph(IngestionState)
 

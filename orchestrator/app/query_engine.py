@@ -5,6 +5,7 @@ from langgraph.graph import END, START, StateGraph
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
 from orchestrator.app.config import ExtractionConfig, Neo4jConfig
+from orchestrator.app.observability import get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
 
@@ -65,11 +66,14 @@ async def _llm_synthesize(
 
 
 def classify_query_node(state: QueryState) -> dict:
-    complexity = classify_query(state["query"])
-    return {
-        "complexity": complexity,
-        "retrieval_path": _ROUTE_MAP[complexity],
-    }
+    tracer = get_tracer()
+    with tracer.start_as_current_span("query.classify") as span:
+        complexity = classify_query(state["query"])
+        span.set_attribute("query.complexity", complexity.value)
+        return {
+            "complexity": complexity,
+            "retrieval_path": _ROUTE_MAP[complexity],
+        }
 
 
 def route_query(state: QueryState) -> str:
@@ -206,6 +210,12 @@ async def hybrid_retrieve(state: QueryState) -> dict:
 
 
 async def synthesize_answer(state: QueryState) -> dict:
+    tracer = get_tracer()
+    with tracer.start_as_current_span("query.synthesize"):
+        return await _do_synthesize(state)
+
+
+async def _do_synthesize(state: QueryState) -> dict:
     context: List[Dict[str, Any]] = []
     if state.get("candidates"):
         context.extend(state["candidates"])

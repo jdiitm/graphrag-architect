@@ -4,15 +4,20 @@ import logging
 from typing import Any, Dict, List
 
 from fastapi import FastAPI, HTTPException
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from orchestrator.app.graph_builder import ingestion_graph
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
+from orchestrator.app.observability import configure_telemetry
 from orchestrator.app.query_engine import query_graph
 from orchestrator.app.query_models import QueryRequest, QueryResponse
 
 logger = logging.getLogger(__name__)
 
+configure_telemetry()
+
 app = FastAPI(title="GraphRAG Orchestrator", version="1.0.0")
+FastAPIInstrumentor.instrument_app(app)
 
 
 def _decode_documents(request: IngestRequest) -> List[Dict[str, str]]:
