@@ -1,3 +1,35 @@
+## 2026-02-22: FR-8 Observability (Python) — TracerProvider, Spans, Metrics — Complete
+
+### Completed
+- Created orchestrator/app/observability.py:
+  - configure_telemetry(): TracerProvider with configurable SpanExporter
+  - OTLP gRPC exporter (BatchSpanProcessor) for production, SimpleSpanProcessor for tests
+  - get_tracer(): module-level tracer accessor
+  - 4 metric histograms: INGESTION_DURATION, LLM_EXTRACTION_DURATION, NEO4J_TRANSACTION_DURATION, QUERY_DURATION
+- Instrumented orchestrator/app/graph_builder.py with manual spans:
+  - ingestion.load_workspace (with file_count attribute)
+  - ingestion.parse_services
+  - ingestion.validate_schema
+  - ingestion.commit_neo4j
+- Instrumented orchestrator/app/query_engine.py with manual spans:
+  - query.classify (with query.complexity attribute)
+  - query.synthesize
+- Added FastAPI auto-instrumentation in main.py via FastAPIInstrumentor
+- Updated orchestrator/requirements.txt with OpenTelemetry dependencies
+
+### TDD: 14 new tests
+- test_observability.py: configure (2), ingestion spans (4), query spans (2), span attributes (2), metrics (4)
+
+### Quality Gates
+- Pylint: 10/10
+- Python tests: 173/173 passing (14 new + 159 existing)
+- Go tests: 26/26 passing (no regressions)
+
+### Next Step
+- FR-8 Go side: OpenTelemetry spans on Kafka consume, dispatch, process, DLQ routing
+
+---
+
 ## 2026-02-22: FR-4 Hybrid Query Routing — Classifier, Router DAG, /query Endpoint — Complete
 
 ### Completed

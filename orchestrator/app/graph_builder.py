@@ -1,3 +1,4 @@
+import time
 from typing import Any, Dict, List, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -8,6 +9,12 @@ from orchestrator.app.config import ExtractionConfig, Neo4jConfig
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.manifest_parser import parse_all_manifests
 from orchestrator.app.neo4j_client import GraphRepository
+from orchestrator.app.observability import (
+    INGESTION_DURATION,
+    LLM_EXTRACTION_DURATION,
+    NEO4J_TRANSACTION_DURATION,
+    get_tracer,
+)
 from orchestrator.app.schema_validation import validate_topology
 from orchestrator.app.workspace_loader import load_directory
 
@@ -25,26 +32,52 @@ class IngestionState(TypedDict):
 
 
 def load_workspace_files(state: IngestionState) -> dict:
-    directory_path = state.get("directory_path", "")
-    if not directory_path:
-        return {"raw_files": state.get("raw_files", [])}
-    return {"raw_files": load_directory(directory_path)}
+    tracer = get_tracer()
+    with tracer.start_as_current_span("ingestion.load_workspace") as span:
+        start = time.monotonic()
+        directory_path = state.get("directory_path", "")
+        if not directory_path:
+            files = state.get("raw_files", [])
+            span.set_attribute("file_count", len(files))
+            INGESTION_DURATION.record(
+                (time.monotonic() - start) * 1000, {"node": "load_workspace"}
+            )
+            return {"raw_files": files}
+        files = load_directory(directory_path)
+        span.set_attribute("file_count", len(files))
+        INGESTION_DURATION.record(
+            (time.monotonic() - start) * 1000, {"node": "load_workspace"}
+        )
+        return {"raw_files": files}
 
 
 async def parse_go_and_python_services(state: IngestionState) -> dict:
-    config = ExtractionConfig.from_env()
-    extractor = ServiceExtractor(config)
-    result = await extractor.extract_all(state["raw_files"])
-    return {"extracted_nodes": list(result.services) + list(result.calls)}
+    tracer = get_tracer()
+    with tracer.start_as_current_span("ingestion.parse_services"):
+        start = time.monotonic()
+        config = ExtractionConfig.from_env()
+        extractor = ServiceExtractor(config)
+        result = await extractor.extract_all(state["raw_files"])
+        elapsed_ms = (time.monotonic() - start) * 1000
+        LLM_EXTRACTION_DURATION.record(elapsed_ms, {"node": "parse_services"})
+        return {"extracted_nodes": list(result.services) + list(result.calls)}
 
 def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
-    existing = list(state.get("extracted_nodes", []))
-    manifest_entities = parse_all_manifests(state.get("raw_files", []))
-    return {"extracted_nodes": existing + manifest_entities}
+    tracer = get_tracer()
+    with tracer.start_as_current_span("ingestion.parse_manifests"):
+        start = time.monotonic()
+        existing = list(state.get("extracted_nodes", []))
+        manifest_entities = parse_all_manifests(state.get("raw_files", []))
+        INGESTION_DURATION.record(
+            (time.monotonic() - start) * 1000, {"node": "parse_manifests"}
+        )
+        return {"extracted_nodes": existing + manifest_entities}
 
 def validate_extracted_schema(state: IngestionState) -> dict:
-    errors = validate_topology(state.get("extracted_nodes", []))
-    return {"extraction_errors": errors}
+    tracer = get_tracer()
+    with tracer.start_as_current_span("ingestion.validate_schema"):
+        errors = validate_topology(state.get("extracted_nodes", []))
+        return {"extraction_errors": errors}
 
 def route_validation(state: IngestionState) -> str:
     if state.get("extraction_errors"):
@@ -54,29 +87,41 @@ def route_validation(state: IngestionState) -> str:
     return "commit_to_neo4j"
 
 async def fix_extraction_errors(state: IngestionState) -> dict:
-    config = ExtractionConfig.from_env()
-    extractor = ServiceExtractor(config)
-    result = await extractor.extract_all(state.get("raw_files", []))
-    retries = state.get("validation_retries", 0)
-    return {
-        "extracted_nodes": list(result.services) + list(result.calls),
-        "extraction_errors": [],
-        "validation_retries": retries + 1,
-    }
+    tracer = get_tracer()
+    with tracer.start_as_current_span("ingestion.fix_errors"):
+        start = time.monotonic()
+        config = ExtractionConfig.from_env()
+        extractor = ServiceExtractor(config)
+        result = await extractor.extract_all(state.get("raw_files", []))
+        retries = state.get("validation_retries", 0)
+        LLM_EXTRACTION_DURATION.record(
+            (time.monotonic() - start) * 1000, {"node": "fix_errors"}
+        )
+        return {
+            "extracted_nodes": list(result.services) + list(result.calls),
+            "extraction_errors": [],
+            "validation_retries": retries + 1,
+        }
 
 async def commit_to_neo4j(state: IngestionState) -> dict:
-    config = Neo4jConfig.from_env()
-    driver = AsyncGraphDatabase.driver(
-        config.uri, auth=(config.username, config.password)
-    )
-    try:
-        repo = GraphRepository(driver)
-        await repo.commit_topology(state.get("extracted_nodes", []))
-        return {"commit_status": "success"}
-    except (Neo4jError, OSError):
-        return {"commit_status": "failed"}
-    finally:
-        await driver.close()
+    tracer = get_tracer()
+    with tracer.start_as_current_span("ingestion.commit_neo4j"):
+        start = time.monotonic()
+        config = Neo4jConfig.from_env()
+        driver = AsyncGraphDatabase.driver(
+            config.uri, auth=(config.username, config.password)
+        )
+        try:
+            repo = GraphRepository(driver)
+            await repo.commit_topology(state.get("extracted_nodes", []))
+            return {"commit_status": "success"}
+        except (Neo4jError, OSError):
+            return {"commit_status": "failed"}
+        finally:
+            NEO4J_TRANSACTION_DURATION.record(
+                (time.monotonic() - start) * 1000, {"node": "commit_neo4j"}
+            )
+            await driver.close()
 
 builder = StateGraph(IngestionState)
 
