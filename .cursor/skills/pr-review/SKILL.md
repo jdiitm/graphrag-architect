@@ -18,6 +18,10 @@ AUDIT → DOC_SYNC → TDD → **REVIEW** → (FIX loop) → AUDIT → ...
 You are in the **REVIEW** state. An open PR exists and needs independent review.
 Your exits: HALT and emit `→ FIX` (issues found) or `→ AUDIT` (merged).
 
+## Model Requirement
+
+This skill runs on **Claude Opus 4**. When opening a new chat to trigger this skill, select Claude Opus 4 from the model picker.
+
 ## Isolation Protocol
 
 This skill MUST run in a **fresh conversation** with no prior context from `@tdd-feature-cycle`, `@pr-fix`, `@cron-audit`, or `@cron-doc-sync`.
@@ -196,7 +200,7 @@ EOF
 Tell the user exactly this:
 
 > Review complete. Changes requested on PR #N on branch `<branch>`.
-> **Next:** Open a new chat and trigger `@pr-fix`.
+> **Next:** Open a new chat **(model: Claude Opus 4)** and trigger `@pr-fix`.
 
 Then STOP. Do not write another word or call another tool.
 
@@ -215,6 +219,6 @@ git checkout main && git pull origin main
 Tell the user exactly this:
 
 > PR #N merged. Local main is up to date.
-> **Next:** Open a new chat and trigger `@cron-audit` to assess system state before the next feature.
+> **Next:** Open a new chat **(model: Gemini 2.5 Pro)** and trigger `@cron-audit`.
 
 Then STOP. Do not write another word or call another tool.

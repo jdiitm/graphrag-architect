@@ -17,6 +17,10 @@ Full-depth, full-width audit of the graphrag-architect system. Produces a single
 You are in the **AUDIT** state. You are the entry point of every cycle.
 Your only exit: HALT and emit `→ DOC_SYNC`. Always. The verdict is written to `audit-report.md`; `DOC_SYNC` reads it and decides what happens next.
 
+## Model Requirement
+
+This skill runs on **Gemini 2.5 Pro**. When opening a new chat to trigger this skill, select Gemini 2.5 Pro from the model picker.
+
 ## Isolation Protocol
 
 This skill MUST run in a **fresh conversation** with no prior context from any other skill.
@@ -302,6 +306,6 @@ The audit always transitions to `@cron-doc-sync`. The verdict (RED/YELLOW/GREEN)
 Tell the user exactly this:
 
 > Audit complete. Report written to `audit-report.md`. **Verdict: RED / YELLOW / GREEN.**
-> **Next:** Open a new chat and trigger `@cron-doc-sync` to sync documentation before any further work.
+> **Next:** Open a new chat **(model: Gemini 2.5 Pro)** and trigger `@cron-doc-sync`.
 
 Then STOP. Do not write another word or call another tool.
