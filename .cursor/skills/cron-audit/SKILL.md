@@ -7,10 +7,37 @@ description: Periodic full-system audit for graphrag-architect. Performs a deep,
 
 Full-depth, full-width audit of the graphrag-architect system. Produces a single structured report covering every requirement, every file, every test, every doc.
 
+## FSM Position
+
+```
+**AUDIT** → DOC_SYNC → [RED] → TDD → REVIEW → (FIX loop) → AUDIT → ...
+                       [YELLOW/GREEN] → wait → AUDIT
+```
+
+You are in the **AUDIT** state. You are the entry point of every cycle.
+Your only exit: HALT and emit `→ DOC_SYNC`. Always. The verdict is written to `audit-report.md`; `DOC_SYNC` reads it and decides what happens next.
+
 ## Isolation Protocol
 
 This skill MUST run in a **fresh conversation** with no prior context from any other skill.
 You are an independent auditor. You trust ONLY what you read from disk and what test output tells you.
+
+If you have any memory of writing, reviewing, fixing, or syncing docs in this session, STOP — you are contaminated.
+Tell the user: "This skill must run in a new conversation to maintain isolation."
+
+## Precondition Gate
+
+Before doing ANY work, verify these conditions:
+
+```bash
+# 1. Must be on main with clean working tree
+git branch --show-current   # must be "main"
+git status --porcelain      # must be empty
+```
+
+**If not on main or dirty tree:** HALT. Tell the user: "Working tree is not clean on main. Resolve before auditing."
+
+If there are open PRs, that is fine — the audit still runs. It will note the open PR in the report.
 
 ## Schedule
 
@@ -266,34 +293,15 @@ Produce the report in this exact format. Write it to `audit-report.md` in the re
 
 Also present the full report content in your response to the user.
 
-## Step 7: Verdict — Gate the Next Action
+## Step 7: HALT — Always Emit → DOC_SYNC
 
-The audit controls whether further development work should happen. This prevents the skill loop from running endlessly when there is nothing useful to do.
+The audit always transitions to `@cron-doc-sync`. The verdict (RED/YELLOW/GREEN) is persisted in `audit-report.md`. The doc-sync skill reads it and decides whether to trigger `@tdd-feature-cycle` or stop.
 
-### If RED (any CRITICAL or HIGH findings, or unimplemented FRs with no open PR):
-
-Tell the user exactly this:
-
-> Audit complete. Report written to `audit-report.md`.
-> **X CRITICAL, Y HIGH findings. Z/8 FRs unimplemented.**
-> **Next:** Open a new chat and trigger `@tdd-feature-cycle` to address the highest-priority gap.
-> **Next audit:** Trigger `@cron-audit` again in ~30 minutes.
-
-### If YELLOW (only LOW findings, or all remaining FRs are Phase 2 / spec'd-not-yet-planned):
+**HALT. Your job is done. Do NOT continue. Do NOT trigger `@tdd-feature-cycle` directly.**
 
 Tell the user exactly this:
 
-> Audit complete. Report written to `audit-report.md`.
-> **No CRITICAL or HIGH findings. Only LOW suggestions remain.**
-> All planned FRs are implemented or explicitly deferred to Phase 2.
-> **Do NOT trigger `@tdd-feature-cycle`** — there is no high-priority work to pick up.
-> **Next:** Review LOW findings at your discretion. Trigger `@cron-audit` again in ~30 minutes.
+> Audit complete. Report written to `audit-report.md`. **Verdict: RED / YELLOW / GREEN.**
+> **Next:** Open a new chat and trigger `@cron-doc-sync` to sync documentation before any further work.
 
-### If GREEN (zero findings, all quality gates pass, all Phase 1 FRs implemented):
-
-Tell the user exactly this:
-
-> Audit complete. Report written to `audit-report.md`.
-> **System is GREEN. All quality gates pass. No findings.**
-> **Do NOT trigger `@tdd-feature-cycle`** — the system is healthy and complete for the current phase.
-> **Next audit:** Trigger `@cron-audit` again in ~30 minutes to monitor for drift.
+Then STOP. Do not write another word or call another tool.

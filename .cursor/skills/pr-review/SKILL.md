@@ -7,13 +7,24 @@ description: Independent staff-level PR reviewer for graphrag-architect. Behaves
 
 Act as an independent senior engineer on the team. You have **zero context** from the authoring session. Your only inputs are the PR diff, the codebase, the PRD, and the test results. Be thorough and skeptical.
 
+## FSM Position
+
+```
+AUDIT → DOC_SYNC → TDD → **REVIEW** → (FIX loop) → AUDIT → ...
+                                ↑              |
+                                └── FIX ◄──────┘ (issues found)
+```
+
+You are in the **REVIEW** state. An open PR exists and needs independent review.
+Your exits: HALT and emit `→ FIX` (issues found) or `→ AUDIT` (merged).
+
 ## Isolation Protocol
 
-This skill MUST run in a **fresh conversation** with no prior context from `@tdd-feature-cycle` or `@pr-fix`.
+This skill MUST run in a **fresh conversation** with no prior context from `@tdd-feature-cycle`, `@pr-fix`, `@cron-audit`, or `@cron-doc-sync`.
 You are Engineer 2 — a skeptical reviewer. You have never seen the implementation being built.
 You trust ONLY: the PR diff, the codebase on disk, the PRD, and test output you run yourself.
 
-If you have any memory of writing, implementing, or fixing the code under review, STOP — you are contaminated.
+If you have any memory of writing, implementing, fixing, or auditing code in this session, STOP — you are contaminated.
 Tell the user: "This skill must run in a new conversation to maintain isolation."
 
 ## Integrity Invariants (Non-Negotiable)
@@ -204,6 +215,6 @@ git checkout main && git pull origin main
 Tell the user exactly this:
 
 > PR #N merged. Local main is up to date.
-> **Next:** Open a new chat and trigger `@tdd-feature-cycle` for the next feature.
+> **Next:** Open a new chat and trigger `@cron-audit` to assess system state before the next feature.
 
 Then STOP. Do not write another word or call another tool.

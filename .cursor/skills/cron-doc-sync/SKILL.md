@@ -7,14 +7,43 @@ description: Periodic documentation truth-sync for graphrag-architect. Reads the
 
 Read the entire repo. Compare every mutable doc against reality. Update docs to match what the code actually does. Code is the single source of truth — documentation is its reflection.
 
+## FSM Position
+
+```
+AUDIT → **DOC_SYNC** → [RED] → TDD → REVIEW → (FIX loop) → AUDIT → ...
+                       [YELLOW/GREEN] → wait → AUDIT
+```
+
+You are in the **DOC_SYNC** state. You always run immediately after `@cron-audit`.
+Your exits depend on the audit verdict in `audit-report.md`:
+- RED → HALT and emit `→ TDD`
+- YELLOW/GREEN → HALT and emit `→ wait for next @cron-audit`
+
 ## Isolation Protocol
 
 This skill MUST run in a **fresh conversation** with no prior context from any other skill.
 You are an independent technical writer. You trust ONLY what you read from disk and what test output tells you.
 
-## Schedule
+If you have any memory of auditing, writing, reviewing, or fixing code in this session, STOP — you are contaminated.
+Tell the user: "This skill must run in a new conversation to maintain isolation."
 
-This sync should run every ~30 minutes during active development. The user triggers it manually.
+## Precondition Gate
+
+Before doing ANY work:
+
+```bash
+# 1. Must be on main with clean working tree
+git branch --show-current   # must be "main"
+git status --porcelain      # must be empty
+
+# 2. audit-report.md must exist (this skill always runs after @cron-audit)
+cat audit-report.md | head -5
+```
+
+**If not on main or dirty tree:** HALT. Tell the user: "Working tree is not clean on main."
+**If audit-report.md is missing:** HALT. Tell the user: "No audit report found. Run `@cron-audit` first."
+
+Read the `## Verdict` section of `audit-report.md` and note the status (RED/YELLOW/GREEN). You will use this in Step 8.
 
 ## Principle: Code is Truth
 
@@ -229,9 +258,31 @@ Present a summary to the user:
 - docs/prd/*: specification files, not modified
 ```
 
-## Step 8: Done
+## Step 8: HALT — Gate Based on Audit Verdict
 
-Tell the user:
+Read the `## Verdict` section from `audit-report.md` (you noted this in the Precondition Gate).
+
+### If audit verdict = RED:
+
+**HALT. Your job is done. Do NOT continue.**
+
+Tell the user exactly this:
 
 > Documentation sync complete. N files updated, M files already accurate.
-> **Next sync:** Trigger `@cron-doc-sync` again in ~30 minutes.
+> Audit verdict is **RED** — there is high-priority work to do.
+> **Next:** Open a new chat and trigger `@tdd-feature-cycle`.
+
+Then STOP. Do not write another word or call another tool.
+
+### If audit verdict = YELLOW or GREEN:
+
+**HALT. Your job is done. Do NOT continue.**
+
+Tell the user exactly this:
+
+> Documentation sync complete. N files updated, M files already accurate.
+> Audit verdict is **YELLOW/GREEN** — no high-priority work. System is healthy.
+> **Do NOT trigger `@tdd-feature-cycle`.**
+> **Next:** Trigger `@cron-audit` again in ~30 minutes to monitor for drift.
+
+Then STOP. Do not write another word or call another tool.
