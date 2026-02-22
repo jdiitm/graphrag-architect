@@ -1,6 +1,7 @@
-from typing import List
+from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
 
 class ServiceNode(BaseModel):
     id: str
@@ -8,6 +9,8 @@ class ServiceNode(BaseModel):
     language: str
     framework: str
     opentelemetry_enabled: bool
+    team_owner: Optional[str] = None
+    namespace_acl: List[str] = Field(default_factory=list)
 
 class DatabaseNode(BaseModel):
     id: str
@@ -22,6 +25,8 @@ class K8sDeploymentNode(BaseModel):
     id: str
     namespace: str
     replicas: int
+    team_owner: Optional[str] = None
+    namespace_acl: List[str] = Field(default_factory=list)
 
 class CallsEdge(BaseModel):
     source_service_id: str
