@@ -8,6 +8,7 @@ from orchestrator.app.workspace_loader import (
     INCLUDED_EXTENSIONS,
     MAX_FILE_SIZE_BYTES,
     load_directory,
+    load_directory_chunked,
 )
 
 
@@ -181,6 +182,51 @@ class TestLoadDirectoryConstants:
 
     def test_max_file_size_is_one_megabyte(self):
         assert MAX_FILE_SIZE_BYTES == 1_048_576
+
+
+class TestLoadDirectoryChunked:
+
+    def test_yields_batches_of_specified_size(self, tmp_path: Path):
+        for i in range(7):
+            (tmp_path / f"file_{i}.go").write_text(f"package f{i}")
+        chunks = list(load_directory_chunked(str(tmp_path), chunk_size=3))
+        assert len(chunks) == 3
+        assert len(chunks[0]) == 3
+        assert len(chunks[1]) == 3
+        assert len(chunks[2]) == 1
+
+    def test_single_chunk_when_fewer_files_than_chunk_size(self, tmp_path: Path):
+        (tmp_path / "a.go").write_text("package a")
+        (tmp_path / "b.go").write_text("package b")
+        chunks = list(load_directory_chunked(str(tmp_path), chunk_size=10))
+        assert len(chunks) == 1
+        assert len(chunks[0]) == 2
+
+    def test_empty_directory_yields_nothing(self, tmp_path: Path):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        chunks = list(load_directory_chunked(str(empty), chunk_size=5))
+        assert chunks == []
+
+    def test_chunk_contents_match_full_load(self, workspace: Path):
+        full = load_directory(str(workspace))
+        chunked_all = []
+        for chunk in load_directory_chunked(str(workspace), chunk_size=2):
+            chunked_all.extend(chunk)
+        assert sorted(chunked_all, key=lambda e: e["path"]) == full
+
+    def test_respects_max_total_bytes(self, tmp_path: Path):
+        for i in range(10):
+            (tmp_path / f"big_{i}.go").write_text("x" * 1000)
+        chunks = list(load_directory_chunked(
+            str(tmp_path), chunk_size=5, max_total_bytes=3000
+        ))
+        total_files = sum(len(c) for c in chunks)
+        assert total_files <= 4
+
+    def test_invalid_path_yields_nothing(self):
+        chunks = list(load_directory_chunked("/nonexistent", chunk_size=5))
+        assert chunks == []
 
 
 class TestLoadWorkspaceFilesDAGNode:

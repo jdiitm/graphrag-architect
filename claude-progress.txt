@@ -1,3 +1,24 @@
+## Completed: Performance and Consumer Resilience Hardening
+
+Branch: `feat/performance-and-consumer-resilience`
+Quality Gates: Pylint 10/10, Python 360/360, Go 64/64
+
+### Deep Audit Findings Addressed (3.1, 3.2)
+
+- **3.1 (HIGH)**: Converted workspace_loader from synchronous full-load to chunked
+  generator. `load_directory_chunked()` yields batches with configurable chunk_size
+  and optional max_total_bytes cap. Prevents OOM on large monorepos. Original
+  `load_directory()` preserved as backward-compatible thin wrapper.
+  Files: workspace_loader.py, test_workspace_loader.py
+
+- **3.2 (MEDIUM)**: Added configurable `WithAckTimeout` to Go consumer. When a batch
+  ack exceeds the timeout, the consumer returns `ErrAckTimeout` instead of blocking
+  indefinitely. Prevents session.timeout.ms from being exceeded by stalled jobs,
+  avoiding Kafka consumer group rebalances. Default is no timeout (backward compat).
+  Files: consumer.go, consumer_test.go
+
+---
+
 ## Completed: Audit Mitigation — DLQ Durability, Token TTL, Ingest Auth, E2E Tests
 
 Branch: `fix/audit-mitigations`

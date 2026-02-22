@@ -11,7 +11,10 @@ import (
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
 )
 
-var ErrSourceClosed = errors.New("source closed")
+var (
+	ErrSourceClosed = errors.New("source closed")
+	ErrAckTimeout   = errors.New("ack timeout: batch processing stalled, possible rebalance risk")
+)
 
 type TopicPartition struct {
 	Topic     string
@@ -29,10 +32,11 @@ type JobSource interface {
 }
 
 type Consumer struct {
-	source   JobSource
-	observer metrics.PipelineObserver
-	jobs     chan<- domain.Job
-	acks     <-chan struct{}
+	source     JobSource
+	observer   metrics.PipelineObserver
+	jobs       chan<- domain.Job
+	acks       <-chan struct{}
+	ackTimeout time.Duration
 }
 
 type ConsumerOption func(*Consumer)
@@ -40,6 +44,12 @@ type ConsumerOption func(*Consumer)
 func WithObserver(obs metrics.PipelineObserver) ConsumerOption {
 	return func(c *Consumer) {
 		c.observer = obs
+	}
+}
+
+func WithAckTimeout(d time.Duration) ConsumerOption {
+	return func(c *Consumer) {
+		c.ackTimeout = d
 	}
 }
 
@@ -83,13 +93,9 @@ func (c *Consumer) Run(ctx context.Context) error {
 			}
 		}
 
-		for i := 0; i < len(batch); i++ {
-			select {
-			case <-pollCtx.Done():
-				pollSpan.End()
-				return pollCtx.Err()
-			case <-c.acks:
-			}
+		if err := c.awaitAcks(pollCtx, len(batch)); err != nil {
+			pollSpan.End()
+			return err
 		}
 
 		commitCtx, commitSpan := telemetry.StartCommitSpan(pollCtx)
@@ -104,6 +110,37 @@ func (c *Consumer) Run(ctx context.Context) error {
 		c.observer.RecordBatchDuration(time.Since(batchStart).Seconds())
 		c.reportLag(batch)
 	}
+}
+
+func (c *Consumer) awaitAcks(ctx context.Context, count int) error {
+	if c.ackTimeout <= 0 {
+		for i := 0; i < count; i++ {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-c.acks:
+			}
+		}
+		return nil
+	}
+
+	timer := time.NewTimer(c.ackTimeout)
+	defer timer.Stop()
+
+	for i := 0; i < count; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.acks:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			timer.Reset(c.ackTimeout)
+		case <-timer.C:
+			return ErrAckTimeout
+		}
+	}
+	return nil
 }
 
 func (c *Consumer) reportLag(batch []domain.Job) {
