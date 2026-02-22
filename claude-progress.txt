@@ -1,3 +1,51 @@
+## 2026-02-22: parse_k8s_and_kafka_manifests DAG Node — Complete
+
+### Completed
+- Created orchestrator/app/manifest_parser.py with deterministic YAML parsing:
+  - _safe_load_all(): multi-document YAML deserialization with malformed input protection
+  - _extract_deployment(): K8s Deployment -> K8sDeploymentNode (kind filtering, default namespace/replicas)
+  - _extract_kafka_topic(): Strimzi KafkaTopic -> KafkaTopicNode (kind filtering, default partitions/retention)
+  - parse_k8s_manifests(): public entry point for K8s Deployments from YAML content
+  - parse_kafka_topics(): public entry point for Kafka Topics from YAML content
+  - parse_all_manifests(): orchestrator filtering .yaml/.yml files and combining both entity types
+- Updated orchestrator/app/graph_builder.py:
+  - parse_k8s_and_kafka_manifests now delegates to parse_all_manifests
+  - Fixed state accumulation bug: appends manifest entities to existing extracted_nodes (was overwriting)
+  - Last DAG stub is now implemented — full ingestion pipeline is functional
+- TDD: 28 new tests written and passing across 4 test classes
+  - TestParseK8sManifests (10 tests): valid, defaults, wrong kind, missing name, multi-doc, malformed, empty
+  - TestParseKafkaTopics (9 tests): Strimzi format, defaults, wrong kind, missing name, multi-doc, retention types
+  - TestParseAllManifests (6 tests): extension filtering, combination, empty, invalid, mixed multi-doc
+  - TestDagNodeIntegration (3 tests): state accumulation, preservation, empty state
+
+### Architecture Decisions
+- Deterministic YAML parsing (no LLM): manifests have well-defined schemas, so parsing is faster, cheaper, deterministic, and hallucination-free
+- Supports multi-document YAML (--- separators) — common in K8s manifests
+- Sensible defaults: namespace=default, replicas=1, partitions=1, retention=7 days (604800000ms)
+- Strimzi KafkaTopic CRD format: retention.ms read from spec.config (supports both string and int values)
+- State accumulation fix: parse_manifests reads existing extracted_nodes and appends (LangGraph uses replace semantics for un-annotated List)
+
+### Quality Gates
+- Pylint: 10/10
+- Python tests: 98/98 passing (28 new + 70 existing)
+- Go tests: 8/8 passing (no regressions)
+- Total: 106/106 passing, 0 regressions
+
+### PR Status
+- Branch: feat/manifest-parser — PR pending
+
+### Unresolved
+- No FastAPI /ingest HTTP endpoint yet (FR-1 integration point)
+- FR-4: Hybrid Query Routing not yet started
+- FR-6: KafkaDLQSink not yet implemented (Go side)
+- FR-8: Observability not yet implemented
+
+### Next Step
+- Implement FastAPI /ingest endpoint to receive payloads from Go ForwardingProcessor
+- OR begin FR-4: Hybrid Query Routing (LangGraph StateGraph with conditional edges for vector/graph/hybrid paths)
+
+---
+
 ## 2026-02-22: load_workspace_files DAG Node — Complete
 
 ### Completed
