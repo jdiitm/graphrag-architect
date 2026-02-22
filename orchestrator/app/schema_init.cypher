@@ -6,3 +6,4 @@ CREATE CONSTRAINT k8s_pod_id IF NOT EXISTS FOR (p:K8sPod) REQUIRE p.id IS UNIQUE
 
 CREATE INDEX service_lang_idx IF NOT EXISTS FOR (s:Service) ON (s.language);
 CREATE INDEX service_framework_idx IF NOT EXISTS FOR (s:Service) ON (s.framework);
+CREATE FULLTEXT INDEX service_name_index IF NOT EXISTS FOR (n:Service) ON EACH [n.name];

@@ -1,0 +1,89 @@
+package metrics_test
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/metrics"
+)
+
+func TestHandlerReturnsPrometheusFormat(t *testing.T) {
+	m := metrics.New()
+	m.RecordConsumerLag("test-topic", 0, 0)
+	handler := m.Handler()
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "ingestion_consumer_lag") {
+		t.Error("expected ingestion_consumer_lag metric in output")
+	}
+}
+
+func TestRecordConsumerLag(t *testing.T) {
+	m := metrics.New()
+	m.RecordConsumerLag("raw-documents", 0, 150)
+
+	handler := m.Handler()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "150") {
+		t.Error("expected lag value 150 in output")
+	}
+}
+
+func TestRecordBatchDuration(t *testing.T) {
+	m := metrics.New()
+	m.RecordBatchDuration(42.5)
+
+	handler := m.Handler()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "ingestion_batch_duration") {
+		t.Error("expected ingestion_batch_duration metric in output")
+	}
+}
+
+func TestRecordDLQTotal(t *testing.T) {
+	m := metrics.New()
+	m.RecordDLQRouted()
+	m.RecordDLQRouted()
+
+	handler := m.Handler()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "ingestion_dlq_routed_total") {
+		t.Error("expected ingestion_dlq_routed_total metric in output")
+	}
+}
+
+func TestRecordJobsProcessedTotal(t *testing.T) {
+	m := metrics.New()
+	m.RecordJobProcessed("success")
+
+	handler := m.Handler()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "ingestion_jobs_processed_total") {
+		t.Error("expected ingestion_jobs_processed_total metric in output")
+	}
+}

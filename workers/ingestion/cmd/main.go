@@ -14,6 +14,7 @@ import (
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/consumer"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dispatcher"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dlq"
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/metrics"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/processor"
 )
 
@@ -41,8 +42,21 @@ func main() {
 	numWorkers := envIntOrDefault("NUM_WORKERS", 4)
 	maxRetries := envIntOrDefault("MAX_RETRIES", 3)
 
+	metricsAddr := envOrDefault("METRICS_ADDR", ":9090")
+
 	log.Printf("starting ingestion worker: brokers=%s topic=%s group=%s workers=%d",
 		kafkaBrokers, kafkaTopic, consumerGroup, numWorkers)
+
+	m := metrics.New()
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", m.Handler())
+	metricsSrv := &http.Server{Addr: metricsAddr, Handler: mux}
+	go func() {
+		log.Printf("metrics server listening on %s", metricsAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("metrics server error: %v", err)
+		}
+	}()
 
 	fp := processor.NewForwardingProcessor(orchestratorURL, &http.Client{Timeout: 30 * time.Second})
 
@@ -52,7 +66,7 @@ func main() {
 		JobBuffer:  numWorkers * 2,
 		DLQBuffer:  numWorkers,
 	}
-	disp := dispatcher.New(cfg, fp)
+	disp := dispatcher.New(cfg, fp, dispatcher.WithObserver(m))
 
 	kafkaSource := NewKafkaJobSource(kafkaBrokers, kafkaTopic, consumerGroup)
 	defer kafkaSource.Close()
@@ -91,6 +105,7 @@ func main() {
 	<-ctx.Done()
 	log.Println("shutting down...")
 	cancel()
+	_ = metricsSrv.Close()
 	wg.Wait()
 	log.Println("shutdown complete")
 }

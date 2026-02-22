@@ -11,15 +11,22 @@ from opentelemetry.sdk.trace.export import (
     SimpleSpanProcessor,
     SpanExporter,
 )
+from opentelemetry.sdk.trace.sampling import ParentBasedTraceIdRatio
 
 _SERVICE_NAME = "graphrag-orchestrator"
 _STATE: dict[str, trace.Tracer] = {}
 
 
+def _build_sampler() -> ParentBasedTraceIdRatio:
+    rate = float(os.environ.get("OTEL_TRACES_SAMPLER_ARG", "0.1"))
+    return ParentBasedTraceIdRatio(rate)
+
+
 def configure_telemetry(
     exporter: Optional[SpanExporter] = None,
 ) -> TracerProvider:
-    provider = TracerProvider()
+    sampler = _build_sampler() if exporter is None else None
+    provider = TracerProvider(sampler=sampler)
 
     if exporter is not None:
         provider.add_span_processor(SimpleSpanProcessor(exporter))

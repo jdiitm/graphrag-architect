@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: neo4j-schema-init
+  namespace: graphrag
+  labels:
+    app: neo4j-schema-init
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: schema-init
+          image: neo4j:5.15.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              until cypher-shell -u "$NEO4J_USERNAME" -p "$NEO4J_PASSWORD" -a "$NEO4J_URI" "RETURN 1"; do
+                echo "Waiting for Neo4j..."
+                sleep 5
+              done
+              cypher-shell -u "$NEO4J_USERNAME" -p "$NEO4J_PASSWORD" -a "$NEO4J_URI" < /schema/schema_init.cypher
+              echo "Schema initialized."
+          envFrom:
+            - configMapRef:
+                name: graphrag-config
+            - secretRef:
+                name: graphrag-secrets
+          volumeMounts:
+            - name: schema
+              mountPath: /schema
+      volumes:
+        - name: schema
+          configMap:
+            name: neo4j-schema
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neo4j-schema
+  namespace: graphrag
+data:
+  schema_init.cypher: |
+    -- NOTE: keep in sync with orchestrator/app/schema_init.cypher (canonical source)
+    CREATE CONSTRAINT service_id IF NOT EXISTS FOR (s:Service) REQUIRE s.id IS UNIQUE;
+    CREATE CONSTRAINT database_id IF NOT EXISTS FOR (d:Database) REQUIRE d.id IS UNIQUE;
+    CREATE CONSTRAINT topic_name IF NOT EXISTS FOR (t:KafkaTopic) REQUIRE t.name IS UNIQUE;
+    CREATE CONSTRAINT k8s_deploy_id IF NOT EXISTS FOR (k:K8sDeployment) REQUIRE k.id IS UNIQUE;
+    CREATE CONSTRAINT k8s_pod_id IF NOT EXISTS FOR (p:K8sPod) REQUIRE p.id IS UNIQUE;
+    CREATE INDEX service_lang_idx IF NOT EXISTS FOR (s:Service) ON (s.language);
+    CREATE INDEX service_framework_idx IF NOT EXISTS FOR (s:Service) ON (s.framework);
+    CREATE FULLTEXT INDEX service_name_index IF NOT EXISTS FOR (n:Service) ON EACH [n.name];

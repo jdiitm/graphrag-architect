@@ -1,3 +1,33 @@
+## 2026-02-22: Phase 3 — Production Deployment Infrastructure — Complete
+
+### Completed
+- Dockerfiles: multi-stage builds for Python orchestrator (python:3.12-slim) and Go worker (golang:1.24-alpine)
+- K8s manifests (infrastructure/k8s/):
+  - namespace.yaml: graphrag namespace
+  - configmap.yaml: all service configuration (Neo4j, Kafka, OTLP, worker settings)
+  - secrets.yaml: template for NEO4J_PASSWORD and GOOGLE_API_KEY
+  - orchestrator-deployment.yaml: 2 replicas, health/readiness probes, resource limits
+  - ingestion-worker-deployment.yaml: 2 replicas, Prometheus scrape annotations, metrics port
+  - hpa.yaml: NFR-4 scaling triggers (consumer lag > 1000, CPU > 80%) for both components
+  - neo4j-schema-job.yaml: one-shot Job applying schema_init.cypher to Neo4j on startup
+- Prometheus metrics endpoint (Go):
+  - internal/metrics/metrics.go: ingestion_consumer_lag (gauge), ingestion_batch_duration_seconds (histogram), ingestion_dlq_routed_total (counter), ingestion_jobs_processed_total (counter)
+  - Wired into cmd/main.go: HTTP server on :9090/metrics
+- Trace sampling (NFR-8):
+  - ParentBasedTraceIdRatio sampler in Python observability.py
+  - Configurable via OTEL_TRACES_SAMPLER_ARG env var (default 0.1 = 10%)
+
+### TDD: 8 new tests
+- test_observability.py: 3 sampler config tests
+- metrics_test.go: 5 Prometheus metrics tests
+
+### Quality Gates
+- Pylint: 10/10
+- Python tests: 207/207 passing (3 new + 204 existing)
+- Go tests: 42/42 passing (5 new + 37 existing)
+
+---
+
 ## 2026-02-22: FR-7 Access Control — Zanzibar-Inspired Permission Filtering — Complete
 
 ### Completed

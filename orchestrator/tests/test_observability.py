@@ -4,7 +4,11 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
-from orchestrator.app.observability import configure_telemetry, get_tracer
+from orchestrator.app.observability import (
+    _build_sampler,
+    configure_telemetry,
+    get_tracer,
+)
 
 
 class MemoryExporter(SpanExporter):
@@ -546,3 +550,24 @@ class TestMetricsRecording:
             mock_metric.record.assert_called_once()
             elapsed_ms = mock_metric.record.call_args[0][0]
             assert elapsed_ms >= 0
+
+
+class TestSamplerConfig:
+    def test_default_sampling_rate_is_ten_percent(self):
+        sampler = _build_sampler()
+        assert hasattr(sampler, "_root")
+        assert sampler._root.rate == pytest.approx(0.1)
+
+    def test_custom_sampling_rate_from_env(self):
+        with patch.dict("os.environ", {"OTEL_TRACES_SAMPLER_ARG": "0.5"}):
+            sampler = _build_sampler()
+            assert sampler._root.rate == pytest.approx(0.5)
+
+    def test_test_exporter_uses_always_on_not_ratio(self):
+        exporter = MemoryExporter()
+        provider = configure_telemetry(exporter=exporter)
+        root_sampler = provider.sampler._root
+        assert not hasattr(root_sampler, "rate"), (
+            "Test exporter path should use ALWAYS_ON, not ratio-based sampling"
+        )
+        provider.shutdown()
