@@ -10,7 +10,7 @@ Address review feedback on an open PR using the same TDD discipline as feature d
 ## FSM Position
 
 ```
-... → TDD → REVIEW → **FIX** → REVIEW → ┬─ [merged]  → AUDIT → ...
+... → TDD → REVIEW → **FIX** → REVIEW → ┬─ [merged]  → AUDIT → TDD → ...
                         ↑          |      └─ [changes] → FIX
                         └──────────┘
 ```

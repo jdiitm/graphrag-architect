@@ -1,6 +1,6 @@
 ---
 name: system-audit
-description: Full-system audit for graphrag-architect. Performs a deep, wide, context-complete audit of the entire codebase, tests, documentation, and infrastructure against the PRD and architecture specs. Produces a structured report. Trigger when asked to audit, health-check, or assess system state, after a PR merge lands on main, or to start a new development cycle.
+description: Full-system audit for graphrag-architect. Performs a deep, wide, context-complete audit of the entire codebase, tests, documentation, and infrastructure against the PRD and architecture specs. Produces a structured report consumed by @tdd-feature-cycle. MUST run in its own fresh chat session — never in the same session as implementation. Trigger when asked to audit, health-check, assess system state, or before starting a new development cycle.
 ---
 
 # System Audit
@@ -10,13 +10,11 @@ Full-depth, full-width audit of the graphrag-architect system. Verdict must be e
 ## FSM Position
 
 ```
-**AUDIT** → DOC_SYNC → ┬─ [RED + no PR] → TDD → REVIEW ─┬─ [merged]  → AUDIT → ...
-                        ├─ [open PR]     → REVIEW ─────────┤  [changes] → FIX → REVIEW
-                        └─ [GREEN]       → idle             └──────────────────────────┘
+**AUDIT** (this session) → audit-report.md → TDD (new session) → REVIEW ─┬─ [merged]  → AUDIT → TDD
+                                                                          └─ [changes] → FIX → REVIEW
 ```
 
-You are in the **AUDIT** state. You run after a PR merge lands on main (or as the initial entry point). AUDIT only produces useful results when main has changed — never between TDD and REVIEW.
-Your only exit: HALT and emit `→ DOC_SYNC`. Always. The verdict is written to `audit-report.md`; `DOC_SYNC` reads it and decides what happens next.
+You are in the **AUDIT** state. You produce `audit-report.md` which `@tdd-feature-cycle` consumes in a **separate chat session**. This separation is non-negotiable — the auditor and the engineer must never be the same agent in the same session.
 
 ## Isolation Protocol
 
@@ -257,13 +255,13 @@ No CRITICAL or HIGH findings. System is healthy.
 - Do NOT include Phase 2 FRs in the gaps table.
 - Do NOT pad the report. Shorter is better. Actionable is everything.
 
-## Step 7: HALT — Always Emit → DOC_SYNC
+## Step 7: HALT
 
-**HALT. Your job is done. Do NOT continue. Do NOT trigger `@tdd-feature-cycle` directly.**
+**HALT. Your job is done. Do NOT continue.**
 
 Tell the user exactly this:
 
 > Audit complete. Report written to `audit-report.md`. **Verdict: RED / YELLOW / GREEN.**
-> **Next:** Open a new chat and trigger `@doc-sync`.
+> **Next:** Open a **new chat** and trigger `@tdd-feature-cycle`.
 
 Then STOP. Do not write another word or call another tool.
