@@ -134,12 +134,12 @@ Only flag functions with **zero** test coverage. A function tested via integrati
 
 ### 5c. Integrity Violations
 
-```bash
-rg -n 'pylint.*disable|noqa|nolint' orchestrator/ workers/
-rg -n 'pytest\.mark\.skip|unittest\.skip|xfail|expected_failure' orchestrator/tests/ workers/
-rg -n 'except\s*:' orchestrator/ workers/
-rg -n 'time\.sleep|asyncio\.sleep' orchestrator/tests/
-```
+Search using the Grep tool (do NOT use `rg` — it is not in the system PATH):
+
+1. Lint suppression: pattern `pylint.*disable|noqa|nolint` in `orchestrator/` and `workers/`
+2. Test skips: pattern `pytest\.mark\.skip|unittest\.skip|xfail|expected_failure` in `orchestrator/tests/` and `workers/`
+3. Bare except: pattern `except\s*:` in `orchestrator/` and `workers/`
+4. Sleeps in tests: pattern `time\.sleep|asyncio\.sleep` in `orchestrator/tests/`
 
 **Investigate every match.** Many patterns have legitimate uses:
 - `skip` in a variable name or string literal is NOT a violation
@@ -178,9 +178,9 @@ Only flag with evidence.
 
 ### 5g. Stale Code
 
-```bash
-rg -n 'TODO|FIXME|HACK|XXX' orchestrator/ workers/
-```
+Search using the Grep tool (do NOT use `rg` — it is not in the system PATH):
+
+- Stale markers: pattern `TODO|FIXME|HACK|XXX` in `orchestrator/` and `workers/`
 
 Flag only confirmed dead code or stale markers.
 
