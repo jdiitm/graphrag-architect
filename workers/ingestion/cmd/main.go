@@ -71,7 +71,7 @@ func main() {
 	kafkaSource := NewKafkaJobSource(kafkaBrokers, kafkaTopic, consumerGroup)
 	defer kafkaSource.Close()
 
-	cons := consumer.New(kafkaSource, disp.Jobs(), disp.Acks())
+	cons := consumer.New(kafkaSource, disp.Jobs(), disp.Acks(), consumer.WithObserver(m))
 
 	sink := &LogDLQSink{}
 	dlqHandler := dlq.NewHandler(disp.DLQ(), sink)
