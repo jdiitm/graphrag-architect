@@ -24,7 +24,11 @@ A production-grade GraphRAG system that analyzes distributed systems by building
 
 **Extraction pipeline** — LLM-powered structured extraction from `.go` and `.py` source files into typed Pydantic models (`ServiceNode`, `CallsEdge`, etc.), committed as Neo4j nodes and relationships.
 
-**Retrieval** (planned) — Hybrid VectorCypher approach: simple lookups via vector search, complex structural queries via agentic Cypher graph traversals.
+**Retrieval** — Hybrid VectorCypher approach: keyword classifier routes entity lookups to vector search, single-hop to vector + 1-hop Cypher, multi-hop to agentic iterative Cypher generation, and aggregate queries to DRIFT-inspired hybrid retrieval. LLM synthesizes natural-language answers from graph context.
+
+**Access Control** — Zanzibar-inspired permission filtering: `SecurityPrincipal` resolved from request headers, `CypherPermissionFilter` injects ACL `WHERE` clauses into all Cypher queries at query-time. Permission metadata (`team_owner`, `namespace_acl`) persisted on graph nodes at ingestion-time.
+
+**Observability** — OpenTelemetry distributed tracing across the full pipeline: FastAPI auto-instrumentation, manual spans on all 12 LangGraph DAG nodes, Go spans on Kafka poll/dispatch/process/DLQ/commit, trace context propagation via `traceparent` headers across Go-HTTP-Python boundary.
 
 ## Tech Stack
 
@@ -43,21 +47,31 @@ A production-grade GraphRAG system that analyzes distributed systems by building
 graphrag-architect/
 ├── orchestrator/                        # Python LLM extraction pipeline
 │   ├── app/
-│   │   ├── config.py                    # ExtractionConfig
+│   │   ├── access_control.py            # SecurityPrincipal, CypherPermissionFilter (FR-7)
+│   │   ├── config.py                    # ExtractionConfig, Neo4jConfig
 │   │   ├── extraction_models.py         # Pydantic schemas (ServiceNode, CallsEdge, etc.)
-│   │   ├── graph_builder.py             # LangGraph DAG definition
+│   │   ├── graph_builder.py             # LangGraph ingestion DAG (6 nodes)
 │   │   ├── ingest_models.py             # IngestRequest/Response Pydantic models
 │   │   ├── llm_extraction.py            # ServiceExtractor (filter, batch, extract)
-│   │   ├── main.py                      # FastAPI endpoints (/health, /ingest)
+│   │   ├── main.py                      # FastAPI endpoints (/health, /ingest, /query)
 │   │   ├── manifest_parser.py           # K8s + Kafka YAML parsing
 │   │   ├── neo4j_client.py              # Cypher MERGE operations
+│   │   ├── observability.py             # OpenTelemetry TracerProvider + metrics (FR-8)
+│   │   ├── query_classifier.py          # Keyword-based query complexity classifier (FR-4)
+│   │   ├── query_engine.py              # LangGraph query DAG (6 nodes) (FR-4)
+│   │   ├── query_models.py              # QueryRequest/Response/State models (FR-4)
 │   │   ├── schema_validation.py         # Pydantic validation + correction loop
 │   │   ├── workspace_loader.py          # Filesystem workspace scanner
 │   │   └── schema_init.cypher           # Neo4j constraints and indexes
-│   ├── tests/                           # 117 tests across 6 test files
+│   ├── tests/                           # 204 tests across 11 test files
+│   │   ├── test_access_control.py
 │   │   ├── test_ingest_api.py
 │   │   ├── test_manifest_parser.py
 │   │   ├── test_neo4j_client.py
+│   │   ├── test_observability.py
+│   │   ├── test_query_api.py
+│   │   ├── test_query_classifier.py
+│   │   ├── test_query_engine.py
 │   │   ├── test_schema_validation.py
 │   │   ├── test_service_extractor.py
 │   │   └── test_workspace_loader.py
@@ -72,7 +86,8 @@ graphrag-architect/
 │       │   ├── domain/job.go             # Job, Result value types
 │       │   ├── processor/                # DocumentProcessor interface + ForwardingProcessor
 │       │   ├── dispatcher/               # Worker pool (dispatcher + tests)
-│       │   └── dlq/                      # Dead Letter Queue (handler + tests)
+│       │   ├── dlq/                      # Dead Letter Queue (handler + tests)
+│       │   └── telemetry/               # OpenTelemetry TracerProvider + span helpers (FR-8)
 │       └── go.mod
 ├── infrastructure/
 │   └── docker-compose.yml               # Neo4j + Kafka
@@ -122,20 +137,20 @@ export EXTRACTION_TOKEN_BUDGET="200000"           # default: 200000
 ### 4. Run tests
 
 ```bash
-# Python tests (117 tests)
+# Python tests (204 tests)
 python -m pytest orchestrator/tests/ -v
 
-# Go tests (25 tests)
+# Go tests (37 tests)
 cd workers/ingestion && go test ./... -v
 ```
 
 ## Graph Schema
 
 **Nodes:**
-- `Service` — id, name, language, framework, opentelemetry_enabled
-- `Database` — id, type
-- `KafkaTopic` — name, partitions, retention_ms
-- `K8sDeployment` — id, namespace, replicas
+- `Service` — id, name, language, framework, opentelemetry_enabled, team_owner, namespace_acl
+- `Database` — id, type, team_owner, namespace_acl
+- `KafkaTopic` — name, partitions, retention_ms, team_owner, namespace_acl
+- `K8sDeployment` — id, namespace, replicas, team_owner, namespace_acl
 
 **Edges:**
 - `CALLS` — source_service_id → target_service_id (protocol)

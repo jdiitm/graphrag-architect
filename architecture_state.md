@@ -60,7 +60,7 @@ High-throughput Kafka consumer with a concurrent worker pool.
 
 - **Consumer**: Reads from `raw-documents` topic via franz-go.
 - **Dispatcher**: Manages N goroutines, channels, and retry logic.
-- **DocumentProcessor**: Interface for processing each job (Phase 1: noop / Phase 2: HTTP forward to orchestrator).
+- **DocumentProcessor**: Interface for processing each job. `ForwardingProcessor` HTTP POSTs base64-encoded payloads to the Python orchestrator's `/ingest` endpoint.
 - **DLQ Handler**: Routes permanently failed jobs to `raw-documents.dlq`.
 - **Shutdown**: Graceful via `context.Context` + `sync.WaitGroup`. No message loss.
 
@@ -69,8 +69,11 @@ High-throughput Kafka consumer with a concurrent worker pool.
 LangGraph-based extraction pipeline.
 
 - **ServiceExtractor**: Async LLM extraction (Gemini) of ServiceNode and CallsEdge from .go/.py files.
-- **Graph Builder**: LangGraph DAG: load → parse_services → parse_manifests → validate → commit.
-- **Config**: ExtractionConfig (model, concurrency, token budget, retry).
+- **Graph Builder**: LangGraph ingestion DAG: load → parse_services → parse_manifests → validate → commit. All nodes instrumented with OpenTelemetry spans.
+- **Query Engine**: LangGraph query DAG: classify → route → [vector|single_hop|cypher|hybrid] → synthesize. Agentic Cypher iteration (max 3), DRIFT-inspired hybrid retrieval.
+- **Access Control**: SecurityPrincipal resolution from Authorization header. CypherPermissionFilter injects ACL WHERE clauses into Cypher queries.
+- **Observability**: TracerProvider with OTLP gRPC exporter, FastAPI auto-instrumentation, 4 metric histograms.
+- **Config**: ExtractionConfig (model, concurrency, token budget, retry), Neo4jConfig.
 
 ### 3. Infrastructure (`infrastructure/`)
 

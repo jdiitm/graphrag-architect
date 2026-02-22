@@ -50,7 +50,7 @@ The system SHALL persist extracted entities and relationships to Neo4j via idemp
 | **Schema Enforcement** | 5 uniqueness constraints, 2 secondary indexes (see `orchestrator/app/schema_init.cypher`) |
 | **Driver** | `neo4j` Python driver v6.1 with async session support |
 | **Transaction Scope** | One transaction per ingestion batch. Rollback on partial failure. |
-| **Implementation** | `commit_to_neo4j` node in `orchestrator/app/graph_builder.py` (stub, pending implementation) |
+| **Implementation** | `commit_to_neo4j` node in `orchestrator/app/graph_builder.py`, `orchestrator/app/neo4j_client.py` |
 
 ---
 
@@ -65,7 +65,7 @@ The system SHALL classify incoming queries by complexity and route them to the o
 | **Graph Path** | Multi-hop structural queries via agentic Cypher generation. LLM generates Cypher, executes against Neo4j, iterates if result set is insufficient. Planner-executor loop with max 3 iterations. |
 | **Hybrid Path** | DRIFT-inspired: vector pre-filter narrows candidate nodes, then Cypher traversal operates on the filtered subgraph for complex structural reasoning. |
 | **Synthesis** | LLM produces natural-language answer grounded in retrieved subgraph context. |
-| **Implementation** | Spec'd. Not yet implemented. |
+| **Implementation** | `orchestrator/app/query_engine.py`, `orchestrator/app/query_classifier.py`, `orchestrator/app/query_models.py` |
 
 **Routing Classification:**
 
@@ -117,7 +117,7 @@ The system SHALL enforce permission-aware query results, ensuring users only see
 | **Ingestion-Time** | Permission metadata (team ownership, namespace ACLs) indexed as properties on graph nodes during extraction |
 | **Query-Time** | Security principal resolved from request context. Cypher queries extended with `WHERE` clauses filtering by permission metadata. |
 | **Graph-Aware RBAC** | Edge traversal authorization: a user may view `Service A` but not traverse `CALLS` edges to `Service B` if `B` is in a restricted namespace |
-| **Implementation** | Spec'd. Not yet implemented. Phase 2 deliverable. |
+| **Implementation** | `orchestrator/app/access_control.py` |
 
 ---
 
@@ -132,7 +132,7 @@ The system SHALL emit distributed traces, metrics, and structured logs across th
 | **Correlation** | Trace context propagated via Kafka message headers (`traceparent`). Spans linked across Go -> HTTP -> Python boundary. |
 | **Export** | `BatchSpanProcessor` for production. OTLP exporter to configurable backend (Jaeger, Grafana Tempo). |
 | **Metrics** | Kafka consumer lag, ingestion batch duration, Neo4j transaction latency, LLM extraction duration, DLQ routing rate. |
-| **Implementation** | Spec'd. Not yet implemented. |
+| **Implementation** | `orchestrator/app/observability.py`, `workers/ingestion/internal/telemetry/telemetry.go` |
 
 ---
 
