@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python-lint:
+    name: Python Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: orchestrator/requirements.txt
+      - name: Install dependencies
+        run: pip install -r orchestrator/requirements.txt
+      - name: Pylint
+        run: pylint orchestrator/
+
+  python-test:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: orchestrator/requirements.txt
+      - name: Install dependencies
+        run: pip install -r orchestrator/requirements.txt
+      - name: Run tests
+        run: python -m pytest orchestrator/tests/ -v --tb=short
+
+  go-test:
+    name: Go Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/ingestion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: workers/ingestion/go.sum
+      - name: Download dependencies
+        run: go mod download
+      - name: Run tests
+        run: go test ./... -v -count=1 -timeout 30s
+      - name: Build binary
+        run: CGO_ENABLED=0 go build -o /dev/null ./cmd/
+
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - context: orchestrator
+            name: orchestrator
+          - context: workers/ingestion
+            name: ingestion-worker
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.name }}
+        run: docker build -t ${{ matrix.name }}:ci ${{ matrix.context }}
