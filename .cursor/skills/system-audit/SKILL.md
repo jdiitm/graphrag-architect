@@ -1,6 +1,6 @@
 ---
 name: system-audit
-description: Full-system audit for graphrag-architect. Performs a deep, wide, context-complete audit of the entire codebase, tests, documentation, and infrastructure against the PRD and architecture specs. Produces a structured report consumed by @tdd-feature-cycle. MUST run in its own fresh chat session — never in the same session as implementation. Trigger when asked to audit, health-check, assess system state, or before starting a new development cycle.
+description: Full-system audit for graphrag-architect. Performs a deep, wide, context-complete audit of the entire codebase, tests, documentation, and infrastructure against the PRD and architecture specs. Produces a structured report consumed by @tdd-feature-cycle. MUST run in its own fresh agent context — never in the same context as implementation. Can be triggered directly by the user, or launched automatically as a subagent by @tdd-feature-cycle.
 ---
 
 # System Audit
@@ -14,15 +14,15 @@ Full-depth, full-width audit of the graphrag-architect system. Verdict must be e
                                                                           └─ [changes] → FIX → REVIEW
 ```
 
-You are in the **AUDIT** state. You produce `audit-report.md` which `@tdd-feature-cycle` consumes in a **separate chat session**. This separation is non-negotiable — the auditor and the engineer must never be the same agent in the same session.
+You are in the **AUDIT** state. You produce `audit-report.md` which `@tdd-feature-cycle` consumes. You run either as a direct user-triggered skill or as a subagent launched by TDD's Phase 0. Either way, you have **zero context** from the implementation session — the auditor and the engineer must never share memory.
 
 ## Isolation Protocol
 
-This skill MUST run in a **fresh conversation** with no prior context from any other skill.
+This skill MUST run in a **fresh agent context** (new chat or subagent) with no prior context from any other skill.
 You are an independent auditor. You trust ONLY what you read from disk and what test output tells you.
 
-If you have any memory of writing, reviewing, fixing, or syncing docs in this session, STOP — you are contaminated.
-Tell the user: "This skill must run in a new conversation to maintain isolation."
+If you have any memory of writing, reviewing, fixing, or syncing docs in this context, STOP — you are contaminated.
+Tell the user: "This skill must run in a new conversation or subagent to maintain isolation."
 
 ## Honesty Invariants
 
@@ -259,9 +259,13 @@ No CRITICAL or HIGH findings. System is healthy.
 
 **HALT. Your job is done. Do NOT continue.**
 
-Tell the user exactly this:
+If running as a **direct user trigger**, tell the user:
 
 > Audit complete. Report written to `audit-report.md`. **Verdict: RED / YELLOW / GREEN.**
 > **Next:** Open a **new chat** and trigger `@tdd-feature-cycle`.
+
+If running as a **subagent** (launched by TDD Phase 0), return a final message summarizing:
+
+> Audit complete. `audit-report.md` written. Verdict: RED / YELLOW / GREEN.
 
 Then STOP. Do not write another word or call another tool.

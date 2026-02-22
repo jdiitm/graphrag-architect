@@ -1,11 +1,11 @@
 ---
 name: tdd-feature-cycle
-description: Autonomous end-to-end feature development cycle for graphrag-architect. Checks for an independent audit report (Phase 0), discovers the highest-priority missing requirement, implements it with strict TDD (red-green-refactor), performs a staff-level self-review, and raises a Pull Request. Use when asked to implement the next feature, build the next component, continue development, pick up the next task, or start a new development cycle.
+description: Autonomous end-to-end feature development cycle for graphrag-architect. Launches an independent audit subagent (Phase 0) if needed, discovers the highest-priority missing requirement, implements it with strict TDD (red-green-refactor), performs a staff-level self-review, and raises a Pull Request. Use when asked to implement the next feature, build the next component, continue development, pick up the next task, or start a new development cycle.
 ---
 
 # TDD Feature Cycle
 
-Autonomous workflow: check the independent audit report, discover the next missing feature, implement it via strict TDD, self-review, and raise a PR. Halt after PR creation -- never merge your own PRs.
+Autonomous workflow: launch an independent audit (zero-context subagent), discover the next missing feature, implement it via strict TDD, self-review, and raise a PR. Halt after PR creation -- never merge your own PRs.
 
 ## FSM Position
 
@@ -57,20 +57,21 @@ These rules are absolute. Violating any of them is a **showstopper** — stop, u
 
 ## Phase 0: Audit Gate (Independent Verification)
 
-The system audit MUST have been performed by `@system-audit` in a **separate chat session** — a different agent with its own fresh context. You must NEVER audit and implement in the same session. That would make you both judge and executor, which is a rubber stamp.
+The system audit MUST be performed by an **independent agent with zero context** from this session. You must NEVER audit and implement in the same agent context. That would make you both judge and executor, which is a rubber stamp.
 
 ```bash
-cat audit-report.md   # must exist — produced by @system-audit in a prior session
+cat audit-report.md 2>/dev/null
 ```
 
-**If `audit-report.md` does not exist:** HALT. Tell the user:
+**If `audit-report.md` does not exist:** Launch `@system-audit` as an independent subagent. Use the **Task tool** with `subagent_type: "generalPurpose"` to spawn a fresh agent that has no memory of this conversation. The subagent prompt must:
 
-> No audit report found. The audit must run independently.
-> **Next:** Open a **new chat** and trigger `@system-audit`. Then come back here.
+1. Instruct it to read `.cursor/skills/system-audit/SKILL.md` and execute every step
+2. Include the workspace path (`/home/j/side/graphrag-architect`)
+3. NOT include any context from this TDD session — no feature plans, no audit expectations, no hints about what you think the verdict should be
 
-Then STOP.
+The subagent will produce `audit-report.md` on disk. Wait for it to complete, then continue below.
 
-**If `audit-report.md` exists:** Read the `## Verdict` section.
+**If `audit-report.md` exists** (either already present or just produced by the subagent): Read the `## Verdict` section.
 
 - **If verdict is GREEN or YELLOW:** HALT. Delete the report and tell the user:
   ```bash
