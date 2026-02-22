@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from orchestrator.app.graph_builder import ingestion_graph
@@ -64,11 +65,16 @@ async def ingest(request: IngestRequest) -> IngestResponse:
         raise HTTPException(
             status_code=500, detail="Internal ingestion error"
         ) from exc
-    return IngestResponse(
+    response = IngestResponse(
         status=result.get("commit_status", "unknown"),
         entities_extracted=len(result.get("extracted_nodes", [])),
         errors=result.get("extraction_errors", []),
     )
+    if result.get("commit_status") == "failed":
+        return JSONResponse(
+            status_code=503, content=response.model_dump()
+        )
+    return response
 
 
 @app.post("/query", response_model=QueryResponse)

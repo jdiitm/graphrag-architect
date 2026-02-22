@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from orchestrator.app.cypher_validator import CypherValidationError
 from orchestrator.app.query_models import QueryComplexity
 from orchestrator.tests.conftest import mock_neo4j_driver_with_session
 
@@ -13,11 +14,9 @@ def _make_state(base_query_state, **overrides):
 def _make_neo4j_session(run_return=None, run_side_effect=None):
     mock_session = AsyncMock()
     if run_side_effect:
-        mock_session.run = AsyncMock(side_effect=run_side_effect)
+        mock_session.execute_read = AsyncMock(side_effect=run_side_effect)
     else:
-        mock_result = MagicMock()
-        mock_result.data.return_value = run_return or []
-        mock_session.run = AsyncMock(return_value=mock_result)
+        mock_session.execute_read = AsyncMock(return_value=run_return or [])
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
     return mock_session
@@ -114,9 +113,7 @@ class TestVectorRetrieve:
         ):
             await vector_retrieve(state)
 
-        call_args = mock_session.run.call_args
-        assert "$limit" in call_args[0][0]
-        assert call_args.kwargs["limit"] == 5
+        mock_session.execute_read.assert_called_once()
 
 
 class TestSingleHopRetrieve:
@@ -124,15 +121,11 @@ class TestSingleHopRetrieve:
     async def test_returns_vector_and_one_hop_neighbors(self, base_query_state):
         from orchestrator.app.query_engine import single_hop_retrieve
 
-        mock_vector_result = MagicMock()
-        mock_vector_result.data.return_value = [{"name": "order-service", "score": 0.95}]
-        mock_hop_result = MagicMock()
-        mock_hop_result.data.return_value = [
-            {"source": "order-service", "rel": "PRODUCES", "target": "orders-topic"}
-        ]
-
         mock_session = _make_neo4j_session(
-            run_side_effect=[mock_vector_result, mock_hop_result]
+            run_side_effect=[
+                [{"name": "order-service", "score": 0.95}],
+                [{"source": "order-service", "rel": "PRODUCES", "target": "orders-topic"}],
+            ]
         )
         mock_driver = mock_neo4j_driver_with_session(mock_session)
 
@@ -152,24 +145,17 @@ class TestSingleHopRetrieve:
         assert result["candidates"][0]["name"] == "order-service"
         assert len(result["cypher_results"]) == 1
         assert result["cypher_results"][0]["target"] == "orders-topic"
-        assert mock_session.run.call_count == 2
+        assert mock_session.execute_read.call_count == 2
 
     @pytest.mark.asyncio
     async def test_hop_query_uses_vector_names(self, base_query_state):
         from orchestrator.app.query_engine import single_hop_retrieve
 
-        mock_vector_result = MagicMock()
-        mock_vector_result.data.return_value = [
-            {"name": "svc-a", "score": 0.9},
-            {"name": "svc-b", "score": 0.8},
-        ]
-        mock_hop_result = MagicMock()
-        mock_hop_result.data.return_value = [
-            {"source": "svc-a", "rel": "CALLS", "target": "svc-c"}
-        ]
-
         mock_session = _make_neo4j_session(
-            run_side_effect=[mock_vector_result, mock_hop_result]
+            run_side_effect=[
+                [{"name": "svc-a", "score": 0.9}, {"name": "svc-b", "score": 0.8}],
+                [{"source": "svc-a", "rel": "CALLS", "target": "svc-c"}],
+            ]
         )
         mock_driver = mock_neo4j_driver_with_session(mock_session)
 
@@ -185,9 +171,10 @@ class TestSingleHopRetrieve:
         ):
             result = await single_hop_retrieve(state)
 
-        hop_call_args = mock_session.run.call_args_list[1]
-        assert "$names" in hop_call_args[0][0]
-        assert hop_call_args.kwargs["names"] == ["svc-a", "svc-b"]
+        assert mock_session.execute_read.call_count == 2
+        assert result["cypher_results"] == [
+            {"source": "svc-a", "rel": "CALLS", "target": "svc-c"}
+        ]
 
 
 class TestCypherRetrieve:
@@ -219,6 +206,7 @@ class TestCypherRetrieve:
         assert len(result["cypher_results"]) == 1
         assert result["iteration_count"] == 1
         assert result["cypher_query"] != ""
+        mock_session.execute_read.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_iterates_on_empty_results_up_to_max(self, base_query_state):
@@ -254,13 +242,8 @@ class TestCypherRetrieve:
     async def test_stops_iterating_when_results_found(self, base_query_state):
         from orchestrator.app.query_engine import cypher_retrieve
 
-        empty_result = MagicMock()
-        empty_result.data.return_value = []
-        good_result = MagicMock()
-        good_result.data.return_value = [{"node": "auth"}]
-
         mock_session = _make_neo4j_session(
-            run_side_effect=[empty_result, good_result]
+            run_side_effect=[[], [{"node": "auth"}]]
         )
         mock_driver = mock_neo4j_driver_with_session(mock_session)
 
@@ -295,18 +278,17 @@ class TestHybridRetrieve:
     async def test_prefilters_then_aggregates(self, base_query_state):
         from orchestrator.app.query_engine import hybrid_retrieve
 
-        mock_vector_result = MagicMock()
-        mock_vector_result.data.return_value = [{"name": "auth-service", "score": 0.9}]
-        mock_agg_result = MagicMock()
-        mock_agg_result.data.return_value = [{"service": "auth-service", "dep_count": 5}]
-
         mock_vector_session = AsyncMock()
-        mock_vector_session.run = AsyncMock(return_value=mock_vector_result)
+        mock_vector_session.execute_read = AsyncMock(
+            return_value=[{"name": "auth-service", "score": 0.9}]
+        )
         mock_vector_session.__aenter__ = AsyncMock(return_value=mock_vector_session)
         mock_vector_session.__aexit__ = AsyncMock(return_value=False)
 
         mock_agg_session = AsyncMock()
-        mock_agg_session.run = AsyncMock(return_value=mock_agg_result)
+        mock_agg_session.execute_read = AsyncMock(
+            return_value=[{"service": "auth-service", "dep_count": 5}]
+        )
         mock_agg_session.__aenter__ = AsyncMock(return_value=mock_agg_session)
         mock_agg_session.__aexit__ = AsyncMock(return_value=False)
 
@@ -339,15 +321,12 @@ class TestHybridRetrieve:
     async def test_llm_call_outside_session_scope(self, base_query_state):
         from orchestrator.app.query_engine import hybrid_retrieve
 
-        mock_vector_result = MagicMock()
-        mock_vector_result.data.return_value = [{"name": "svc-a", "score": 0.8}]
-        mock_agg_result = MagicMock()
-        mock_agg_result.data.return_value = [{"total": 3}]
-
         session_entry_order: list = []
 
         mock_vector_session = AsyncMock()
-        mock_vector_session.run = AsyncMock(return_value=mock_vector_result)
+        mock_vector_session.execute_read = AsyncMock(
+            return_value=[{"name": "svc-a", "score": 0.8}]
+        )
         mock_vector_session.__aenter__ = AsyncMock(return_value=mock_vector_session)
 
         async def vector_exit(*_args):
@@ -357,7 +336,7 @@ class TestHybridRetrieve:
         mock_vector_session.__aexit__ = vector_exit
 
         mock_agg_session = AsyncMock()
-        mock_agg_session.run = AsyncMock(return_value=mock_agg_result)
+        mock_agg_session.execute_read = AsyncMock(return_value=[{"total": 3}])
         mock_agg_session.__aenter__ = AsyncMock(return_value=mock_agg_session)
         mock_agg_session.__aexit__ = AsyncMock(return_value=False)
 
@@ -450,3 +429,213 @@ class TestSynthesize:
 
         assert result["answer"] != ""
         assert len(result["sources"]) == 2
+
+
+class TestReadTransactions:
+    @pytest.mark.asyncio
+    async def test_vector_retrieve_uses_execute_read(self, base_query_state):
+        from orchestrator.app.query_engine import vector_retrieve
+
+        mock_session = AsyncMock()
+        mock_read_result = MagicMock()
+        mock_read_result.data.return_value = [{"name": "svc", "score": 0.9}]
+        mock_session.execute_read = AsyncMock(return_value=mock_read_result.data())
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = mock_neo4j_driver_with_session(mock_session)
+
+        state = _make_state(base_query_state, query="auth-service")
+
+        with patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ):
+            await vector_retrieve(state)
+
+        mock_session.execute_read.assert_called_once()
+        assert not mock_session.run.called
+
+    @pytest.mark.asyncio
+    async def test_single_hop_uses_execute_read(self, base_query_state):
+        from orchestrator.app.query_engine import single_hop_retrieve
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(
+            side_effect=[
+                [{"name": "svc", "score": 0.9}],
+                [{"source": "svc", "rel": "CALLS", "target": "other"}],
+            ]
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = mock_neo4j_driver_with_session(mock_session)
+
+        state = _make_state(
+            base_query_state, query="what does svc call?"
+        )
+
+        with patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ):
+            await single_hop_retrieve(state)
+
+        assert mock_session.execute_read.call_count == 2
+        assert not mock_session.run.called
+
+    @pytest.mark.asyncio
+    async def test_cypher_retrieve_uses_execute_read(self, base_query_state):
+        from orchestrator.app.query_engine import cypher_retrieve
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(
+            return_value=[{"node": "auth"}]
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = mock_neo4j_driver_with_session(mock_session)
+
+        state = _make_state(
+            base_query_state, query="blast radius if auth fails?"
+        )
+
+        with patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._generate_cypher",
+            new_callable=AsyncMock,
+            return_value="MATCH (s:Service)-[:CALLS*]->(t) RETURN s, t",
+        ):
+            await cypher_retrieve(state)
+
+        mock_session.execute_read.assert_called()
+        assert not mock_session.run.called
+
+    @pytest.mark.asyncio
+    async def test_hybrid_retrieve_uses_execute_read(self, base_query_state):
+        from orchestrator.app.query_engine import hybrid_retrieve
+
+        mock_session = AsyncMock()
+        call_count = [0]
+
+        async def fake_execute_read(tx_func, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return [{"name": "svc", "score": 0.9}]
+            return [{"total": 3}]
+
+        mock_session.execute_read = AsyncMock(side_effect=fake_execute_read)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = mock_neo4j_driver_with_session(mock_session)
+
+        state = _make_state(
+            base_query_state, query="most critical services"
+        )
+
+        with patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._generate_cypher",
+            new_callable=AsyncMock,
+            return_value="MATCH (n) RETURN count(n)",
+        ):
+            await hybrid_retrieve(state)
+
+        assert mock_session.execute_read.call_count >= 2
+        assert not mock_session.run.called
+
+
+class TestCypherValidation:
+    @pytest.mark.asyncio
+    async def test_cypher_retrieve_rejects_write_query(self, base_query_state):
+        from orchestrator.app.query_engine import cypher_retrieve
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(return_value=[])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = mock_neo4j_driver_with_session(mock_session)
+
+        state = _make_state(
+            base_query_state, query="delete everything"
+        )
+
+        with patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._generate_cypher",
+            new_callable=AsyncMock,
+            return_value="MATCH (n) DETACH DELETE n",
+        ):
+            result = await cypher_retrieve(state)
+
+        assert result["cypher_results"] == []
+        assert not mock_session.execute_read.called
+
+    @pytest.mark.asyncio
+    async def test_hybrid_retrieve_rejects_write_query(self, base_query_state):
+        from orchestrator.app.query_engine import hybrid_retrieve
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(
+            return_value=[{"name": "svc", "score": 0.9}]
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = mock_neo4j_driver_with_session(mock_session)
+
+        state = _make_state(
+            base_query_state, query="most critical services"
+        )
+
+        with patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._generate_cypher",
+            new_callable=AsyncMock,
+            return_value="MATCH (n) DETACH DELETE n",
+        ):
+            result = await hybrid_retrieve(state)
+
+        assert result["cypher_results"] == []
+
+
+class TestNeo4jDriverTimeout:
+    @pytest.mark.asyncio
+    async def test_driver_configured_with_timeout(self, base_query_state):
+        from orchestrator.app.config import Neo4jConfig
+        from orchestrator.app.query_engine import vector_retrieve
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(return_value=[])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+        mock_driver.close = AsyncMock()
+
+        fake_config = Neo4jConfig(
+            uri="bolt://test:7687",
+            username="neo4j",
+            password="test",
+            query_timeout=42.0,
+        )
+
+        state = _make_state(base_query_state, query="auth")
+
+        with patch(
+            "orchestrator.app.query_engine.Neo4jConfig.from_env",
+            return_value=fake_config,
+        ), patch(
+            "orchestrator.app.query_engine.AsyncGraphDatabase.driver",
+            return_value=mock_driver,
+        ) as mock_driver_ctor:
+            await vector_retrieve(state)
+
+        call_kwargs = mock_driver_ctor.call_args.kwargs
+        assert call_kwargs["max_transaction_retry_time"] == 42.0

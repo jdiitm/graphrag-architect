@@ -69,7 +69,7 @@ spec:
             summary: "Neo4j instance is down"
 
         - alert: KafkaBrokerDown
-          expr: count(up{job="kafka"} == 1) < 2
+          expr: count(up{app="kafka"} == 1) < 2
           for: 2m
           labels:
             severity: critical

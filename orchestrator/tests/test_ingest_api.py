@@ -145,7 +145,7 @@ class TestIngestGraphInvocation:
         assert body["errors"] == []
 
     @patch("orchestrator.app.main.ingestion_graph")
-    def test_returns_failed_status_from_graph(self, mock_graph, client):
+    def test_returns_503_when_commit_fails(self, mock_graph, client):
         mock_graph.ainvoke = AsyncMock(return_value={
             "extracted_nodes": [],
             "extraction_errors": ["Neo4j connection refused"],
@@ -156,7 +156,7 @@ class TestIngestGraphInvocation:
                 {"file_path": "app.py", "content": _b64("x=1"), "source_type": "source_code"},
             ],
         })
-        assert response.status_code == 200
+        assert response.status_code == 503
         body = response.json()
         assert body["status"] == "failed"
         assert body["errors"] == ["Neo4j connection refused"]

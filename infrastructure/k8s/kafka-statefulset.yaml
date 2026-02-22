@@ -15,6 +15,10 @@ spec:
     metadata:
       labels:
         app: kafka
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5556"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: kafka
@@ -24,6 +28,8 @@ spec:
               containerPort: 9092
             - name: controller
               containerPort: 9093
+            - name: jmx
+              containerPort: 9999
           command:
             - /bin/bash
             - -c
@@ -51,6 +57,10 @@ spec:
               value: "168"
             - name: KAFKA_LOG_DIRS
               value: /var/kafka-logs
+            - name: KAFKA_JMX_PORT
+              value: "9999"
+            - name: KAFKA_JMX_HOSTNAME
+              value: "localhost"
           resources:
             requests:
               cpu: 500m
@@ -64,13 +74,38 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 10
           livenessProbe:
-            tcpSocket:
-              port: broker
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - echo > /dev/tcp/localhost/9092 && echo > /dev/tcp/localhost/9093
             initialDelaySeconds: 60
             periodSeconds: 30
           volumeMounts:
             - name: data
               mountPath: /var/kafka-logs
+        - name: jmx-exporter
+          image: bitnami/jmx-exporter:1.1.0
+          args:
+            - "5556"
+            - /etc/jmx-exporter/config.yml
+          ports:
+            - name: metrics
+              containerPort: 5556
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: jmx-config
+              mountPath: /etc/jmx-exporter
+      volumes:
+        - name: jmx-config
+          configMap:
+            name: kafka-jmx-config
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -79,6 +114,30 @@ spec:
         resources:
           requests:
             storage: 50Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-jmx-config
+  namespace: graphrag
+data:
+  config.yml: |
+    hostPort: localhost:9999
+    lowercaseOutputName: true
+    lowercaseOutputLabelNames: true
+    rules:
+      - pattern: "kafka.server<type=BrokerTopicMetrics, name=(MessagesInPerSec|BytesInPerSec|BytesOutPerSec)><>(Count|OneMinuteRate)"
+        name: "kafka_server_$1_$2"
+        type: GAUGE
+      - pattern: "kafka.server<type=ReplicaManager, name=(UnderReplicatedPartitions|PartitionCount|LeaderCount)><>Value"
+        name: "kafka_server_replica_$1"
+        type: GAUGE
+      - pattern: "kafka.controller<type=KafkaController, name=(ActiveControllerCount|OfflinePartitionsCount)><>Value"
+        name: "kafka_controller_$1"
+        type: GAUGE
+      - pattern: "kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(Produce|FetchConsumer|FetchFollower)><>(Mean|99thPercentile)"
+        name: "kafka_network_request_$1_$2"
+        type: GAUGE
 ---
 apiVersion: v1
 kind: Service
@@ -97,6 +156,9 @@ spec:
     - name: controller
       port: 9093
       targetPort: controller
+    - name: metrics
+      port: 5556
+      targetPort: metrics
 ---
 apiVersion: v1
 kind: Service
