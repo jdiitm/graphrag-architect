@@ -111,10 +111,11 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
     with tracer.start_as_current_span("ingestion.commit_neo4j"):
         start = time.monotonic()
         config = Neo4jConfig.from_env()
-        driver = AsyncGraphDatabase.driver(
-            config.uri, auth=(config.username, config.password)
-        )
+        driver = None
         try:
+            driver = AsyncGraphDatabase.driver(
+                config.uri, auth=(config.username, config.password)
+            )
             repo = GraphRepository(driver, circuit_breaker=_NEO4J_CIRCUIT_BREAKER)
             await repo.commit_topology(state.get("extracted_nodes", []))
             return {"commit_status": "success"}
@@ -124,7 +125,8 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
             NEO4J_TRANSACTION_DURATION.record(
                 (time.monotonic() - start) * 1000, {"node": "commit_neo4j"}
             )
-            await driver.close()
+            if driver is not None:
+                await driver.close()
 
 builder = StateGraph(IngestionState)
 
