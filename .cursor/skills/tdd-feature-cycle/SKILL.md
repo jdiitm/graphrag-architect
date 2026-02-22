@@ -129,7 +129,9 @@ EOF
 
 4. **HALT.** Do NOT merge your own PR. Do NOT self-review.
 
-Tell the user: "PR #N created. Trigger `@pr-review` for independent review, or review manually."
+Tell the user: "PR #N created. Handing off to `@pr-review` for independent review."
+
+Then immediately trigger `@pr-review` to begin the independent review cycle.
 
 ## Conventions
 

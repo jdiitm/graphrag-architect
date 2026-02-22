@@ -111,7 +111,9 @@ EOF
 )"
 ```
 
-After requesting changes, tell the user: "Review complete. Changes requested on PR #N. Trigger `@pr-fix` to address the findings."
+After requesting changes, tell the user: "Review complete. Changes requested on PR #N. Handing off to `@pr-fix`."
+
+Then immediately trigger `@pr-fix` to address the findings.
 
 ### If all green (no CRITICAL or HIGH issues):
 
@@ -123,4 +125,6 @@ gh pr merge <number> --merge --delete-branch
 git checkout main && git pull origin main
 ```
 
-Report: "PR #N merged. Local main branch is up to date."
+Report: "PR #N merged. Local main branch is up to date. Handing off to `@tdd-feature-cycle` for the next feature."
+
+Then immediately trigger `@tdd-feature-cycle` to discover and implement the next missing feature.
