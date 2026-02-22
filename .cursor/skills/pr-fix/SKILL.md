@@ -69,9 +69,35 @@ git commit -m "fix: address PR review feedback
 git push
 ```
 
-## Step 6: Hand Off to Re-Review
+## Step 6: Respond to Review Comments
 
-After pushing, tell the user:
+After pushing, reply to each review comment that raised a finding you fixed. This creates an audit trail showing what was done for each issue.
+
+For each issue comment on the PR (from `gh pr view <number> --json comments`):
+
+```bash
+gh api repos/{owner}/{repo}/issues/<number>/comments \
+  -f body="$(cat <<'EOF'
+**Addressed.** [Explain what was changed and how it resolves the finding.]
+
+- Commit: `<short-sha>`
+- [Brief description of the fix]
+EOF
+)"
+```
+
+For each inline review comment (from `gh api repos/{owner}/{repo}/pulls/<number>/comments`):
+
+```bash
+gh api repos/{owner}/{repo}/pulls/<number>/comments/<comment_id>/replies \
+  -f body="Fixed in <short-sha>. [Brief explanation of the fix.]"
+```
+
+Reply to every CRITICAL and HIGH finding. LOW findings: reply only if you addressed them.
+
+## Step 7: Hand Off to Re-Review
+
+After pushing and responding to comments, tell the user:
 
 "Fixes pushed to `<branch>`. Trigger `@pr-review` for a fresh independent re-review."
 

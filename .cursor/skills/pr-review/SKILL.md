@@ -86,7 +86,41 @@ python -m pytest orchestrator/tests/ -v
 cd workers/ingestion && go test ./... -v -count=1 -timeout 30s
 ```
 
-## Step 5: Verdict
+## Step 5: Resolve Addressed Comments (Re-Review Only)
+
+If this is a re-review (prior review comments exist on the PR), check whether each previously-raised CRITICAL/HIGH finding has been fixed in the current code.
+
+Fetch prior review comments:
+
+```bash
+gh pr view <number> --json comments
+gh api repos/{owner}/{repo}/pulls/<number>/comments
+```
+
+For each finding that is now properly addressed:
+
+1. Reply to the comment confirming resolution:
+
+```bash
+gh api repos/{owner}/{repo}/issues/<number>/comments \
+  -f body="Verified as resolved. [Brief note on what was checked.]"
+```
+
+2. If the comment is an inline review thread, resolve it via GraphQL:
+
+```bash
+gh api graphql -f query='
+  mutation {
+    resolveReviewThread(input: {threadId: "<thread_node_id>"}) {
+      thread { isResolved }
+    }
+  }
+'
+```
+
+For findings that are NOT properly addressed, note them for inclusion in the new review verdict.
+
+## Step 6: Verdict
 
 ### If issues found (any CRITICAL or HIGH):
 
