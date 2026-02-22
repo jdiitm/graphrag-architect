@@ -43,6 +43,7 @@ metadata:
   namespace: graphrag
 data:
   schema_init.cypher: |
+    -- NOTE: keep in sync with orchestrator/app/schema_init.cypher (canonical source)
     CREATE CONSTRAINT service_id IF NOT EXISTS FOR (s:Service) REQUIRE s.id IS UNIQUE;
     CREATE CONSTRAINT database_id IF NOT EXISTS FOR (d:Database) REQUIRE d.id IS UNIQUE;
     CREATE CONSTRAINT topic_name IF NOT EXISTS FOR (t:KafkaTopic) REQUIRE t.name IS UNIQUE;

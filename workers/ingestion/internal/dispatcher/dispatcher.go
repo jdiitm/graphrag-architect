@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/metrics"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/processor"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
 )
@@ -19,19 +20,33 @@ type Config struct {
 type Dispatcher struct {
 	cfg       Config
 	processor processor.DocumentProcessor
+	observer  metrics.PipelineObserver
 	jobs      chan domain.Job
 	dlq       chan domain.Result
 	acks      chan struct{}
 	wg        sync.WaitGroup
 }
 
-func New(cfg Config, proc processor.DocumentProcessor) *Dispatcher {
-	return &Dispatcher{
+func New(cfg Config, proc processor.DocumentProcessor, opts ...Option) *Dispatcher {
+	d := &Dispatcher{
 		cfg:       cfg,
 		processor: proc,
+		observer:  metrics.NoopObserver{},
 		jobs:      make(chan domain.Job, cfg.JobBuffer),
 		dlq:       make(chan domain.Result, cfg.DLQBuffer),
 		acks:      make(chan struct{}, cfg.JobBuffer),
+	}
+	for _, o := range opts {
+		o(d)
+	}
+	return d
+}
+
+type Option func(*Dispatcher)
+
+func WithObserver(obs metrics.PipelineObserver) Option {
+	return func(d *Dispatcher) {
+		d.observer = obs
 	}
 }
 
@@ -72,6 +87,10 @@ func (d *Dispatcher) worker(ctx context.Context) {
 				_, dlqSpan := telemetry.StartDLQSpan(processCtx, result)
 				d.dlq <- result
 				dlqSpan.End()
+				d.observer.RecordDLQRouted()
+				d.observer.RecordJobProcessed("dlq")
+			} else {
+				d.observer.RecordJobProcessed("success")
 			}
 			processSpan.End()
 			select {

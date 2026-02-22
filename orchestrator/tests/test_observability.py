@@ -553,16 +553,21 @@ class TestMetricsRecording:
 
 
 class TestSamplerConfig:
-    def test_default_sampling_rate(self):
+    def test_default_sampling_rate_is_ten_percent(self):
         sampler = _build_sampler()
-        assert sampler is not None
+        assert hasattr(sampler, "_root")
+        assert sampler._root.rate == pytest.approx(0.1)
 
     def test_custom_sampling_rate_from_env(self):
         with patch.dict("os.environ", {"OTEL_TRACES_SAMPLER_ARG": "0.5"}):
             sampler = _build_sampler()
-            assert sampler is not None
+            assert sampler._root.rate == pytest.approx(0.5)
 
-    def test_test_exporter_skips_sampler(self):
+    def test_test_exporter_uses_always_on_not_ratio(self):
         exporter = MemoryExporter()
         provider = configure_telemetry(exporter=exporter)
+        root_sampler = provider.sampler._root
+        assert not hasattr(root_sampler, "rate"), (
+            "Test exporter path should use ALWAYS_ON, not ratio-based sampling"
+        )
         provider.shutdown()

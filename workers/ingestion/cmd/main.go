@@ -66,7 +66,7 @@ func main() {
 		JobBuffer:  numWorkers * 2,
 		DLQBuffer:  numWorkers,
 	}
-	disp := dispatcher.New(cfg, fp)
+	disp := dispatcher.New(cfg, fp, dispatcher.WithObserver(m))
 
 	kafkaSource := NewKafkaJobSource(kafkaBrokers, kafkaTopic, consumerGroup)
 	defer kafkaSource.Close()
