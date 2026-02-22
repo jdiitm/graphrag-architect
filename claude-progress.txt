@@ -1,3 +1,56 @@
+## 2026-02-22: FastAPI /ingest Endpoint — Complete
+
+### Completed
+- Created orchestrator/app/ingest_models.py with Pydantic request/response models:
+  - SourceType enum: source_code, k8s_manifest, kafka_schema
+  - IngestDocument: file_path, base64 content, source_type, optional repository/commit_sha
+  - IngestRequest: documents list with min_length=1 validation
+  - IngestResponse: status, entities_extracted count, errors list
+- Created orchestrator/app/main.py with FastAPI endpoints:
+  - GET /health: K8s readiness/liveness probe (returns {"status": "healthy"})
+  - POST /ingest: accepts base64-encoded documents, decodes, invokes LangGraph DAG
+  - _decode_documents(): strict base64 validation, UTF-8 decode, returns raw_files format
+  - Error handling: 400 for invalid base64, 422 for validation errors, 500 for graph failures
+- Modified orchestrator/app/graph_builder.py:
+  - load_workspace_files now preserves existing raw_files when directory_path is empty
+  - Enables HTTP-injected files to pass through the DAG without being overwritten
+- TDD: 19 new tests written and passing across 6 test classes
+  - TestHealthEndpoint (2 tests): status code, response body
+  - TestIngestRequestValidation (6 tests): missing fields, empty list, invalid source_type
+  - TestIngestBase64Decoding (2 tests): invalid base64, correct decode verification
+  - TestIngestGraphInvocation (4 tests): state format, success, failed status, exception handling
+  - TestIngestOptionalFields (2 tests): repository/commit_sha optional
+  - TestLoadWorkspacePreservesRawFiles (3 tests): empty path, missing path, directory path
+
+### Architecture Decisions
+- Matches Kafka message schema from architecture doc: file_path, base64 content, source_type, repository, commit_sha
+- SourceType enum restricts input to valid document types (source_code, k8s_manifest, kafka_schema)
+- base64.b64decode(validate=True) for strict validation (rejects non-base64 payloads)
+- Graph invoked with directory_path="" to signal HTTP mode (load_workspace_files preserves injected raw_files)
+- Broad Exception catch in /ingest endpoint is intentional: any graph failure returns structured 500
+
+### Quality Gates
+- Pylint: 10/10
+- Python tests: 117/117 passing (19 new + 98 existing)
+- Go tests: 8/8 passing (no regressions)
+- Total: 125/125 passing, 0 regressions
+
+### PR Status
+- Branch: feat/ingest-api — PR pending
+
+### Unresolved
+- FR-4: Hybrid Query Routing not yet started
+- FR-6: KafkaDLQSink not yet implemented (Go side)
+- FR-8: Observability not yet implemented
+- Go ForwardingProcessor not yet implemented (will HTTP POST to this endpoint)
+- No uvicorn in requirements.txt (needed to run server, not needed for tests)
+
+### Next Step
+- Implement Go ForwardingProcessor (HTTP POST to /ingest)
+- OR begin FR-4: Hybrid Query Routing
+
+---
+
 ## 2026-02-22: parse_k8s_and_kafka_manifests DAG Node — Complete
 
 ### Completed
