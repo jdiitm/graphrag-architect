@@ -26,6 +26,8 @@ class IngestionState(TypedDict):
 
 def load_workspace_files(state: IngestionState) -> dict:
     directory_path = state.get("directory_path", "")
+    if not directory_path:
+        return {"raw_files": state.get("raw_files", [])}
     return {"raw_files": load_directory(directory_path)}
 
 
