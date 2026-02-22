@@ -17,10 +17,6 @@ AUDIT → DOC_SYNC → [RED] → **TDD** → REVIEW → (FIX loop) → AUDIT →
 You are in the **TDD** state. You were triggered because the last audit verdict was RED.
 Your only exit: HALT and emit `→ REVIEW`.
 
-## Model Requirement
-
-This skill runs on **Claude Opus 4.6 Thinking**. When opening a new chat to trigger this skill, select `claude-4.6-opus-thinking` from the model picker.
-
 ## Isolation Protocol
 
 This skill MUST run in a **fresh conversation** with no prior context from `@pr-review`, `@pr-fix`, `@cron-audit`, or `@cron-doc-sync`.
@@ -191,7 +187,7 @@ Do NOT merge your own PR. Do NOT review your own PR. Do NOT trigger any other sk
 Tell the user exactly this:
 
 > PR #N created on branch `<branch>`.
-> **Next:** Open a new chat **(model: claude-4.6-opus-thinking)** and trigger `@pr-review`.
+> **Next:** Open a new chat and trigger `@pr-review`.
 
 Then STOP. Do not write another word or call another tool.
 

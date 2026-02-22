@@ -18,10 +18,6 @@ AUDIT → DOC_SYNC → TDD → REVIEW → **FIX** → REVIEW → ... → AUDIT
 You are in the **FIX** state. A PR has changes requested by the reviewer.
 Your only exit: HALT and emit `→ REVIEW`.
 
-## Model Requirement
-
-This skill runs on **Claude Opus 4.6 Thinking**. When opening a new chat to trigger this skill, select `claude-4.6-opus-thinking` from the model picker.
-
 ## Isolation Protocol
 
 This skill MUST run in a **fresh conversation** with no prior context from `@tdd-feature-cycle`, `@pr-review`, `@cron-audit`, or `@cron-doc-sync`.
@@ -143,6 +139,6 @@ Do NOT self-review. Do NOT merge.
 Tell the user exactly this:
 
 > Fixes pushed to branch `<branch>` for PR #N.
-> **Next:** Open a new chat **(model: claude-4.6-opus-thinking)** and trigger `@pr-review`.
+> **Next:** Open a new chat and trigger `@pr-review`.
 
 Then STOP. Do not write another word or call another tool.
