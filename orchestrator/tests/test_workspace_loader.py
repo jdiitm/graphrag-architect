@@ -222,7 +222,7 @@ class TestLoadDirectoryChunked:
             str(tmp_path), chunk_size=5, max_total_bytes=3000
         ))
         total_files = sum(len(c) for c in chunks)
-        assert total_files <= 4
+        assert total_files == 3
 
     def test_invalid_path_yields_nothing(self):
         chunks = list(load_directory_chunked("/nonexistent", chunk_size=5))
