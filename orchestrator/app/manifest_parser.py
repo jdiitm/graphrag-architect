@@ -1,9 +1,12 @@
+import logging
 import os
 from typing import Any, Dict, List, Optional, Union
 
 import yaml
 
 from orchestrator.app.extraction_models import K8sDeploymentNode, KafkaTopicNode
+
+logger = logging.getLogger(__name__)
 
 
 YAML_EXTENSIONS: frozenset[str] = frozenset({".yaml", ".yml"})
@@ -19,7 +22,8 @@ def _safe_load_all(content: str) -> List[Dict[str, Any]]:
         return []
     try:
         documents = list(yaml.safe_load_all(content))
-    except yaml.YAMLError:
+    except yaml.YAMLError as exc:
+        logger.warning("Failed to parse YAML: %s", exc)
         return []
     return [doc for doc in documents if isinstance(doc, dict)]
 

@@ -444,3 +444,26 @@ class TestDagNodeIntegration:
         }
         result = parse_k8s_and_kafka_manifests(state)
         assert result["extracted_nodes"] == []
+
+
+class TestMalformedYamlLogging:
+    def test_malformed_yaml_logs_warning(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="orchestrator.app.manifest_parser"):
+            result = parse_k8s_manifests("{{invalid yaml:::")
+        assert result == []
+        assert any("Failed to parse YAML" in msg for msg in caplog.messages)
+
+    def test_valid_yaml_does_not_log_warning(self, caplog):
+        import logging
+
+        content = textwrap.dedent("""\
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: test-svc
+        """)
+        with caplog.at_level(logging.WARNING, logger="orchestrator.app.manifest_parser"):
+            parse_k8s_manifests(content)
+        assert not any("Failed to parse YAML" in msg for msg in caplog.messages)

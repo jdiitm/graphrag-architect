@@ -4,9 +4,10 @@ from typing import Any, AsyncIterator, Dict, List
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
-from neo4j import AsyncDriver, AsyncGraphDatabase
+from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncManagedTransaction
 
 from orchestrator.app.config import ExtractionConfig, Neo4jConfig
+from orchestrator.app.cypher_validator import CypherValidationError, validate_cypher_readonly
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
@@ -31,7 +32,9 @@ _VECTOR_SEARCH_CYPHER = (
 def _get_neo4j_driver() -> AsyncDriver:
     config = Neo4jConfig.from_env()
     return AsyncGraphDatabase.driver(
-        config.uri, auth=(config.username, config.password)
+        config.uri,
+        auth=(config.username, config.password),
+        max_transaction_retry_time=config.query_timeout,
     )
 
 
@@ -116,11 +119,19 @@ async def vector_retrieve(state: QueryState) -> dict:
             async with _neo4j_session() as driver:
                 query_text = state["query"]
                 limit = state.get("max_results", 10)
-                async with driver.session() as session:
-                    result = await session.run(
-                        _VECTOR_SEARCH_CYPHER, query=query_text, limit=limit
+
+                async def _tx_func(
+                    tx: AsyncManagedTransaction,
+                ) -> list:
+                    result = await tx.run(
+                        _VECTOR_SEARCH_CYPHER,
+                        query=query_text,
+                        limit=limit,
                     )
-                    records = result.data()
+                    return await result.data()
+
+                async with driver.session() as session:
+                    records = await session.execute_read(_tx_func)
                 return {"candidates": records}
         finally:
             QUERY_DURATION.record(
@@ -136,21 +147,38 @@ async def single_hop_retrieve(state: QueryState) -> dict:
             async with _neo4j_session() as driver:
                 query_text = state["query"]
                 limit = state.get("max_results", 10)
-                async with driver.session() as session:
-                    vector_result = await session.run(
-                        _VECTOR_SEARCH_CYPHER, query=query_text, limit=limit
+
+                async def _vector_tx(
+                    tx: AsyncManagedTransaction,
+                ) -> list:
+                    result = await tx.run(
+                        _VECTOR_SEARCH_CYPHER,
+                        query=query_text,
+                        limit=limit,
                     )
-                    candidates = vector_result.data()
-                    names = [c.get("name", c.get("result", {}).get("name", ""))
-                             for c in candidates]
+                    return await result.data()
+
+                async with driver.session() as session:
+                    candidates = await session.execute_read(_vector_tx)
+                    names = [
+                        c.get("name", c.get("result", {}).get("name", ""))
+                        for c in candidates
+                    ]
 
                     hop_cypher = (
                         "MATCH (n)-[r]-(m) "
                         "WHERE n.name IN $names "
-                        "RETURN n.name AS source, type(r) AS rel, m.name AS target"
+                        "RETURN n.name AS source, type(r) AS rel, "
+                        "m.name AS target"
                     )
-                    hop_result = await session.run(hop_cypher, names=names)
-                    hop_records = hop_result.data()
+
+                    async def _hop_tx(
+                        tx: AsyncManagedTransaction,
+                    ) -> list:
+                        result = await tx.run(hop_cypher, names=names)
+                        return await result.data()
+
+                    hop_records = await session.execute_read(_hop_tx)
 
                 return {
                     "candidates": candidates,
@@ -180,16 +208,31 @@ async def cypher_retrieve(state: QueryState) -> dict:
                     generated = await _generate_cypher(
                         state["query"], schema_hint=schema_hint
                     )
-                    async with driver.session() as session:
-                        result = await session.run(generated)
-                        records = result.data()
-                    if records:
+                    try:
+                        validated = validate_cypher_readonly(generated)
+                    except CypherValidationError:
                         return {
                             "cypher_query": generated,
+                            "cypher_results": [],
+                            "iteration_count": iteration,
+                        }
+
+                    async def _cypher_tx(
+                        tx: AsyncManagedTransaction,
+                        _q: str = validated,
+                    ) -> list:
+                        result = await tx.run(_q)
+                        return await result.data()
+
+                    async with driver.session() as session:
+                        records = await session.execute_read(_cypher_tx)
+                    if records:
+                        return {
+                            "cypher_query": validated,
                             "cypher_results": records,
                             "iteration_count": iteration,
                         }
-                    prior_attempt = generated
+                    prior_attempt = validated
                 return {
                     "cypher_query": generated,
                     "cypher_results": records,
@@ -209,25 +252,50 @@ async def hybrid_retrieve(state: QueryState) -> dict:
             async with _neo4j_session() as driver:
                 query_text = state["query"]
                 limit = state.get("max_results", 10)
-                async with driver.session() as session:
-                    vector_result = await session.run(
-                        _VECTOR_SEARCH_CYPHER, query=query_text, limit=limit
+
+                async def _vector_tx(
+                    tx: AsyncManagedTransaction,
+                ) -> list:
+                    result = await tx.run(
+                        _VECTOR_SEARCH_CYPHER,
+                        query=query_text,
+                        limit=limit,
                     )
-                    candidates = vector_result.data()
+                    return await result.data()
+
+                async with driver.session() as session:
+                    candidates = await session.execute_read(_vector_tx)
 
             agg_cypher = await _generate_cypher(
                 state["query"],
                 schema_hint=f"Pre-filtered candidates: {candidates}",
             )
 
+            try:
+                validated_agg = validate_cypher_readonly(agg_cypher)
+            except CypherValidationError:
+                return {
+                    "candidates": candidates,
+                    "cypher_query": agg_cypher,
+                    "cypher_results": [],
+                    "iteration_count": 1,
+                }
+
             async with _neo4j_session() as driver:
+                agg_to_run = validated_agg
+
+                async def _agg_tx(
+                    tx: AsyncManagedTransaction,
+                ) -> list:
+                    result = await tx.run(agg_to_run)
+                    return await result.data()
+
                 async with driver.session() as session:
-                    agg_result = await session.run(agg_cypher)
-                    agg_records = agg_result.data()
+                    agg_records = await session.execute_read(_agg_tx)
 
             return {
                 "candidates": candidates,
-                "cypher_query": agg_cypher,
+                "cypher_query": validated_agg,
                 "cypher_results": agg_records,
                 "iteration_count": 1,
             }

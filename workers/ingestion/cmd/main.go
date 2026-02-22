@@ -73,7 +73,21 @@ func main() {
 
 	cons := consumer.New(kafkaSource, disp.Jobs(), disp.Acks(), consumer.WithObserver(m))
 
-	sink := &LogDLQSink{}
+	var sink dlq.DeadLetterSink
+	dlqSinkMode := envOrDefault("DLQ_SINK", "kafka")
+	if dlqSinkMode == "log" {
+		sink = &LogDLQSink{}
+		log.Println("DLQ sink: log-only (development mode)")
+	} else {
+		dlqTopic := envOrDefault("DLQ_TOPIC", "raw-documents.dlq")
+		kafkaSink, err := NewKafkaDLQSink(kafkaBrokers, dlqTopic)
+		if err != nil {
+			log.Fatalf("create kafka dlq sink: %v", err)
+		}
+		defer kafkaSink.Close()
+		sink = kafkaSink
+		log.Printf("DLQ sink: kafka topic=%s", dlqTopic)
+	}
 	dlqHandler := dlq.NewHandler(disp.DLQ(), sink)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

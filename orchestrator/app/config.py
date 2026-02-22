@@ -9,6 +9,7 @@ class Neo4jConfig:
     uri: str
     username: str
     password: str
+    query_timeout: float = 30.0
 
     @classmethod
     def from_env(cls) -> Neo4jConfig:
@@ -16,6 +17,7 @@ class Neo4jConfig:
             uri=os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
             username=os.environ.get("NEO4J_USERNAME", "neo4j"),
             password=os.environ["NEO4J_PASSWORD"],
+            query_timeout=float(os.environ.get("NEO4J_QUERY_TIMEOUT", "30")),
         )
 
 

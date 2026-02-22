@@ -24,10 +24,13 @@ spec:
           value: 1
           periodSeconds: 120
   metrics:
-    - type: Pods
-      pods:
+    - type: External
+      external:
         metric:
-          name: ingestion_consumer_lag
+          name: ingestion_consumer_lag_total
+          selector:
+            matchLabels:
+              consumer_group: graphrag-ingestion
         target:
           type: AverageValue
           averageValue: "1000"
