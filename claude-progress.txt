@@ -1,3 +1,28 @@
+## Completed: Query Path require_tokens Fail-Closed Fix (LOW-001)
+
+Branch: `fix/query-require-tokens-fail-closed`
+Quality Gates: Pylint 10/10, Python 398/398, Go 69/69
+
+### Audit Finding Addressed
+
+1. **LOW-001** — `/query` path in `query_engine.py:43` did not enforce `require_tokens`
+   flag. When `AUTH_REQUIRE_TOKENS=true` and `AUTH_TOKEN_SECRET` is empty, `/ingest`
+   correctly returned 503 (fail-closed) but `/query` silently accepted unsigned tokens
+   (fail-open). Fix: added `require_tokens` check to `_build_acl_filter()` in
+   `query_engine.py`, mirroring the ingest path. When `require_tokens=true` and
+   `token_secret` is empty, raises `AuthConfigurationError` resulting in HTTP 503.
+
+### Changes
+1. `orchestrator/app/access_control.py`: Added `AuthConfigurationError` exception class
+2. `orchestrator/app/query_engine.py`: Added `require_tokens` check to `_build_acl_filter()`
+3. `orchestrator/app/main.py`: Catch `AuthConfigurationError` in `/query` endpoint, return 503
+4. `orchestrator/tests/test_query_engine.py`: 3 new tests for `_build_acl_filter` behavior
+5. `orchestrator/tests/test_query_api.py`: 1 new test for 503 API response
+
+### New Tests: 4 total (4 Python)
+
+---
+
 ## Completed: DLQ Silent Loss Fix + Infra Gaps (HIGH-001, HIGH-002, LOW-001)
 
 Branch: `fix/dlq-silent-loss-and-infra-gaps`

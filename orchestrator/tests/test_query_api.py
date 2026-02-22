@@ -141,3 +141,22 @@ class TestQueryEndpointTokenVerification:
 
         assert response.status_code == 401
         assert "detail" in response.json()
+
+    def test_require_tokens_without_secret_returns_503(self, client):
+        from orchestrator.app.access_control import AuthConfigurationError
+
+        mock_graph = MagicMock()
+        mock_graph.ainvoke = AsyncMock(
+            side_effect=AuthConfigurationError(
+                "server misconfigured: token verification required but no secret set"
+            )
+        )
+
+        with patch("orchestrator.app.main.query_graph", mock_graph):
+            response = client.post(
+                "/query",
+                json={"query": "What is auth-service?"},
+            )
+
+        assert response.status_code == 503
+        assert "misconfigured" in response.json()["detail"]

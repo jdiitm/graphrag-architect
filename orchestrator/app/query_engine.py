@@ -6,7 +6,11 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
 from neo4j import AsyncDriver, AsyncManagedTransaction
 
-from orchestrator.app.access_control import CypherPermissionFilter, SecurityPrincipal
+from orchestrator.app.access_control import (
+    AuthConfigurationError,
+    CypherPermissionFilter,
+    SecurityPrincipal,
+)
 from orchestrator.app.config import AuthConfig, ExtractionConfig
 from orchestrator.app.cypher_validator import CypherValidationError, validate_cypher_readonly
 from orchestrator.app.neo4j_pool import get_driver
@@ -44,6 +48,10 @@ def _build_acl_filter(
     state: QueryState,
 ) -> CypherPermissionFilter:
     auth_config = AuthConfig.from_env()
+    if auth_config.require_tokens and not auth_config.token_secret:
+        raise AuthConfigurationError(
+            "server misconfigured: token verification required but no secret set"
+        )
     principal = SecurityPrincipal.from_header(
         state.get("authorization", ""),
         token_secret=auth_config.token_secret,
