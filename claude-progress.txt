@@ -1,3 +1,36 @@
+## Completed: Kafka Infrastructure Fixes (CRITICAL-001, CRITICAL-002)
+
+Branch: `feat/kafka-infrastructure-fixes`
+Quality Gates: Pylint 10/10, Python 389/389, Go 68/68
+
+### Audit Findings Addressed
+
+1. **CRITICAL-001**: Missing Kafka egress NetworkPolicy
+   - Added `allow-kafka-egress` NetworkPolicy to `network-policies.yaml`
+   - Permits Kafka-to-Kafka egress on port 9092 (inter-broker replication)
+   - Permits Kafka-to-Kafka egress on port 9093 (KRaft controller quorum)
+   - Permits DNS resolution egress (port 53 UDP/TCP)
+   - Without this policy, the deny-all default blocked all inter-broker
+     communication, making KRaft quorum formation impossible
+
+2. **CRITICAL-002**: Missing CLUSTER_ID in kafka-statefulset.yaml
+   - Added `CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk` env var to kafka container
+   - Matches the value in docker-compose.yml for environment consistency
+   - Without this, each KRaft broker auto-generated its own cluster ID,
+     forming 3 separate single-node clusters instead of one 3-node cluster
+
+### Changes
+1. `infrastructure/k8s/network-policies.yaml`: Added allow-kafka-egress NetworkPolicy
+2. `infrastructure/k8s/kafka-statefulset.yaml`: Added CLUSTER_ID env var
+3. `orchestrator/tests/test_infra_security.py`: 8 new tests (5 egress policy, 3 cluster ID)
+
+### Architecture Decision: Minimal Egress Scope
+Kafka egress policy only permits traffic to other kafka pods (app: kafka)
+on ports 9092/9093 and DNS resolution. No broader network access is granted,
+maintaining the principle of least privilege from the deny-all baseline.
+
+---
+
 ## Completed: Performance and Consumer Resilience Hardening
 
 Branch: `feat/performance-and-consumer-resilience`
