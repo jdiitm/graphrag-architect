@@ -1,0 +1,91 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: graphrag-alerts
+  namespace: graphrag
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: graphrag.ingestion
+      rules:
+        - alert: HighDLQRate
+          expr: rate(ingestion_dlq_routed_total[5m]) > 0.167
+          for: 1m
+          labels:
+            severity: critical
+            channel: pagerduty
+          annotations:
+            summary: "DLQ routing rate exceeds 10/min"
+            description: >
+              DLQ rate is {{ $value | humanize }}/s
+              ({{ $value | humanizePercentage }} of threshold).
+              Check ingestion worker logs for processing failures.
+
+        - alert: HighConsumerLag
+          expr: ingestion_consumer_lag > 1000
+          for: 60s
+          labels:
+            severity: warning
+            channel: slack
+          annotations:
+            summary: "Kafka consumer lag exceeds 1000 on {{ $labels.topic }}/{{ $labels.partition }}"
+            description: >
+              Consumer lag is {{ $value }} messages.
+              HPA should be scaling ingestion workers.
+
+        - alert: SlowBatchProcessing
+          expr: histogram_quantile(0.99, rate(ingestion_batch_duration_seconds_bucket[5m])) > 2
+          for: 5m
+          labels:
+            severity: warning
+            channel: slack
+          annotations:
+            summary: "p99 batch duration exceeds NFR-1 SLA (2s)"
+            description: "p99 batch duration: {{ $value | humanizeDuration }}"
+
+    - name: graphrag.query
+      rules:
+        - alert: SlowQueryResponse
+          expr: histogram_quantile(0.99, rate(query_duration_ms_bucket[5m])) > 3000
+          for: 5m
+          labels:
+            severity: warning
+            channel: slack
+          annotations:
+            summary: "p99 query latency exceeds NFR-2 SLA (3s)"
+            description: "p99 query latency: {{ $value }}ms"
+
+    - name: graphrag.infrastructure
+      rules:
+        - alert: Neo4jDown
+          expr: up{job="neo4j"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            channel: pagerduty
+          annotations:
+            summary: "Neo4j instance is down"
+
+        - alert: KafkaBrokerDown
+          expr: count(up{job="kafka"} == 1) < 2
+          for: 2m
+          labels:
+            severity: critical
+            channel: pagerduty
+          annotations:
+            summary: "Fewer than 2 Kafka brokers are healthy"
+
+        - alert: OrchestratorHighErrorRate
+          expr: >
+            sum(rate(http_server_request_duration_seconds_count{status_code=~"5.."}[5m]))
+            /
+            sum(rate(http_server_request_duration_seconds_count[5m]))
+            > 0.05
+          for: 5m
+          labels:
+            severity: warning
+            channel: slack
+          annotations:
+            summary: "Orchestrator 5xx rate exceeds 5%"
