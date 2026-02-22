@@ -41,13 +41,19 @@ These are **automatic CRITICAL findings** if detected anywhere in the diff. No e
 
 If any of these are found, flag as **CRITICAL** and request changes immediately. These violations are never acceptable regardless of other merits of the PR.
 
-## Step 1: Identify the PR
+## Precondition Gate
 
 ```bash
 gh pr list --state open --limit 5
 ```
 
-If the user specifies a PR number, use that. Otherwise review the most recent open PR.
+**If no open PRs exist:** HALT. Tell the user: "No open PR to review. Run `@tdd-feature-cycle` to create one."
+
+Then STOP.
+
+## Step 1: Identify the PR
+
+Use the output from the precondition gate above. If the user specifies a PR number, use that. Otherwise review the most recent open PR.
 
 Fetch the PR metadata and diff:
 

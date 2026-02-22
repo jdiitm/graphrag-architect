@@ -40,14 +40,29 @@ When fixing review findings, these rules are absolute:
 7. **If a fix requires a new test**, write the failing test first (red), then fix the code (green). Maintain TDD discipline even for one-line fixes.
 8. **If you disagree with a review finding**, do not silently ignore it. Reply to the comment explaining your reasoning and let the reviewer decide during re-review.
 
-## Step 1: Read Review Feedback
+## Precondition Gate
 
 ```bash
 gh pr list --state open --limit 5
+```
+
+**If no open PRs exist:** HALT. Tell the user: "No open PR with changes requested. Nothing to fix."
+
+Then STOP.
+
+## Step 1: Read Review Feedback
+
+Use the PR identified in the precondition gate. Fetch the review details:
+
+```bash
 gh pr view <number> --json reviews,comments
 gh api repos/{owner}/{repo}/pulls/<number>/reviews
 gh api repos/{owner}/{repo}/pulls/<number>/comments
 ```
+
+**If no CRITICAL or HIGH findings exist in the reviews:** HALT. Tell the user: "No changes requested on PR #N. Nothing to fix. Run `@pr-review` if the PR needs reviewing."
+
+Then STOP.
 
 Parse all CRITICAL and HIGH findings. Create a TODO list from them.
 
