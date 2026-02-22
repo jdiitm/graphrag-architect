@@ -2,7 +2,7 @@ from typing import Any, Dict, List
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
-from neo4j import AsyncGraphDatabase
+from neo4j import AsyncDriver, AsyncGraphDatabase
 
 from orchestrator.app.config import ExtractionConfig, Neo4jConfig
 from orchestrator.app.query_classifier import classify_query
@@ -10,7 +10,7 @@ from orchestrator.app.query_models import QueryComplexity, QueryState
 
 _ROUTE_MAP = {
     QueryComplexity.ENTITY_LOOKUP: "vector",
-    QueryComplexity.SINGLE_HOP: "vector",
+    QueryComplexity.SINGLE_HOP: "single_hop",
     QueryComplexity.MULTI_HOP: "cypher",
     QueryComplexity.AGGREGATE: "hybrid",
 }
@@ -18,7 +18,7 @@ _ROUTE_MAP = {
 MAX_CYPHER_ITERATIONS = 3
 
 
-def _get_neo4j_driver():
+def _get_neo4j_driver() -> AsyncDriver:
     config = Neo4jConfig.from_env()
     return AsyncGraphDatabase.driver(
         config.uri, auth=(config.username, config.password)
@@ -76,6 +76,7 @@ def route_query(state: QueryState) -> str:
     path = state.get("retrieval_path", "vector")
     return {
         "vector": "vector_retrieve",
+        "single_hop": "single_hop_retrieve",
         "cypher": "cypher_retrieve",
         "hybrid": "hybrid_retrieve",
     }.get(path, "vector_retrieve")
@@ -100,17 +101,69 @@ async def vector_retrieve(state: QueryState) -> dict:
         await driver.close()
 
 
-async def cypher_retrieve(state: QueryState) -> dict:
-    generated = await _generate_cypher(state["query"])
+async def single_hop_retrieve(state: QueryState) -> dict:
     driver = _get_neo4j_driver()
     try:
+        query_text = state["query"]
+        limit = state.get("max_results", 10)
+        vector_cypher = (
+            "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
+            "YIELD node, score "
+            "RETURN node {.*, score: score} AS result "
+            "ORDER BY score DESC LIMIT $limit"
+        )
         async with driver.session() as session:
-            result = await session.run(generated)
-            records = result.data()
+            vector_result = await session.run(
+                vector_cypher, query=query_text, limit=limit
+            )
+            candidates = vector_result.data()
+            names = [c.get("name", c.get("result", {}).get("name", ""))
+                     for c in candidates]
+
+            hop_cypher = (
+                "MATCH (n)-[r]-(m) "
+                "WHERE n.name IN $names "
+                "RETURN n.name AS source, type(r) AS rel, m.name AS target"
+            )
+            hop_result = await session.run(hop_cypher, names=names)
+            hop_records = hop_result.data()
+
+        return {
+            "candidates": candidates,
+            "cypher_results": hop_records,
+        }
+    finally:
+        await driver.close()
+
+
+async def cypher_retrieve(state: QueryState) -> dict:
+    driver = _get_neo4j_driver()
+    try:
+        records: list = []
+        generated = ""
+        prior_attempt = ""
+        for iteration in range(1, MAX_CYPHER_ITERATIONS + 1):
+            schema_hint = (
+                f"Previous Cypher returned no results: {prior_attempt}"
+                if prior_attempt else ""
+            )
+            generated = await _generate_cypher(
+                state["query"], schema_hint=schema_hint
+            )
+            async with driver.session() as session:
+                result = await session.run(generated)
+                records = result.data()
+            if records:
+                return {
+                    "cypher_query": generated,
+                    "cypher_results": records,
+                    "iteration_count": iteration,
+                }
+            prior_attempt = generated
         return {
             "cypher_query": generated,
             "cypher_results": records,
-            "iteration_count": state.get("iteration_count", 0) + 1,
+            "iteration_count": MAX_CYPHER_ITERATIONS,
         }
     finally:
         await driver.close()
@@ -133,10 +186,12 @@ async def hybrid_retrieve(state: QueryState) -> dict:
             )
             candidates = vector_result.data()
 
-            agg_cypher = await _generate_cypher(
-                state["query"],
-                schema_hint=f"Pre-filtered candidates: {candidates}",
-            )
+        agg_cypher = await _generate_cypher(
+            state["query"],
+            schema_hint=f"Pre-filtered candidates: {candidates}",
+        )
+
+        async with driver.session() as session:
             agg_result = await session.run(agg_cypher)
             agg_records = agg_result.data()
 
@@ -171,6 +226,7 @@ builder = StateGraph(QueryState)
 
 builder.add_node("classify", classify_query_node)
 builder.add_node("vector_retrieve", vector_retrieve)
+builder.add_node("single_hop_retrieve", single_hop_retrieve)
 builder.add_node("cypher_retrieve", cypher_retrieve)
 builder.add_node("hybrid_retrieve", hybrid_retrieve)
 builder.add_node("synthesize", synthesize_answer)
@@ -181,11 +237,13 @@ builder.add_conditional_edges(
     route_query,
     {
         "vector_retrieve": "vector_retrieve",
+        "single_hop_retrieve": "single_hop_retrieve",
         "cypher_retrieve": "cypher_retrieve",
         "hybrid_retrieve": "hybrid_retrieve",
     },
 )
 builder.add_edge("vector_retrieve", "synthesize")
+builder.add_edge("single_hop_retrieve", "synthesize")
 builder.add_edge("cypher_retrieve", "synthesize")
 builder.add_edge("hybrid_retrieve", "synthesize")
 builder.add_edge("synthesize", END)
