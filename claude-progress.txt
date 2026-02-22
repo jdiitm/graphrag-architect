@@ -1,3 +1,35 @@
+## Completed: K8s Security Context + Neo4j Commit Error Logging (Audit M-1, M-2)
+
+Branch: `feat/k8s-security-context-and-commit-logging`
+Quality Gates: Pylint 10/10, Python 343/343, Go 49/49
+
+### Audit Findings Addressed
+- **M-1** — K8s deployments lack pod securityContext: added `runAsNonRoot: true`,
+  `readOnlyRootFilesystem: true`, and `allowPrivilegeEscalation: false` to both
+  orchestrator and ingestion-worker container specs. This provides defense-in-depth
+  beyond the Dockerfile `USER appuser` directive, preventing root execution even
+  if the deployment image is changed.
+- **M-2** — Neo4j commit errors caught but not logged: added `logger.error()` call,
+  OTel span error status (`StatusCode.ERROR`), and span exception recording
+  (`record_exception`) to `commit_to_neo4j` in `graph_builder.py`. Operators can
+  now determine the specific cause of Neo4j commit failures from logs and traces.
+
+### Changes
+1. `infrastructure/k8s/orchestrator-deployment.yaml`: Added container securityContext
+2. `infrastructure/k8s/ingestion-worker-deployment.yaml`: Added container securityContext
+3. `orchestrator/app/graph_builder.py`: Added logging, span error status, and exception
+   recording to commit_to_neo4j error path
+4. `orchestrator/tests/test_infra_security.py`: 6 new tests for securityContext properties
+5. `orchestrator/tests/test_graph_builder.py`: 6 new tests for error logging and span recording
+
+### Architecture Decision: Defense-in-Depth
+K8s securityContext enforces non-root execution at the orchestration layer regardless of
+image content. Combined with existing Dockerfile USER directive and network policies,
+this creates three independent layers of defense. The error logging change ensures full
+observability of Neo4j commit failures through both structured logs and distributed traces.
+
+---
+
 ## Completed: Infrastructure Security Hardening (M-1, M-2)
 
 Branch: `feat/fix-infra-security-minor-findings`
