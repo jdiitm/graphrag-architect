@@ -7,6 +7,19 @@ description: Fix changes requested in a PR review for graphrag-architect. Reads 
 
 Address review feedback on an open PR using the same TDD discipline as feature development. After pushing fixes, the `pr-review` skill should be re-triggered for a fresh independent review.
 
+## Integrity Invariants (Non-Negotiable)
+
+When fixing review findings, these rules are absolute:
+
+1. **Never weaken an existing test** to make a review finding "go away." If a reviewer says the code is wrong, fix the code, not the test.
+2. **Never skip, disable, or mark tests as expected-failure** to bypass a failing gate.
+3. **Never add inline lint suppression** (`pylint: disable`, `noqa`, `nolint`) to silence a reviewer's lint concern. Fix the code.
+4. **Never add sleeps or retries** to work around a flaky test. Fix the non-determinism.
+5. **Never reduce assertion specificity.** If a reviewer says an assertion is wrong, make it *more* precise, not less.
+6. **Every fix must be verified.** Run the relevant test after each fix and include the raw output. Do not claim a fix works without evidence.
+7. **If a fix requires a new test**, write the failing test first (red), then fix the code (green). Maintain TDD discipline even for one-line fixes.
+8. **If you disagree with a review finding**, do not silently ignore it. Reply to the comment explaining your reasoning and let the reviewer decide during re-review.
+
 ## Step 1: Read Review Feedback
 
 ```bash
@@ -30,11 +43,13 @@ git pull origin <branch-name>
 
 For each CRITICAL/HIGH finding:
 
-1. **If the fix needs a new test**: write the failing test first, then fix the code.
-2. **If an existing test is wrong**: fix the test to match the correct spec, then fix the code.
+1. **If the fix needs a new test**: write the failing test first, then fix the code. Never skip the red phase.
+2. **If an existing test has a genuine specification error**: fix the test to match the correct spec as documented in the PRD/architecture docs, then fix the code. You must justify why the test was wrong in the commit message.
 3. **If the fix is code-only** (refactor, security, type annotation): make the change, verify existing tests still pass.
 
-After each fix, run the relevant test file to confirm green:
+**NEVER** weaken an assertion, remove a test, or reduce test coverage to make a fix "work." The tests are the specification. If the tests and the code disagree, the code is wrong unless the test contradicts the PRD.
+
+After each fix, run the relevant test file and include raw output:
 
 ```bash
 source .venv/bin/activate && python -m pytest orchestrator/tests/<file> -v
@@ -69,9 +84,35 @@ git commit -m "fix: address PR review feedback
 git push
 ```
 
-## Step 6: Hand Off to Re-Review
+## Step 6: Respond to Review Comments
 
-After pushing, tell the user:
+After pushing, reply to each review comment that raised a finding you fixed. This creates an audit trail showing what was done for each issue.
+
+For each issue comment on the PR (from `gh pr view <number> --json comments`):
+
+```bash
+gh api repos/{owner}/{repo}/issues/<number>/comments \
+  -f body="$(cat <<'EOF'
+**Addressed.** [Explain what was changed and how it resolves the finding.]
+
+- Commit: `<short-sha>`
+- [Brief description of the fix]
+EOF
+)"
+```
+
+For each inline review comment (from `gh api repos/{owner}/{repo}/pulls/<number>/comments`):
+
+```bash
+gh api repos/{owner}/{repo}/pulls/<number>/comments/<comment_id>/replies \
+  -f body="Fixed in <short-sha>. [Brief explanation of the fix.]"
+```
+
+Reply to every CRITICAL and HIGH finding. LOW findings: reply only if you addressed them.
+
+## Step 7: Hand Off to Re-Review
+
+After pushing and responding to comments, tell the user:
 
 "Fixes pushed to `<branch>`. Trigger `@pr-review` for a fresh independent re-review."
 

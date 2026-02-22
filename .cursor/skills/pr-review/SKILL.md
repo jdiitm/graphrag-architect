@@ -7,6 +7,21 @@ description: Independent staff-level PR reviewer for graphrag-architect. Behaves
 
 Act as an independent senior engineer on the team. You have **zero context** from the authoring session. Your only inputs are the PR diff, the codebase, the PRD, and the test results. Be thorough and skeptical.
 
+## Integrity Invariants (Non-Negotiable)
+
+These are **automatic CRITICAL findings** if detected anywhere in the diff. No exceptions.
+
+1. **Weakened assertions** — An assertion was made less specific (e.g., exact equality replaced with `in`, `assertTrue(True)`, or looser bounds) to make a test pass.
+2. **Skipped or disabled tests** — `pytest.mark.skip`, `@unittest.skip`, `t.Skip()`, `xfail`, `expected_failure`, commented-out test bodies, or empty test functions.
+3. **Inline lint suppression** — `pylint: disable`, `noqa`, `nolint`, or any directive that silences a linter rule inline rather than fixing the code.
+4. **Timing-dependent tests** — `time.sleep`, `asyncio.sleep`, or retry loops added to make a flaky test pass instead of fixing the root cause.
+5. **Swallowed errors** — Bare `except:`, `except Exception: pass`, or any pattern that silently discards failures.
+6. **Missing test coverage for new behavior** — New code paths without corresponding test cases. Every public function must be tested.
+7. **Tests that verify mocks, not contracts** — A test that only asserts a mock was called, without verifying the actual behavior or output of the unit under test.
+8. **Fabricated or missing test output** — PR claims "all tests pass" without evidence of actual execution. Quality gates must have been run with raw output.
+
+If any of these are found, flag as **CRITICAL** and request changes immediately. These violations are never acceptable regardless of other merits of the PR.
+
 ## Step 1: Identify the PR
 
 ```bash
@@ -78,6 +93,17 @@ Evaluate each dimension. For every issue found, record it with a severity:
 - Tests are deterministic (no timing dependencies, no flaky patterns)
 - Mocks are injected properly (no global monkey-patching)
 
+### 3g. Integrity Violations (Auto-CRITICAL)
+
+Scan the diff explicitly for every item in the Integrity Invariants section above. Use grep/search to check for:
+
+```bash
+# In the diff, search for suppression patterns
+gh pr diff <number> | grep -iE '(pylint.*disable|noqa|nolint|skip|xfail|expected_failure|sleep|time\.sleep|pass$)'
+```
+
+Any match must be investigated. If it is a genuine integrity violation, flag it as CRITICAL.
+
 ## Step 4: Run Quality Gates Independently
 
 ```bash
@@ -86,7 +112,41 @@ python -m pytest orchestrator/tests/ -v
 cd workers/ingestion && go test ./... -v -count=1 -timeout 30s
 ```
 
-## Step 5: Verdict
+## Step 5: Resolve Addressed Comments (Re-Review Only)
+
+If this is a re-review (prior review comments exist on the PR), check whether each previously-raised CRITICAL/HIGH finding has been fixed in the current code.
+
+Fetch prior review comments:
+
+```bash
+gh pr view <number> --json comments
+gh api repos/{owner}/{repo}/pulls/<number>/comments
+```
+
+For each finding that is now properly addressed:
+
+1. Reply to the comment confirming resolution:
+
+```bash
+gh api repos/{owner}/{repo}/issues/<number>/comments \
+  -f body="Verified as resolved. [Brief note on what was checked.]"
+```
+
+2. If the comment is an inline review thread, resolve it via GraphQL:
+
+```bash
+gh api graphql -f query='
+  mutation {
+    resolveReviewThread(input: {threadId: "<thread_node_id>"}) {
+      thread { isResolved }
+    }
+  }
+'
+```
+
+For findings that are NOT properly addressed, note them for inclusion in the new review verdict.
+
+## Step 6: Verdict
 
 ### If issues found (any CRITICAL or HIGH):
 
@@ -111,7 +171,9 @@ EOF
 )"
 ```
 
-After requesting changes, tell the user: "Review complete. Changes requested on PR #N. Trigger `@pr-fix` to address the findings."
+After requesting changes, tell the user: "Review complete. Changes requested on PR #N. Handing off to `@pr-fix`."
+
+Then immediately trigger `@pr-fix` to address the findings.
 
 ### If all green (no CRITICAL or HIGH issues):
 
@@ -123,4 +185,6 @@ gh pr merge <number> --merge --delete-branch
 git checkout main && git pull origin main
 ```
 
-Report: "PR #N merged. Local main branch is up to date."
+Report: "PR #N merged. Local main branch is up to date. Handing off to `@tdd-feature-cycle` for the next feature."
+
+Then immediately trigger `@tdd-feature-cycle` to discover and implement the next missing feature.
