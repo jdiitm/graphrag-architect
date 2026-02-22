@@ -9,8 +9,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/processor"
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
 )
 
 func validJob() domain.Job {
@@ -190,6 +193,32 @@ func TestForwardingProcessor_MissingFilePath(t *testing.T) {
 	err := fp.Process(context.Background(), job)
 	if err == nil {
 		t.Fatal("expected error for missing file_path header, got nil")
+	}
+}
+
+func TestForwardingProcessor_InjectsTraceparentHeader(t *testing.T) {
+	exp := tracetest.NewInMemoryExporter()
+	tp, err := telemetry.Init(telemetry.WithExporter(exp))
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+
+	var capturedTraceparent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedTraceparent = r.Header.Get("Traceparent")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"committed","entities_extracted":0,"errors":[]}`))
+	}))
+	defer srv.Close()
+
+	ctx, span := tp.Tracer("test").Start(context.Background(), "parent")
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client())
+	_ = fp.Process(ctx, validJob())
+	span.End()
+
+	if capturedTraceparent == "" {
+		t.Fatal("expected traceparent header on outgoing HTTP request, got empty string")
 	}
 }
 

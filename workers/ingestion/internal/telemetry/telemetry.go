@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
@@ -22,17 +24,20 @@ type Option func(*config)
 
 type config struct {
 	exporter sdktrace.SpanExporter
+	useSync  bool
 }
 
 func WithTestExporter() Option {
 	return func(c *config) {
 		c.exporter = noopExporter{}
+		c.useSync = true
 	}
 }
 
 func WithExporter(exp sdktrace.SpanExporter) Option {
 	return func(c *config) {
 		c.exporter = exp
+		c.useSync = true
 	}
 }
 
@@ -47,21 +52,31 @@ func Init(opts ...Option) (*sdktrace.TracerProvider, error) {
 		if endpoint == "" {
 			endpoint = "localhost:4317"
 		}
-		exp, err := otlptracegrpc.New(
-			context.Background(),
+
+		grpcOpts := []otlptracegrpc.Option{
 			otlptracegrpc.WithEndpoint(endpoint),
-			otlptracegrpc.WithInsecure(),
-		)
+		}
+		if strings.EqualFold(os.Getenv("OTEL_EXPORTER_OTLP_INSECURE"), "true") {
+			grpcOpts = append(grpcOpts, otlptracegrpc.WithInsecure())
+		}
+
+		exp, err := otlptracegrpc.New(context.Background(), grpcOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("create OTLP exporter: %w", err)
 		}
 		cfg.exporter = exp
 	}
 
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithSyncer(cfg.exporter),
-	)
+	var spanProcessorOpt sdktrace.TracerProviderOption
+	if cfg.useSync {
+		spanProcessorOpt = sdktrace.WithSyncer(cfg.exporter)
+	} else {
+		spanProcessorOpt = sdktrace.WithBatcher(cfg.exporter)
+	}
+
+	tp := sdktrace.NewTracerProvider(spanProcessorOpt)
 	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 	tracer = tp.Tracer(serviceName)
 	return tp, nil
 }
@@ -116,6 +131,14 @@ func StartDLQSpan(ctx context.Context, result domain.Result) (context.Context, t
 
 func StartCommitSpan(ctx context.Context) (context.Context, trace.Span) {
 	return Tracer().Start(ctx, "kafka.commit")
+}
+
+func ExtractTraceContext(ctx context.Context, headers map[string]string) context.Context {
+	return otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(headers))
+}
+
+func InjectTraceContext(ctx context.Context, headers map[string][]string) {
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(headers))
 }
 
 type noopExporter struct{}

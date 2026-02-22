@@ -73,6 +73,7 @@ func TestStartProcessSpan(t *testing.T) {
 	}
 	assertAttr(t, spans[0].Attributes, "job.topic", "raw-documents")
 	assertAttr(t, spans[0].Attributes, "job.partition", int64(0))
+	assertAttr(t, spans[0].Attributes, "job.offset", int64(1))
 }
 
 func TestStartForwardSpan(t *testing.T) {
@@ -91,6 +92,7 @@ func TestStartForwardSpan(t *testing.T) {
 		t.Errorf("name = %q, want %q", spans[0].Name, "http.forward")
 	}
 	assertAttr(t, spans[0].Attributes, "http.target", "/ingest")
+	assertAttr(t, spans[0].Attributes, "job.file_path", "file-y.go")
 }
 
 func TestStartDLQSpan(t *testing.T) {
@@ -114,6 +116,7 @@ func TestStartDLQSpan(t *testing.T) {
 	}
 	assertAttr(t, spans[0].Attributes, "dlq.attempts", int64(3))
 	assertAttr(t, spans[0].Attributes, "dlq.error", "server error")
+	assertAttr(t, spans[0].Attributes, "dlq.topic", "raw-documents")
 }
 
 func TestStartCommitSpan(t *testing.T) {

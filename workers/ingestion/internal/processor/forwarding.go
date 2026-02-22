@@ -72,6 +72,7 @@ func (f *ForwardingProcessor) Process(ctx context.Context, job domain.Job) error
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	telemetry.InjectTraceContext(ctx, req.Header)
 
 	resp, err := f.client.Do(req)
 	if err != nil {

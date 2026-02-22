@@ -65,7 +65,8 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			if !ok {
 				return
 			}
-			processCtx, processSpan := telemetry.StartProcessSpan(ctx, job)
+			jobCtx := telemetry.ExtractTraceContext(ctx, job.Headers)
+			processCtx, processSpan := telemetry.StartProcessSpan(jobCtx, job)
 			result := d.processWithRetry(processCtx, job)
 			if result.Err != nil {
 				_, dlqSpan := telemetry.StartDLQSpan(processCtx, result)
