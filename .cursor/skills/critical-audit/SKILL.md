@@ -1,6 +1,6 @@
 ---
 name: critical-audit
-description: Deep, adversarial, external-quality audit of the entire graphrag-architect repository. Reads every file, line, and word across source, tests, infrastructure, documentation, and configuration. Produces a structured report modeled on a professional penetration-test / architecture-review engagement. Covers security vectors, architectural drift, data reliability, infrastructure correctness, performance bottlenecks, operational readiness, code quality, and test integrity. Standalone skill — not part of the FSM development cycle. Trigger when you want the equivalent of an external audit firm reviewing the repo.
+description: Deep, adversarial, external-quality audit of the entire graphrag-architect repository. Uses decomposed sub-audits with targeted file scoping, concrete defeat-test methodology, and cross-component interaction analysis. Produces a structured report modeled on a professional penetration-test / architecture-review engagement.
 ---
 
 # Critical Audit — Deep Technical System Review
@@ -21,11 +21,22 @@ These are non-negotiable. Violating any of them invalidates the entire audit.
 
 1. **Never manufacture a finding.** If something is correct, it is correct. A clean system is a valid result. Do not invent issues to justify your engagement.
 2. **Never inflate severity.** A style preference is not HIGH. A missing Phase 2 feature is not CRITICAL. A theoretical concern without a concrete exploit path is not a Blocker. Severity must match actual, demonstrable impact.
-3. **Never report a false positive.** Every finding MUST include the exact file path, line number, and verbatim code snippet that constitutes the evidence. If you cannot point to a specific line, it is not a finding.
+3. **Never dismiss on uncertainty.** If you suspect a vulnerability but are unsure, you MUST construct a concrete defeat test (see methodology below). If the defeat test shows the mechanism can be bypassed, report it. If the defeat test shows the mechanism holds, dismiss it. Never dismiss without testing.
 4. **Never suppress a real problem.** If tests fail, code has injection vectors, infrastructure is misconfigured, or documentation contradicts reality — report it honestly. No favoritism.
 5. **Never count deferred/planned items as gaps.** Only flag something as missing if the PRD explicitly requires it in the current phase AND the code is absent or stubbed.
 6. **The verdict must follow mechanically from the evidence.** You do not get to "feel" like something is problematic. Every finding must have a concrete, reproducible risk.
 7. **Never double-count.** If a single root cause manifests in multiple places, it is ONE finding with multiple locations, not N findings.
+
+## Defeat Test Methodology
+
+This is the core analytical technique for this audit. Apply it to every security mechanism, validation function, and infrastructure configuration you evaluate.
+
+1. **Identify the claim**: What does this code/config claim to protect against or guarantee?
+2. **Construct a concrete bypass**: Write a specific input, query, request, configuration state, or failure scenario designed to defeat the mechanism. Be creative and adversarial.
+3. **Trace the bypass through the code**: Follow the constructed input step-by-step through the actual implementation. At every branch and decision point, record what the code does with your crafted input.
+4. **Verdict**: If the bypass reaches the protected resource or causes the feared outcome, it is a finding. If the mechanism correctly blocks it at every attempt, it is not a finding.
+
+Do NOT evaluate mechanisms by asking "does this exist?" — evaluate by asking "can this be defeated?"
 
 ## Verdict Criteria (Mechanical)
 
@@ -39,7 +50,6 @@ These are non-negotiable. Violating any of them invalidates the entire audit.
 ## Precondition Gate
 
 ```bash
-cd /home/j/side/graphrag-architect
 git branch --show-current
 git status --porcelain
 git log --oneline -1
@@ -73,16 +83,34 @@ Do NOT take these documents at face value. They are claims to be verified agains
 
 ---
 
-## Phase 2: Full Codebase Read
+## Phase 2: Quality Gates
 
-Discover and read EVERY file in the repository. No skimming. No skipping. For each file, understand its purpose, its public API, its error handling, its security posture, and how it connects to adjacent components.
-
-### Discovery
-
-First, enumerate all files to ensure nothing is missed — new files added since this skill was written must be included:
+Run all gates and record raw output verbatim:
 
 ```bash
-cd /home/j/side/graphrag-architect
+source .venv/bin/activate
+
+# Gate 1: Pylint
+pylint orchestrator/
+
+# Gate 2: Python tests
+python -m pytest orchestrator/tests/ -v
+
+# Gate 3: Go tests
+cd workers/ingestion && go test ./... -v -count=1 -timeout 30s
+```
+
+Record: `Pylint: X/10, Python: A/B passed, Go: C/D passed`
+
+If any gate FAILS, that is an automatic Blocker finding. Record the exact failure output.
+
+---
+
+## Phase 3: File Discovery
+
+Enumerate all files to ensure no sub-audit misses a component:
+
+```bash
 find . -type f \
   ! -path './.git/*' \
   ! -path './.venv/*' \
@@ -95,196 +123,284 @@ find . -type f \
   | sort
 ```
 
-### Scope by Directory
-
-Read every file in each of the following directories (recursively). If the discovery step above reveals directories not listed here, read those too.
-
-| Directory | Contains | Read |
-|-----------|----------|------|
-| `orchestrator/app/` | Python source — FastAPI, LangGraph DAG, Neo4j client, query engine, RBAC, models; also `schema_init.cypher` | All files (`*.py`, `*.cypher`) |
-| `orchestrator/tests/` | Python tests — unit, integration, conftest | All `*.py` |
-| `orchestrator/` (root only, non-recursive) | Package init, Dockerfile, dockerignore, requirements | All files at this level |
-| `workers/ingestion/cmd/` | Go entrypoint — main, Kafka bootstrap, DLQ sink | All `*.go` |
-| `workers/ingestion/internal/` | Go packages — consumer, dispatcher, DLQ, metrics, processor, telemetry, domain | All `*.go` (recurse all subdirs) |
-| `workers/ingestion/` (root only, non-recursive) | Dockerfile, dockerignore, go.mod, go.sum | All files at this level |
-| `infrastructure/k8s/` | Kubernetes manifests — StatefulSets, Deployments, HPA, alerting, network policies, secrets | All `*.yaml` |
-| `infrastructure/` (root only) | Docker Compose | `docker-compose.yml` |
-| `docs/prd/` | Product requirements (read-only reference — used to verify code, not audited for correctness) | All `*.md` |
-| `docs/architecture/` | Architecture specs — system design, data dictionary | All `*.md` |
-| `.github/workflows/` | CI/CD pipeline definitions | All `*.yml` |
-
-### Root-Level Files
-
-Also read these individual files at the repo root:
-
-```
-CLAUDE.md
-README.md
-architecture_state.md
-claude-progress.txt
-pyproject.toml
-.gitignore
-```
-
-### Completeness Check
-
-After reading, cross-reference against the `find` output. If any file was missed, read it now. The audit is invalid if files were skipped.
+Review the file list. If you see files not covered by any sub-audit scope below, read them during Sub-Audit E (Code Quality) as a catch-all.
 
 ---
 
-## Phase 3: Quality Gates Execution
+## Phase 4: Focused Sub-Audits
 
-Run all gates and record raw output verbatim:
+Execute each sub-audit **sequentially**. For each one:
+1. Read ONLY the files listed in its scope
+2. Perform the specified analysis immediately while those files are fresh
+3. Record intermediate findings in a scratchpad before moving to the next sub-audit
 
-```bash
-cd /home/j/side/graphrag-architect
-source .venv/bin/activate
-
-# Gate 1: Pylint
-pylint orchestrator/
-
-# Gate 2: Python tests
-python -m pytest orchestrator/tests/ -v
-
-# Gate 3: Go tests
-cd /home/j/side/graphrag-architect/workers/ingestion && go test ./... -v -count=1 -timeout 30s
-```
-
-Record: `Pylint: X/10, Python: A/B passed, Go: C/D passed`
-
-If any gate FAILS, that is an automatic Blocker finding. Record the exact failure output.
+**Critical rule**: Do NOT read all files upfront. Read each sub-audit's files immediately before analyzing that domain. This preserves reasoning capacity for deep analysis.
 
 ---
 
-## Phase 4: Adversarial Analysis
+### Sub-Audit A: Security & Access Control
 
-For each dimension below, actively try to break the system. Think like an attacker, a chaotic infrastructure failure, or a malicious tenant. Only report findings you can substantiate with file:line evidence.
+**Scope — read these files now:**
+```
+orchestrator/app/access_control.py
+orchestrator/app/cypher_validator.py
+orchestrator/app/main.py
+orchestrator/app/manifest_parser.py
+orchestrator/app/extraction_models.py
+orchestrator/app/neo4j_client.py
+orchestrator/app/query_engine.py
+orchestrator/tests/test_access_control.py
+orchestrator/tests/test_cypher_validator.py
+infrastructure/k8s/secrets.yaml
+```
 
-### 4.1 Security Vectors
+**A1. Cypher injection — defeat tests required:**
 
-Examine every path where external input reaches an execution engine:
+Trace the full path: user natural-language query → LLM → generated Cypher → validation → Neo4j execution.
 
-**Cypher injection surface:**
-- Trace every Cypher query from user input through LLM generation to Neo4j execution
-- Is every LLM-generated Cypher validated before execution?
-- Are all query-path transactions read-only (`execute_read`)?
-- Can a crafted user query cause the LLM to emit `MERGE`, `CREATE`, `DELETE`, `SET`, `REMOVE`, `DROP`?
-- Is there a write-capable Neo4j user in the query path?
+For every validation/sanitization step in the chain, construct ALL of these specific bypass attempts and trace each through the code:
+- A Cypher query with a nested subquery: `CALL { MATCH (n) WHERE n.name = 'x' RETURN n } RETURN n`
+- A Cypher query with a CASE expression: `MATCH (n) RETURN CASE WHEN n.name = 'test' THEN 1 ELSE 0 END`
+- A Cypher query with a string literal containing keywords: `MATCH (n) WHERE n.desc = "DELETE all WHERE RETURN" RETURN n`
+- A Cypher query with mutation verbs: `CREATE (n:Evil {name: 'injected'}) RETURN n`
+- A multi-statement query: `MATCH (n) RETURN n; DROP CONSTRAINT unique_service_name`
 
-**Access control bypass:**
-- Trace the RBAC enforcement from HTTP header → `SecurityPrincipal` → Cypher filter injection
-- Can regex-based Cypher mutation be fooled by subqueries, string literals, or non-standard syntax?
-- Can a non-admin tenant access another tenant's subgraph?
-- Are ACL properties consistently set on all node types during ingestion?
+For each, trace character-by-character through the validation. Record what happens.
 
-**Secrets management:**
-- Search for hardcoded API keys, passwords, tokens, connection strings in source and infrastructure
-- Are secrets in K8s manifests using `Secret` resources or plaintext in `ConfigMap`?
-- Are environment variable names for secrets documented and externalized?
+Verify ALL query-path Neo4j transactions use `execute_read`. Search for any `execute_write`, `session.write_transaction`, or `session.run` calls in query paths (not ingestion paths).
 
-Search the entire repo (all `*.py`, `*.go`, `*.yaml`, `*.yml` files) for these patterns:
+**A2. RBAC bypass — defeat tests required:**
 
+Trace: HTTP request → header extraction → SecurityPrincipal → Cypher ACL filter injection.
+
+Construct these specific scenarios:
+- Request with no Authorization header at all
+- Request with a syntactically valid but unsigned JWT
+- Request when `AUTH_TOKEN_SECRET` environment variable is empty string, None, or not set at all
+- Request from a non-admin tenant attempting to access another tenant's data
+
+For each, trace the full code path. Does the request succeed, fail safely, or fail open?
+
+**Important**: If any test in the test suite asserts that missing/empty secrets should cause verification to be SKIPPED, that test is validating a fail-open vulnerability. Flag both the code path AND the test as a finding.
+
+**A3. ACL propagation — absence detection:**
+
+For every node type in `extraction_models.py` that has `team_owner` or `namespace_acl` fields:
+1. List the field name and its default value
+2. Search the parser/extractor code for where that field is explicitly populated
+3. If a field defaults to None/empty and no parser code ever sets it to a real value, that is a finding — the field exists but is never populated
+
+Build a table:
+
+| Node type | Field | Default | Parser sets it? | Evidence |
+|-----------|-------|---------|----------------|----------|
+
+**A4. Secrets scan:**
+
+Search the entire repo (all `*.py`, `*.go`, `*.yaml`, `*.yml` files) using the Grep tool for:
 1. Case-insensitive: `password`, `secret`, `api.key`, `token`, `credential`
 2. Hardcoded key prefixes: `BEGIN.*KEY`, `AKIA`, `sk-`, `ghp_`, `ghs_`
 
-Use the Grep tool or `grep -rnEi` — do NOT use `rg` (not in system PATH).
+Investigate every match in context. Only flag confirmed hardcoded secrets, not references to environment variable names.
 
-**Error information leakage:**
-- Do HTTP error responses expose internal paths, stack traces, or Neo4j connection details?
-- Are Python tracebacks returned to callers?
+**Record Sub-Audit A findings before proceeding.**
 
-### 4.2 Data Reliability & Durability
+---
 
-Trace the full message lifecycle: Kafka topic → Go consumer → HTTP forward → Python ingest → Neo4j commit.
+### Sub-Audit B: Data Pipeline Integrity
 
-**Message loss scenarios:**
-- What happens when the Python orchestrator returns an error? Does the Go worker retry or commit the offset?
-- What HTTP status codes does Python return on failure? Does Go correctly interpret them?
-- What happens when the circuit breaker opens? Is the HTTP response code correctly set to trigger Go-side DLQ routing?
-- Is the DLQ actually writing to a Kafka topic, or just logging and discarding?
+**Scope — read these files now:**
+```
+workers/ingestion/internal/consumer/consumer.go
+workers/ingestion/internal/dispatcher/dispatcher.go
+workers/ingestion/internal/dlq/handler.go
+workers/ingestion/internal/processor/forwarding.go
+workers/ingestion/internal/processor/processor.go
+workers/ingestion/internal/domain/job.go
+workers/ingestion/cmd/dlq_sink.go
+workers/ingestion/cmd/kafka.go
+workers/ingestion/cmd/main.go
+orchestrator/app/main.py (re-read — focus on /ingest endpoint)
+orchestrator/app/graph_builder.py
+orchestrator/app/neo4j_client.py (re-read — focus on write transactions)
+orchestrator/app/circuit_breaker.py
+```
 
-**Transaction integrity:**
-- Are Neo4j writes atomic? Can a partial entity set be committed?
-- What happens on Neo4j connection timeout mid-transaction?
-- Is there a transaction timeout configured on the driver?
+**B1. Message loss — trace the full lifecycle:**
 
-**Retry semantics:**
-- What is the retry count? Is it configurable?
-- Are retries idempotent? Can a retried message create duplicate nodes?
-- Does the DLQ preserve enough metadata for replay?
+Follow a single message through the entire pipeline: Kafka poll → consumer dispatch → HTTP forward to Python → Python ingest → Neo4j write → offset commit.
 
-### 4.3 Architectural Drift
+At EVERY step, answer these three questions:
+- If this step fails, is the message retried, DLQ'd, or lost forever?
+- Is the Kafka offset committed BEFORE or AFTER the downstream operation confirms success?
+- What specific HTTP status codes or error types trigger each behavior (retry vs DLQ vs drop)?
 
-Compare EVERY claim in the architecture documents against the actual code:
+Draw the state machine:
+```
+Message → [consumer] → [dispatcher] → [processor/forwarding] → [HTTP to Python] → [graph_builder] → [neo4j_client] → [commit offset]
+                                                                     ↓ (on error)
+                                                              [DLQ handler]
+```
 
-**Component existence:**
-- Does every component described in `01_SYSTEM_DESIGN.md` exist in code?
-- Does every file in the repo appear in the documented project structure?
-- Are there undocumented components?
+For every arrow, document the failure mode.
 
-**Data flow accuracy:**
-- Does the documented data flow match the actual call chain?
-- Does the DAG topology in `graph_builder.py` match the documented DAG?
-- Do the `IngestionState` fields match what the docs claim?
+**B2. DLQ durability — defeat test required:**
 
-**Schema accuracy:**
-- Do the node/edge types in `extraction_models.py` match `02_DATA_DICTIONARY.md`?
-- Are all documented properties present in the Pydantic models?
-- Are Cypher templates in `neo4j_client.py` consistent with the documented schema?
+- Read `dlq/handler.go` and `cmd/dlq_sink.go`. Does the DLQ actually write to a Kafka topic, or does it only log?
+- Construct this scenario: the DLQ Kafka producer itself fails (e.g., broker unreachable). Trace what happens to the original message. Is it lost?
+- Does the DLQ record preserve enough metadata for replay? Check for: original topic, partition, offset, error reason, timestamp, original payload.
 
-### 4.4 Infrastructure Correctness
+**B3. Transaction atomicity:**
 
-**Kubernetes manifests:**
-- Do StatefulSets have correct liveness/readiness probes?
-- Are probe ports correct and do they match container ports?
-- Do HPA metrics reference metrics that actually exist?
-- Are HPA scaling formulas correct (pod-level vs external)?
-- Do alerting rules reference labels that scraping actually produces?
-- Are JMX/metrics sidecars properly configured?
-- Are resource limits and requests specified?
-- Do network policies allow required traffic paths?
+- In `neo4j_client.py`, trace the write path. Are all entities written in a single transaction, or can a partial set be committed?
+- Is there a transaction timeout configured on the Neo4j driver? What happens on timeout?
+- Check for MERGE vs CREATE. Can a retried ingest create duplicate nodes?
 
-**Docker Compose:**
-- Does the Docker Compose config match the K8s topology?
-- Are port mappings, environment variables, and volume mounts consistent?
-- Are service names consistent between Docker and K8s?
+**B4. Circuit breaker interaction — defeat test required:**
 
-**CI/CD:**
-- Does the CI pipeline run all quality gates?
-- Are there any gates in CLAUDE.md that CI does not enforce?
+- When the circuit breaker in `circuit_breaker.py` opens, what HTTP status code does the Python `/ingest` endpoint return?
+- Read the Go `forwarding.go` — what does it do with that specific status code? Retry? DLQ? Drop?
+- Construct a scenario: circuit breaker opens after 5 consecutive Neo4j failures. The next 10 ingest requests arrive. Trace each one through both Python and Go. How many messages are lost vs DLQ'd vs retried?
 
-### 4.5 Performance & Scalability
+**Record Sub-Audit B findings before proceeding.**
 
-**Python orchestrator:**
-- Are there blocking calls in async contexts?
-- Is the event loop protected from CPU-bound LLM extraction work?
-- Are there unbounded list accumulations?
-- Is Base64 encoding/decoding of large payloads creating memory pressure?
+---
 
-**Go workers:**
-- Are goroutines properly bounded?
-- Is context cancellation propagated to all blocking calls?
-- Are channels properly closed on shutdown?
-- Can the dispatcher OOM under load (unbounded job channel)?
+### Sub-Audit C: Infrastructure Correctness
 
-**Neo4j queries:**
-- Are there N+1 query patterns?
-- Are graph traversals bounded (max depth, max results)?
-- Can a malicious query trigger a full graph scan?
+**Scope — read these files now:**
+```
+infrastructure/k8s/kafka-statefulset.yaml
+infrastructure/k8s/neo4j-statefulset.yaml
+infrastructure/k8s/orchestrator-deployment.yaml
+infrastructure/k8s/ingestion-worker-deployment.yaml
+infrastructure/k8s/neo4j-schema-job.yaml
+infrastructure/k8s/network-policies.yaml
+infrastructure/k8s/hpa.yaml
+infrastructure/k8s/alerting.yaml
+infrastructure/k8s/configmap.yaml
+infrastructure/k8s/secrets.yaml
+infrastructure/k8s/namespace.yaml
+infrastructure/k8s/ingress.yaml
+infrastructure/docker-compose.yml
+.github/workflows/ci.yml
+```
 
-### 4.6 Observability & Operational Readiness
+**C1. Kafka operational completeness:**
 
-- Are Prometheus metrics exported from both Go and Python?
-- Are metric names consistent between code and alerting rules?
-- Is distributed tracing (OpenTelemetry) propagated end-to-end (Go → Python → Neo4j)?
-- Are trace context headers forwarded in HTTP calls?
-- Is structured logging used consistently?
-- Are there blind spots where failures occur silently (no metric, no log, no trace)?
+Verify the Kafka StatefulSet has ALL required environment variables for KRaft mode:
+- [ ] `KAFKA_ADVERTISED_LISTENERS` — MUST resolve to a hostname reachable from other pods. If it uses `$(HOSTNAME)`, verify this is a Kubernetes downward-API env var reference, NOT a shell variable (shell variables do not expand in K8s `env:` blocks).
+- [ ] `KAFKA_LISTENER_SECURITY_PROTOCOL_MAP`
+- [ ] `KAFKA_CONTROLLER_QUORUM_VOTERS` or KRaft equivalent
+- [ ] `CLUSTER_ID` or KRaft cluster identification
 
-### 4.7 Code Quality (Against CLAUDE.md Invariants)
+For each missing or incorrectly-configured variable, explain the concrete runtime failure it causes.
 
-For each CLAUDE.md invariant, verify compliance across the entire codebase:
+**C2. NetworkPolicy cross-reference matrix:**
 
+First, determine whether a default-deny policy exists (a NetworkPolicy selecting all pods with empty ingress/egress rules, or a policy with `policyTypes: [Ingress, Egress]` and no rules).
+
+If default-deny exists, build this complete matrix. Read the label selectors from every Deployment, StatefulSet, and Job manifest:
+
+| Workload | Pod labels | Needs egress to (service:port) | Needs ingress from (service) | Allow policy exists? | Policy name |
+|----------|-----------|-------------------------------|-----------------------------|--------------------|-------------|
+
+For EVERY cell marked "needs", verify a specific NetworkPolicy rule matches:
+- The `podSelector` matches the workload's labels
+- The `ingress.from` or `egress.to` selector matches the peer's labels
+- The port number matches
+
+A missing allow rule when default-deny is active means traffic is BLOCKED. This is a Blocker finding if it affects a required data path.
+
+**C3. Probes and ports:**
+- For every workload, verify liveness/readiness probe ports match container port declarations
+- Verify probe HTTP paths (e.g., `/health`) actually exist as endpoints in the application code
+
+**C4. HPA correctness:**
+- Verify every metric name referenced in HPA manifests is actually exported by the target workload
+- Check metric types: `Pods` type metrics must be per-pod averages, not cluster-wide totals
+- Verify `targetAverageValue` or `averageUtilization` thresholds are reasonable
+
+**C5. Alerting rule consistency:**
+- Verify every PromQL metric name in alerting rules is actually exported by the application or infrastructure
+- Verify label selectors in alerting rules match the labels that Prometheus scraping actually produces
+- Check for alerting blind spots: are there critical failure modes (DLQ overflow, Neo4j connection failure, circuit breaker open) that have no alerting rule?
+
+**C6. CI/CD completeness:**
+- Read `.github/workflows/ci.yml`
+- Cross-reference against CLAUDE.md quality gates. Every gate in CLAUDE.md must appear in CI.
+- Flag any gate that CLAUDE.md requires but CI does not enforce.
+
+**Record Sub-Audit C findings before proceeding.**
+
+---
+
+### Sub-Audit D: Performance & Scalability
+
+**Scope — read these files now:**
+```
+orchestrator/app/workspace_loader.py
+orchestrator/app/graph_builder.py
+orchestrator/app/llm_extraction.py
+orchestrator/app/ingest_models.py
+workers/ingestion/internal/consumer/consumer.go
+workers/ingestion/internal/dispatcher/dispatcher.go
+```
+
+**D1. Memory exhaustion — trace the data volume:**
+
+In `workspace_loader.py`, trace `load_directory()` for a directory with 5,000 files (each up to 1MB):
+- Does the function accumulate all file contents in a single in-memory list?
+- Is that list passed into `IngestionState` and carried through the entire LangGraph DAG?
+- Calculate worst-case memory: if 5,000 files * 500KB average = 2.5GB, does this exceed pod limits?
+- A function named `load_directory_chunked()` that yields chunks is NOT streaming if the caller collects all chunks into a single list. Check the actual call site.
+
+**D2. Blocking calls in async context:**
+- Search for synchronous blocking calls inside `async def` functions
+- Are LLM API calls (likely slow, CPU-bound for response parsing) executed with `asyncio.to_thread` or `loop.run_in_executor`?
+- Are file I/O operations in async handlers using async file libraries or blocking the event loop?
+
+**D3. Go consumer throughput — defeat test required:**
+
+In `consumer.go`, trace this specific scenario:
+1. Consumer polls a batch of 10 messages
+2. Messages 1-2 are dispatched and ack'd quickly (100ms each)
+3. Message 3 enters a retry loop in the processor — each retry takes 5 seconds, max 3 retries = 15 seconds
+4. Messages 4-10 are waiting in the channel
+
+Answer:
+- Does the consumer block polling during step 3? For how long?
+- What is `session.timeout.ms`? (Check the Kafka config in `cmd/kafka.go` or `cmd/main.go`)
+- If the consumer stops polling for >session.timeout.ms, Kafka triggers a rebalance. Does this scenario cause a rebalance?
+- What happens to messages 4-10 during the rebalance?
+
+**D4. Unbounded collections:**
+- In Python: search for `append()` or `extend()` calls inside loops with no size cap
+- In Go: search for sends to unbuffered or large-buffered channels without backpressure
+
+**Record Sub-Audit D findings before proceeding.**
+
+---
+
+### Sub-Audit E: Code Quality & Test Integrity
+
+**Scope — read these files now:**
+
+Read ALL `orchestrator/app/*.py` source files not already read in previous sub-audits, plus:
+```
+orchestrator/tests/conftest.py
+orchestrator/tests/test_*.py (all test files)
+workers/ingestion/internal/telemetry/telemetry.go
+workers/ingestion/internal/metrics/metrics.go
+workers/ingestion/internal/metrics/observer.go
+pyproject.toml
+```
+
+Also read any files from the Phase 3 discovery that were not covered by Sub-Audits A-D.
+
+**E1. CLAUDE.md invariant compliance:**
+
+Verify each invariant across the entire codebase:
 - Type annotations on ALL function signatures (Python)
 - No inline comments in Python source (self-documenting names only)
 - Frozen dataclass config pattern with `from_env()` classmethod
@@ -293,10 +409,9 @@ For each CLAUDE.md invariant, verify compliance across the entire codebase:
 - No bare `except:` handlers
 - No swallowed exceptions
 
-Search using the Grep tool (do NOT use `rg` — it is not in the system PATH):
-
+Search for violations using the Grep tool:
 1. Bare except handlers: pattern `except\s*:` in `orchestrator/`
-2. Exception handlers (check for swallowed): pattern `except\s+\w+` in `orchestrator/` (read surrounding lines)
+2. Swallowed exceptions: pattern `except\s+\w+` in `orchestrator/` — read surrounding lines to check if the exception is logged/re-raised or silently consumed with `pass`
 3. Lint suppression: pattern `pylint.*disable|noqa|nolint` in `orchestrator/` and `workers/`
 4. Stale markers: pattern `TODO|FIXME|HACK|XXX` in `orchestrator/` and `workers/`
 5. Test skips: pattern `pytest\.mark\.skip|unittest\.skip|xfail|expected_failure` in `orchestrator/tests/` and `workers/`
@@ -304,21 +419,39 @@ Search using the Grep tool (do NOT use `rg` — it is not in the system PATH):
 
 Investigate every match in context. Many patterns have legitimate uses — only flag confirmed violations.
 
-### 4.8 Test Integrity
+**E2. Test effectiveness audit:**
 
-For every public function/method in source code, verify at least one test exercises it. Check:
-
-- Are assertions testing behavior or just confirming mocks were called?
+For every public function/method in source code, verify at least one test exercises it. Then examine the tests themselves:
+- Are assertions testing actual behavior or just confirming mocks were called with specific args?
 - Are error paths tested, not just happy paths?
-- Are edge cases covered (empty inputs, max-size inputs, malformed data)?
-- Are tests deterministic (no timing, no ordering, no shared mutable state)?
-- Do integration tests actually integrate (test real component interactions, not just each in isolation)?
+- **Critical**: Does any test validate a security anti-pattern as correct? For example, a test asserting "when AUTH_TOKEN_SECRET is missing, token verification should be skipped" is validating fail-open behavior. Flag these — the test is the evidence, not the defense.
+- Are tests deterministic (no timing dependencies, no ordering assumptions, no shared mutable state)?
+- Do integration tests actually test component interactions, or do they mock everything and test in isolation?
+
+**E3. Architectural drift:**
+
+Compare factual claims in architecture documents against actual code:
+- Does every component described in `01_SYSTEM_DESIGN.md` exist in code?
+- Does every file in the repo appear in the documented project structure?
+- Does the DAG topology in `graph_builder.py` match the documented DAG?
+- Do the `IngestionState` fields match what the docs claim?
+- Do node/edge types in `extraction_models.py` match `02_DATA_DICTIONARY.md`?
+- Are all documented properties present in the Pydantic models?
+
+**E4. Observability completeness:**
+- Are Prometheus metrics exported from both Go and Python?
+- Are metric names consistent between code and alerting rules?
+- Is distributed tracing (OpenTelemetry) propagated end-to-end (Go → Python → Neo4j)?
+- Are trace context headers forwarded in HTTP calls?
+- Are there blind spots where failures occur silently (no metric, no log, no trace)?
+
+**Record Sub-Audit E findings before proceeding.**
 
 ---
 
 ## Phase 5: Report Generation
 
-Write the report to `critical-audit-report.md`. Follow the external audit report format exactly:
+Merge all sub-audit findings into a single report. Write to `critical-audit-report.md`:
 
 ```markdown
 # GraphRAG Architect — Deep Technical System Audit Report
@@ -337,7 +470,7 @@ Quality Gates: Pylint X/10, Python A/B, Go C/D
 ---
 ```
 
-Then, ONLY if there are findings, organize them by severity tier. Each tier is a numbered section:
+Then, ONLY if there are findings, organize them by severity tier:
 
 ```markdown
 ## 1. Critical Security & Data Loss Vectors (Blockers)
@@ -346,6 +479,8 @@ Then, ONLY if there are findings, organize them by severity tier. Each tier is a
 
 **Location:** `file/path.ext` → `function_name` (line N)
 **Issue:** <Precise description of what is wrong>
+**Defeat test:**
+    <The specific input/scenario you constructed and what happened when you traced it through the code>
 **Evidence:**
     ```
     <verbatim code snippet from the file>
@@ -355,26 +490,27 @@ Then, ONLY if there are findings, organize them by severity tier. Each tier is a
 
 ---
 
-## 2. Architectural Drift & Data Loss (Blockers)
+## 2. Infrastructure & Operational Risks (Blockers)
 
 ### 2.N ...
 
 ---
 
-## 3. High Severity / Operations Risks
+## 3. High Severity / Performance & Resilience
 
 ### 3.N ...
 
 ---
 
-## 4. Minor Code Smells & Resiliency Issues
+## 4. Minor Code Smells & Documentation Drift
 
 ### 4.N ...
 ```
 
 **Report rules:**
 - OMIT any severity tier that has zero findings. Do not include empty sections.
-- Every finding must have: Location (file:line), Issue, Evidence (verbatim snippet), Risk, Remediation.
+- Every finding MUST have: Location (file:line), Issue, Defeat test or Evidence (verbatim snippet), Risk, Remediation.
+- Blocker and HIGH findings MUST include a defeat test showing the concrete bypass/failure scenario.
 - If the system is clean, the report ends after the Executive Verdict with: "No findings above informational level. System is healthy."
 - Findings are numbered per-section: 1.1, 1.2, 2.1, 3.1, 3.2, etc.
 - Do NOT pad the report. Do NOT include background, methodology, or scope narrative. Findings only.
