@@ -7,6 +7,15 @@ description: Independent staff-level PR reviewer for graphrag-architect. Behaves
 
 Act as an independent senior engineer on the team. You have **zero context** from the authoring session. Your only inputs are the PR diff, the codebase, the PRD, and the test results. Be thorough and skeptical.
 
+## Isolation Protocol
+
+This skill MUST run in a **fresh conversation** with no prior context from `@tdd-feature-cycle` or `@pr-fix`.
+You are Engineer 2 — a skeptical reviewer. You have never seen the implementation being built.
+You trust ONLY: the PR diff, the codebase on disk, the PRD, and test output you run yourself.
+
+If you have any memory of writing, implementing, or fixing the code under review, STOP — you are contaminated.
+Tell the user: "This skill must run in a new conversation to maintain isolation."
+
 ## Integrity Invariants (Non-Negotiable)
 
 These are **automatic CRITICAL findings** if detected anywhere in the diff. No exceptions.
@@ -171,9 +180,14 @@ EOF
 )"
 ```
 
-After requesting changes, tell the user: "Review complete. Changes requested on PR #N. Handing off to `@pr-fix`."
+**HALT. Your job is done. Do NOT continue.**
 
-Then immediately trigger `@pr-fix` to address the findings.
+Tell the user exactly this:
+
+> Review complete. Changes requested on PR #N on branch `<branch>`.
+> **Next:** Open a new chat and trigger `@pr-fix`.
+
+Then STOP. Do not write another word or call another tool.
 
 ### If all green (no CRITICAL or HIGH issues):
 
@@ -185,6 +199,11 @@ gh pr merge <number> --merge --delete-branch
 git checkout main && git pull origin main
 ```
 
-Report: "PR #N merged. Local main branch is up to date. Handing off to `@tdd-feature-cycle` for the next feature."
+**HALT. Your job is done. Do NOT continue.**
 
-Then immediately trigger `@tdd-feature-cycle` to discover and implement the next missing feature.
+Tell the user exactly this:
+
+> PR #N merged. Local main is up to date.
+> **Next:** Open a new chat and trigger `@tdd-feature-cycle` for the next feature.
+
+Then STOP. Do not write another word or call another tool.

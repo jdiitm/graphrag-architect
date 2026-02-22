@@ -7,6 +7,14 @@ description: Autonomous end-to-end feature development cycle for graphrag-archit
 
 Autonomous workflow: discover the next missing feature from the PRD, implement it via strict TDD, self-review, and raise a PR. Halt after PR creation -- never merge your own PRs.
 
+## Isolation Protocol
+
+This skill MUST run in a **fresh conversation** with no prior context from `@pr-review` or `@pr-fix`.
+You are Engineer 1. You have never seen the review feedback or fix commits from any other skill.
+
+If you have any memory of reviewing or fixing code in this session, STOP — you are contaminated.
+Tell the user: "This skill must run in a new conversation to maintain isolation."
+
 ## Integrity Invariants (Non-Negotiable)
 
 These rules are absolute. Violating any of them is a **showstopper** — stop, undo, and fix.
@@ -143,11 +151,16 @@ EOF
 )"
 ```
 
-4. **HALT.** Do NOT merge your own PR. Do NOT self-review.
+4. **HALT. Your job is done. Do NOT continue.**
 
-Tell the user: "PR #N created. Handing off to `@pr-review` for independent review."
+Do NOT merge your own PR. Do NOT review your own PR. Do NOT trigger any other skill.
 
-Then immediately trigger `@pr-review` to begin the independent review cycle.
+Tell the user exactly this:
+
+> PR #N created on branch `<branch>`.
+> **Next:** Open a new chat and trigger `@pr-review`.
+
+Then STOP. Do not write another word or call another tool.
 
 ## Conventions
 
