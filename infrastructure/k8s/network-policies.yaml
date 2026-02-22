@@ -22,7 +22,9 @@ spec:
     - Ingress
   ingress:
     - from:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: graphrag
           podSelector:
             matchLabels:
               app: ingestion-worker
