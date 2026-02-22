@@ -5,16 +5,33 @@ from typing import Optional
 
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     SimpleSpanProcessor,
     SpanExporter,
 )
 from opentelemetry.sdk.trace.sampling import ParentBasedTraceIdRatio
+from opentelemetry.trace import StatusCode
 
 _SERVICE_NAME = "graphrag-orchestrator"
 _STATE: dict[str, trace.Tracer] = {}
+
+
+class ErrorForceExportProcessor(SimpleSpanProcessor):
+    def __init__(self, span_exporter: SpanExporter) -> None:
+        super().__init__(span_exporter)
+        self._error_exporter = span_exporter
+
+    def on_end(self, span: "ReadableSpan") -> None:
+        if span.status and span.status.status_code == StatusCode.ERROR:
+            self._error_exporter.export((span,))
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return True
+
+    def shutdown(self) -> None:
+        pass
 
 
 def _build_sampler() -> ParentBasedTraceIdRatio:
@@ -34,9 +51,9 @@ def configure_telemetry(
         otlp_endpoint = os.environ.get(
             "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
         )
-        provider.add_span_processor(
-            BatchSpanProcessor(OTLPSpanExporter(endpoint=otlp_endpoint))
-        )
+        otlp_exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
+        provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+        provider.add_span_processor(ErrorForceExportProcessor(otlp_exporter))
 
     trace.set_tracer_provider(provider)
     _STATE["tracer"] = provider.get_tracer(_SERVICE_NAME)

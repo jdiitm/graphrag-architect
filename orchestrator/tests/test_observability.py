@@ -5,6 +5,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
 from orchestrator.app.observability import (
+    ErrorForceExportProcessor,
     _build_sampler,
     configure_telemetry,
     get_tracer,
@@ -571,3 +572,67 @@ class TestSamplerConfig:
             "Test exporter path should use ALWAYS_ON, not ratio-based sampling"
         )
         provider.shutdown()
+
+
+class TestErrorForceExportProcessor:
+    def test_error_span_always_exported(self):
+        from opentelemetry.trace import StatusCode
+
+        exporter = MemoryExporter()
+        processor = ErrorForceExportProcessor(exporter)
+        provider = TracerProvider()
+        provider.add_span_processor(processor)
+        tracer = provider.get_tracer("test")
+
+        with tracer.start_as_current_span("error-op") as span:
+            span.set_status(StatusCode.ERROR, "something broke")
+
+        processor.force_flush()
+        exported = exporter.get_finished_spans()
+        error_spans = [s for s in exported if s.name == "error-op"]
+        assert len(error_spans) == 1
+        assert error_spans[0].status.status_code == StatusCode.ERROR
+        provider.shutdown()
+
+    def test_success_span_not_force_exported(self):
+        from opentelemetry.trace import StatusCode
+
+        exporter = MemoryExporter()
+        processor = ErrorForceExportProcessor(exporter)
+        provider = TracerProvider()
+        provider.add_span_processor(processor)
+        tracer = provider.get_tracer("test")
+
+        with tracer.start_as_current_span("ok-op") as span:
+            span.set_status(StatusCode.OK)
+
+        processor.force_flush()
+        exported = exporter.get_finished_spans()
+        ok_spans = [s for s in exported if s.name == "ok-op"]
+        assert len(ok_spans) == 0
+        provider.shutdown()
+
+    def test_unset_status_not_force_exported(self):
+        exporter = MemoryExporter()
+        processor = ErrorForceExportProcessor(exporter)
+        provider = TracerProvider()
+        provider.add_span_processor(processor)
+        tracer = provider.get_tracer("test")
+
+        with tracer.start_as_current_span("neutral-op"):
+            pass
+
+        processor.force_flush()
+        exported = exporter.get_finished_spans()
+        neutral_spans = [s for s in exported if s.name == "neutral-op"]
+        assert len(neutral_spans) == 0
+        provider.shutdown()
+
+    def test_production_telemetry_includes_error_processor(self):
+        with patch.dict("os.environ", {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317"}):
+            provider = configure_telemetry()
+            processor_types = [
+                type(sp).__name__ for sp in provider._active_span_processor._span_processors
+            ]
+            assert "ErrorForceExportProcessor" in processor_types
+            provider.shutdown()
