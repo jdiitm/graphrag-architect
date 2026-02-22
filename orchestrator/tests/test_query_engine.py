@@ -605,6 +605,58 @@ class TestCypherValidation:
         assert result["cypher_results"] == []
 
 
+class TestBuildAclFilterRequireTokens:
+    def test_raises_when_require_tokens_true_and_secret_empty(self, base_query_state):
+        from orchestrator.app.access_control import AuthConfigurationError
+        from orchestrator.app.query_engine import _build_acl_filter
+
+        state = {**base_query_state, "authorization": "Bearer some.token"}
+        fake_auth = MagicMock()
+        fake_auth.require_tokens = True
+        fake_auth.token_secret = ""
+
+        with patch(
+            "orchestrator.app.query_engine.AuthConfig.from_env",
+            return_value=fake_auth,
+        ), pytest.raises(AuthConfigurationError):
+            _build_acl_filter(state)
+
+    def test_no_error_when_require_tokens_false_and_secret_empty(self, base_query_state):
+        from orchestrator.app.query_engine import _build_acl_filter
+
+        state = {**base_query_state, "authorization": ""}
+        fake_auth = MagicMock()
+        fake_auth.require_tokens = False
+        fake_auth.token_secret = ""
+
+        with patch(
+            "orchestrator.app.query_engine.AuthConfig.from_env",
+            return_value=fake_auth,
+        ):
+            result = _build_acl_filter(state)
+
+        assert result is not None
+
+    def test_no_error_when_require_tokens_true_and_secret_set(self, base_query_state):
+        from orchestrator.app.access_control import sign_token
+        from orchestrator.app.query_engine import _build_acl_filter
+
+        secret = "test-secret-key"
+        token = sign_token("team=infra,namespace=default,role=viewer", secret)
+        state = {**base_query_state, "authorization": f"Bearer {token}"}
+        fake_auth = MagicMock()
+        fake_auth.require_tokens = True
+        fake_auth.token_secret = secret
+
+        with patch(
+            "orchestrator.app.query_engine.AuthConfig.from_env",
+            return_value=fake_auth,
+        ):
+            result = _build_acl_filter(state)
+
+        assert result is not None
+
+
 class TestNeo4jDriverTimeout:
     def test_pool_configured_with_timeout(self):
         from orchestrator.app import neo4j_pool

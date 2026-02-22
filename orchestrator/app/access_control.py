@@ -13,6 +13,10 @@ class InvalidTokenError(Exception):
     pass
 
 
+class AuthConfigurationError(Exception):
+    pass
+
+
 def sign_token(
     payload: str,
     secret: str,

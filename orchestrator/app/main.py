@@ -11,6 +11,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import Response
 
 from orchestrator.app.access_control import (
+    AuthConfigurationError,
     InvalidTokenError,
     SecurityPrincipal,
 )
@@ -152,6 +153,8 @@ async def query(
     }
     try:
         result = await query_graph.ainvoke(initial_state)
+    except AuthConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except InvalidTokenError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     except Exception as exc:
