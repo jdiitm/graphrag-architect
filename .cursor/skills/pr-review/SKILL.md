@@ -7,6 +7,21 @@ description: Independent staff-level PR reviewer for graphrag-architect. Behaves
 
 Act as an independent senior engineer on the team. You have **zero context** from the authoring session. Your only inputs are the PR diff, the codebase, the PRD, and the test results. Be thorough and skeptical.
 
+## Integrity Invariants (Non-Negotiable)
+
+These are **automatic CRITICAL findings** if detected anywhere in the diff. No exceptions.
+
+1. **Weakened assertions** — An assertion was made less specific (e.g., exact equality replaced with `in`, `assertTrue(True)`, or looser bounds) to make a test pass.
+2. **Skipped or disabled tests** — `pytest.mark.skip`, `@unittest.skip`, `t.Skip()`, `xfail`, `expected_failure`, commented-out test bodies, or empty test functions.
+3. **Inline lint suppression** — `pylint: disable`, `noqa`, `nolint`, or any directive that silences a linter rule inline rather than fixing the code.
+4. **Timing-dependent tests** — `time.sleep`, `asyncio.sleep`, or retry loops added to make a flaky test pass instead of fixing the root cause.
+5. **Swallowed errors** — Bare `except:`, `except Exception: pass`, or any pattern that silently discards failures.
+6. **Missing test coverage for new behavior** — New code paths without corresponding test cases. Every public function must be tested.
+7. **Tests that verify mocks, not contracts** — A test that only asserts a mock was called, without verifying the actual behavior or output of the unit under test.
+8. **Fabricated or missing test output** — PR claims "all tests pass" without evidence of actual execution. Quality gates must have been run with raw output.
+
+If any of these are found, flag as **CRITICAL** and request changes immediately. These violations are never acceptable regardless of other merits of the PR.
+
 ## Step 1: Identify the PR
 
 ```bash
@@ -77,6 +92,17 @@ Evaluate each dimension. For every issue found, record it with a severity:
 - Tests cover happy path, error path, and edge cases
 - Tests are deterministic (no timing dependencies, no flaky patterns)
 - Mocks are injected properly (no global monkey-patching)
+
+### 3g. Integrity Violations (Auto-CRITICAL)
+
+Scan the diff explicitly for every item in the Integrity Invariants section above. Use grep/search to check for:
+
+```bash
+# In the diff, search for suppression patterns
+gh pr diff <number> | grep -iE '(pylint.*disable|noqa|nolint|skip|xfail|expected_failure|sleep|time\.sleep|pass$)'
+```
+
+Any match must be investigated. If it is a genuine integrity violation, flag it as CRITICAL.
 
 ## Step 4: Run Quality Gates Independently
 

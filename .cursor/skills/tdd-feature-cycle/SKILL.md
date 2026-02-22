@@ -7,6 +7,21 @@ description: Autonomous end-to-end feature development cycle for graphrag-archit
 
 Autonomous workflow: discover the next missing feature from the PRD, implement it via strict TDD, self-review, and raise a PR. Halt after PR creation -- never merge your own PRs.
 
+## Integrity Invariants (Non-Negotiable)
+
+These rules are absolute. Violating any of them is a **showstopper** — stop, undo, and fix.
+
+1. **Never weaken a test to make it pass.** If a test fails, fix the implementation. The only reason to modify a test is if the test itself has a genuine specification error — and you must explain why in the commit message.
+2. **Never skip, disable, or ignore a test.** No `pytest.mark.skip`, `@unittest.skip`, `t.Skip()`, `xfail`, `expected_failure`, or equivalent. No commenting out test cases.
+3. **Never add `pylint: disable`, `noqa`, `nolint`, or any inline suppression** to bypass a lint rule. Fix the code or update `pyproject.toml` if the rule is genuinely inapplicable project-wide.
+4. **Never add sleeps, retries, or timing workarounds** to mask flaky behavior. Tests must be deterministic. If a test is flaky, find and fix the root cause.
+5. **Never claim tests passed without raw output.** Every test run must include the verbatim terminal output in your response. If you did not run tests, say "I did not run tests."
+6. **Never fabricate, truncate, or paraphrase test output.** The user must see the real result.
+7. **Never reduce assertion specificity.** Do not replace exact equality checks with weaker containment checks, existence checks, or `assertTrue(True)` to make a test pass.
+8. **Documentation and tests are first-class artifacts.** They are never "nice to have." PRD/architecture docs define the specification. Tests verify the specification. Code implements the specification. This order of priority is non-negotiable.
+9. **Never swallow exceptions silently.** No bare `except:`, no `except Exception: pass`. Every error path must be explicit and tested.
+10. **Never merge with failing tests.** Zero tolerance. The full suite must be green before any push.
+
 ## Phase 1: Discovery & Branching
 
 1. Read these files in parallel:
@@ -46,8 +61,9 @@ cd workers/ingestion && go test ./... -v -count=1 -timeout 30s
 ### Green: Minimal Implementation
 
 - Write the minimal code to make all tests pass.
-- Run tests again. If any fail, fix the implementation -- do not modify tests to make them pass.
+- Run tests again. If any fail, **fix the implementation, not the tests**. The tests encode the specification. The code must conform to them.
 - Do not proceed until all tests are green.
+- Include the full raw test output in your response.
 
 ### Refactor: Staff-Level Self-Review
 
