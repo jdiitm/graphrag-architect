@@ -112,18 +112,24 @@ func (c *Consumer) reportLag(batch []domain.Job) {
 		return
 	}
 	watermarks := reporter.HighWaterMarks()
-	maxOffset := make(map[TopicPartition]int64)
+	type offsetEntry struct {
+		offset int64
+		seen   bool
+	}
+	maxOffset := make(map[TopicPartition]offsetEntry)
 	for _, job := range batch {
 		tp := TopicPartition{Topic: job.Topic, Partition: job.Partition}
-		if job.Offset > maxOffset[tp] {
-			maxOffset[tp] = job.Offset
+		entry := maxOffset[tp]
+		if !entry.seen || job.Offset > entry.offset {
+			maxOffset[tp] = offsetEntry{offset: job.Offset, seen: true}
 		}
 	}
 	for tp, hwm := range watermarks {
-		offset, exists := maxOffset[tp]
+		entry, exists := maxOffset[tp]
 		if !exists {
 			continue
 		}
+		offset := entry.offset
 		lag := hwm - offset
 		if lag < 0 {
 			lag = 0

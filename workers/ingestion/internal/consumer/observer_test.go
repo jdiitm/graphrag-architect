@@ -157,6 +157,49 @@ func TestConsumer_RecordsConsumerLag(t *testing.T) {
 	}
 }
 
+func TestConsumer_RecordsLagWhenOffsetIsZero(t *testing.T) {
+	src := &lagAwareSource{
+		batches: [][]domain.Job{
+			{
+				{
+					Key: []byte("z"), Value: []byte("v"),
+					Topic: "raw-documents", Partition: 0, Offset: 0,
+					Headers: map[string]string{"file_path": "f.go", "source_type": "source_code"},
+					Timestamp: time.Now(),
+				},
+			},
+		},
+	}
+	obs := &recordingObserver{}
+	jobs := make(chan domain.Job, 10)
+	acks := make(chan struct{}, 10)
+
+	c := consumer.New(src, jobs, acks, consumer.WithObserver(obs))
+
+	go func() {
+		for j := range jobs {
+			_ = j
+			acks <- struct{}{}
+		}
+	}()
+
+	err := c.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	close(jobs)
+
+	obs.mu.Lock()
+	defer obs.mu.Unlock()
+
+	if len(obs.lagRecords) != 1 {
+		t.Fatalf("expected 1 lag record for offset-0 partition, got %d", len(obs.lagRecords))
+	}
+	if obs.lagRecords[0].lag != 100 {
+		t.Fatalf("expected lag 100 (hwm=100, offset=0), got %d", obs.lagRecords[0].lag)
+	}
+}
+
 func TestConsumer_WithoutObserver_StillWorks(t *testing.T) {
 	src := &lagAwareSource{
 		batches: [][]domain.Job{{sampleJob("x")}},
