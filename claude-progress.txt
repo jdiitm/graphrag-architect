@@ -1,3 +1,33 @@
+## Completed: Infrastructure Security Hardening (M-1, M-2)
+
+Branch: `feat/fix-infra-security-minor-findings`
+Quality Gates: Pylint 10/10, Python 331/331, Go 49/49
+
+### Audit Findings Addressed
+- **M-1** — Cross-namespace NetworkPolicy: replaced `namespaceSelector: {}`
+  (wildcard) with explicit `kubernetes.io/metadata.name: graphrag` label match
+  in the `allow-orchestrator-ingress` ingestion-worker ingress rule. This
+  prevents pods in other namespaces from spoofing the `app: ingestion-worker`
+  label to reach the orchestrator.
+- **M-2** — Docker Compose APOC file access: removed `NEO4J_apoc_export_file_enabled`,
+  `NEO4J_apoc_import_file_enabled`, and `NEO4J_apoc_import_file_use__neo4j__config`
+  from the dev Neo4j container. No APOC file procedures are used by the application.
+
+### Changes
+1. `infrastructure/k8s/network-policies.yaml`: Added explicit graphrag namespace
+   selector to ingestion-worker ingress rule (was wildcard `{}`)
+2. `infrastructure/docker-compose.yml`: Removed 3 APOC file-access env vars
+3. `orchestrator/tests/test_infra_security.py`: 8 new tests (3 NetworkPolicy
+   namespace restriction, 5 Docker Compose APOC file access prevention)
+
+### Architecture Decision: Infrastructure-as-Code Testing
+Added Python tests that parse infrastructure YAML files and validate security
+properties. This pattern (already used by `test_alerting_rules.py`) prevents
+security regressions by encoding infrastructure security requirements as
+executable specifications.
+
+---
+
 ## Completed: Fix Manifest Entity Loss + HMAC Token Verification (H-1, H-2, M-10)
 
 Branch: `feat/fix-manifest-loss-and-token-verification`
