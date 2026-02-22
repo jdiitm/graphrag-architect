@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
 )
 
 type ingestDocument struct {
@@ -36,6 +37,9 @@ func NewForwardingProcessor(orchestratorURL string, client *http.Client) *Forwar
 }
 
 func (f *ForwardingProcessor) Process(ctx context.Context, job domain.Job) error {
+	ctx, span := telemetry.StartForwardSpan(ctx, job)
+	defer span.End()
+
 	filePath, ok := job.Headers["file_path"]
 	if !ok {
 		return fmt.Errorf("missing required header: file_path")
