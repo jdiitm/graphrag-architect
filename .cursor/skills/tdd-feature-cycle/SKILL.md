@@ -127,7 +127,9 @@ EOF
 )"
 ```
 
-4. **HALT.** Never merge your own PR. Wait for human review.
+4. **HALT.** Do NOT merge your own PR. Do NOT self-review.
+
+Tell the user: "PR #N created. Trigger `@pr-review` for independent review, or review manually."
 
 ## Conventions
 
