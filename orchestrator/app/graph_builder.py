@@ -8,6 +8,7 @@ from orchestrator.app.config import ExtractionConfig, Neo4jConfig
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.neo4j_client import GraphRepository
 from orchestrator.app.schema_validation import validate_topology
+from orchestrator.app.workspace_loader import load_directory
 
 
 MAX_VALIDATION_RETRIES = 3
@@ -23,7 +24,8 @@ class IngestionState(TypedDict):
 
 
 def load_workspace_files(state: IngestionState) -> dict:
-    return {"raw_files": []}
+    directory_path = state.get("directory_path", "")
+    return {"raw_files": load_directory(directory_path)}
 
 
 async def parse_go_and_python_services(state: IngestionState) -> dict:
