@@ -1,11 +1,14 @@
 import base64
 import binascii
+import logging
 from typing import Any, Dict, List
 
 from fastapi import FastAPI, HTTPException
 
 from orchestrator.app.graph_builder import ingestion_graph
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="GraphRAG Orchestrator", version="1.0.0")
 
@@ -44,7 +47,10 @@ async def ingest(request: IngestRequest) -> IngestResponse:
     try:
         result = await ingestion_graph.ainvoke(initial_state)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("Ingestion graph failed")
+        raise HTTPException(
+            status_code=500, detail="Internal ingestion error"
+        ) from exc
     return IngestResponse(
         status=result.get("commit_status", "unknown"),
         entities_extracted=len(result.get("extracted_nodes", [])),

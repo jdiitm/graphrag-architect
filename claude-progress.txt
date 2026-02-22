@@ -1,3 +1,60 @@
+## 2026-02-22: FR-1 Kafka Pipeline — ForwardingProcessor, Consumer, cmd/main.go — Complete
+
+### Completed
+- Created workers/ingestion/internal/processor/forwarding.go (ForwardingProcessor):
+  - Implements DocumentProcessor interface
+  - Constructs IngestRequest JSON from domain.Job (base64 encodes Value, maps Headers)
+  - HTTP POSTs to orchestrator /ingest endpoint
+  - Validates required headers (file_path, source_type), optional (repository, commit_sha)
+  - Content-Type: application/json, error on non-2xx response
+- Created workers/ingestion/internal/consumer/consumer.go:
+  - JobSource interface (Poll, Close) for abstracting Kafka dependency
+  - Consumer loop: polls batches from source, sends to dispatcher jobs channel
+  - Clean shutdown on context cancellation or ErrSourceClosed
+- Created workers/ingestion/cmd/main.go (entry point):
+  - Wires: KafkaJobSource → Consumer → Dispatcher → ForwardingProcessor
+  - DLQ Handler with LogDLQSink (logging-based DLQ for initial deployment)
+  - Graceful shutdown via SIGINT/SIGTERM signal handling
+  - Config from environment: ORCHESTRATOR_URL, KAFKA_BROKERS, KAFKA_TOPIC, KAFKA_CONSUMER_GROUP, NUM_WORKERS, MAX_RETRIES
+- Created workers/ingestion/cmd/kafka.go:
+  - KafkaJobSource: franz-go kgo.Client wrapper implementing JobSource
+  - Converts kgo.Record → domain.Job (headers, key, value, metadata)
+  - Manual offset commit after successful poll (at-least-once delivery)
+  - LogDLQSink: logs DLQ results for observability
+- Fixed LOW-001 (security): orchestrator/app/main.py now returns generic "Internal ingestion error" instead of str(exc), logs full exception server-side
+- Updated README.md: accurate project tree (all 10 app modules, 6 test files), test counts (117 Python, 25 Go), Go 1.24+ prereq
+- Updated tdd-feature-cycle SKILL.md: YELLOW verdict now continues to Phase 1 (only GREEN halts)
+
+### TDD: 17 new tests + 8 existing = 25 Go tests total
+- ForwardingProcessor (11 tests): success, JSON format, base64 encoding, /ingest path, Content-Type, server error, connection refused, context cancelled, missing file_path, missing source_type, optional headers omitted
+- Consumer (4 tests): polls and sends all jobs, stops on context cancel, returns source error, stops on source closed
+- End-to-End wiring (2 tests): consumer → dispatcher → forwarding (success), failed job routes to DLQ
+
+### Architecture Decisions
+- Job.Value = raw bytes, ForwardingProcessor base64-encodes for HTTP transport (efficient on Kafka wire)
+- Job.Headers carry metadata (file_path, source_type, repository, commit_sha) matching Python IngestDocument schema
+- JobSource interface decouples consumer loop from franz-go — fully unit-testable with stubs
+- One Job = one HTTP POST with one document (batching is a Kafka-level concern)
+- DisableAutoCommit + manual CommitUncommittedOffsets after poll for at-least-once semantics
+
+### Quality Gates
+- Pylint: 10/10
+- Python tests: 117/117 passing
+- Go tests: 25/25 passing
+- Total: 142/142 passing, 0 regressions
+
+### FR-1 Status: Complete
+- KafkaConsumer (franz-go integration): ✅
+- ForwardingProcessor (HTTP POST to Python): ✅
+- cmd/main.go entry point: ✅
+- Dispatcher + DLQ Handler: ✅ (pre-existing)
+- FastAPI /ingest receiver: ✅ (pre-existing)
+
+### Next Step
+- FR-4: Hybrid Query Routing (LangGraph StateGraph with conditional Vector/Cypher/Hybrid paths)
+
+---
+
 ## 2026-02-22: FastAPI /ingest Endpoint — Complete
 
 ### Completed
