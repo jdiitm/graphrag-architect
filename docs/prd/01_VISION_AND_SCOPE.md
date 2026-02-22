@@ -83,7 +83,7 @@ ORDER BY hops
 
 **Trigger:** Ingestion of a new codebase, Kubernetes namespace, or Kafka cluster configuration.
 
-**Mechanism:** The LangGraph ingestion DAG processes raw files through `ServiceExtractor` (Gemini), producing a complete `SystemTopology` — all 4 node types and 4 edge types — committed to Neo4j via idempotent MERGE operations.
+**Mechanism:** The LangGraph ingestion DAG processes raw files through `ServiceExtractor` (Gemini), extracting all 4 node types and 4 edge types, committed to Neo4j via idempotent MERGE operations.
 
 **Value:** Eliminates manual architecture diagramming. The knowledge graph is always consistent with the actual codebase and infrastructure configuration.
 

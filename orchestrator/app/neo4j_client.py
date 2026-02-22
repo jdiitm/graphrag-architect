@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
 
@@ -16,8 +16,6 @@ from orchestrator.app.extraction_models import (
     ServiceNode,
 )
 
-NodeEntity = Union[ServiceNode, DatabaseNode, KafkaTopicNode, K8sDeploymentNode]
-EdgeEntity = Union[CallsEdge, ProducesEdge, ConsumesEdge, DeployedInEdge]
 CypherOp = Tuple[str, Dict[str, Any]]
 
 _NODE_TYPES = (ServiceNode, DatabaseNode, KafkaTopicNode, K8sDeploymentNode)

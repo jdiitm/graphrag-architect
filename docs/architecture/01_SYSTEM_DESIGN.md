@@ -30,7 +30,7 @@ graph TB
         fastapi["FastAPI<br/>HTTP endpoint"]
         langgraph_ingest["LangGraph Ingestion DAG<br/>StateGraph"]
         extractor["ServiceExtractor<br/>Gemini LLM"]
-        langgraph_query["LangGraph Query Router<br/>Phase 2"]
+        langgraph_query["LangGraph Query Router<br/>StateGraph"]
     end
 
     subgraph neo4j_db ["Neo4j Knowledge Graph"]
@@ -95,14 +95,19 @@ graph TB
 
 ```
 workers/ingestion/
-  cmd/main.go                          # Entry point (pending)
+  cmd/
+    main.go                            # Entry point + signal handling
+    kafka.go                           # KafkaJobSource + LogDLQSink
   internal/
+    consumer/consumer.go               # JobSource interface + Consumer loop
     domain/job.go                      # Job, Result value types
-    processor/processor.go             # DocumentProcessor interface
     dispatcher/dispatcher.go           # Worker pool + retry logic
-    dispatcher/dispatcher_test.go      # 6 tests
     dlq/handler.go                     # DLQ handler goroutine
-    dlq/handler_test.go                # 2 tests
+    metrics/metrics.go                 # Prometheus metrics
+    metrics/observer.go                # PipelineObserver interface
+    processor/processor.go             # DocumentProcessor interface
+    processor/forwarding.go            # HTTP POST to orchestrator
+    telemetry/telemetry.go             # OpenTelemetry TracerProvider + spans
 ```
 
 **Job type** (`internal/domain/job.go`):
@@ -114,7 +119,7 @@ workers/ingestion/
 | `Topic` | `string` | Source Kafka topic |
 | `Partition` | `int32` | Source partition |
 | `Offset` | `int64` | Source offset |
-| `Headers` | `map[string][]byte` | Kafka headers including `traceparent` |
+| `Headers` | `map[string]string` | Kafka headers including `traceparent` |
 | `Timestamp` | `time.Time` | Kafka message timestamp |
 
 **Dispatcher** (`internal/dispatcher/dispatcher.go`):
@@ -140,12 +145,23 @@ workers/ingestion/
 orchestrator/
   app/
     config.py                # ExtractionConfig (frozen dataclass)
-    extraction_models.py     # Pydantic models: 4 nodes, 4 edges, SystemTopology
+    access_control.py        # SecurityPrincipal, CypherPermissionFilter
+    circuit_breaker.py       # Three-state async circuit breaker
+    config.py                # ExtractionConfig, Neo4jConfig
+    extraction_models.py     # Pydantic models: 4 nodes, 4 edges
+    graph_builder.py         # LangGraph ingestion DAG (6 nodes)
     llm_extraction.py        # ServiceExtractor (Gemini, structured output)
-    graph_builder.py         # LangGraph StateGraph DAG
-    schema_init.cypher       # Neo4j constraint/index DDL
-  tests/
-    test_service_extractor.py  # 11 unit tests
+    main.py                  # FastAPI endpoints (/health, /ingest, /query)
+    manifest_parser.py       # K8s + Kafka YAML parsing
+    neo4j_client.py          # Cypher MERGE operations
+    observability.py         # OpenTelemetry TracerProvider + metrics
+    query_classifier.py      # Keyword-based query complexity classifier
+    query_engine.py          # LangGraph query DAG (6 nodes)
+    query_models.py          # QueryRequest/Response/State models
+    schema_init.cypher       # Neo4j constraints and indexes
+    schema_validation.py     # Topology validation + correction loop
+    workspace_loader.py      # Filesystem workspace scanner
+  tests/                     # 14 test files
   requirements.txt
 ```
 
@@ -155,9 +171,11 @@ orchestrator/
 |---|---|---|
 | `google_api_key` | — | `GOOGLE_API_KEY` env var |
 | `model_name` | `gemini-2.0-flash` | `EXTRACTION_MODEL` env var |
-| `max_concurrency` | 5 | `MAX_CONCURRENCY` env var |
-| `token_budget` | 30000 | `TOKEN_BUDGET` env var |
-| `max_retries` | 3 | `MAX_RETRIES` env var |
+| `max_concurrency` | 5 | `EXTRACTION_MAX_CONCURRENCY` env var |
+| `token_budget_per_batch` | 200000 | `EXTRACTION_TOKEN_BUDGET` env var |
+| `max_retries` | 5 | `EXTRACTION_MAX_RETRIES` env var |
+| `retry_min_wait` | 1.0 | `EXTRACTION_RETRY_MIN_WAIT` env var |
+| `retry_max_wait` | 60.0 | `EXTRACTION_RETRY_MAX_WAIT` env var |
 
 **ServiceExtractor** (`app/llm_extraction.py`):
 
@@ -174,7 +192,7 @@ orchestrator/
 
 | Component | Specification |
 |---|---|
-| Version | Neo4j 5.15.0 (Community Edition for dev, Enterprise for prod) |
+| Version | Neo4j 5.26 (Community Edition for dev, Enterprise for prod) |
 | Ports | 7474 (HTTP/Browser), 7687 (Bolt) |
 | Auth | `neo4j/password` (dev), rotated credentials via K8s Secret (prod) |
 | Plugins | APOC (for batch operations and path expansion) |
@@ -357,14 +375,14 @@ stateDiagram-v2
 
 **Node implementations:**
 
-| Node | Status | Description |
-|---|---|---|
-| `load_workspace` | Stub | Recursively reads directory into `raw_files` |
-| `parse_services` | Implemented | Async `ServiceExtractor.extract_all()` via Gemini |
-| `parse_manifests` | Stub | Extract `K8sDeploymentNode`, `KafkaTopicNode` from YAML |
-| `validate_schema` | Stub | Pydantic validation of all extracted models |
-| `fix_errors` | Stub | LLM re-extraction with error context |
-| `commit_graph` | Stub | Neo4j `MERGE` via async driver session |
+| Node | Description |
+|---|---|
+| `load_workspace` | Recursively reads directory into `raw_files` |
+| `parse_services` | Async `ServiceExtractor.extract_all()` via Gemini |
+| `parse_manifests` | Extracts `K8sDeploymentNode`, `KafkaTopicNode` from YAML |
+| `validate_schema` | Pydantic validation of all extracted models |
+| `fix_errors` | LLM re-extraction with error context (max 3 retries) |
+| `commit_graph` | Neo4j `MERGE` via async driver session with circuit breaker |
 
 ---
 
@@ -374,8 +392,8 @@ stateDiagram-v2
 
 ```
 docker-compose.yml
-  neo4j:5.15.0    -> localhost:7474, :7687
-  kafka:3.9.0     -> localhost:9092 (KRaft single-node)
+  neo4j:5.26-community  -> localhost:7474, :7687
+  kafka:3.9.0           -> localhost:9092 (KRaft single-node)
 ```
 
 Python orchestrator and Go workers run locally outside Docker for rapid iteration with test suites.

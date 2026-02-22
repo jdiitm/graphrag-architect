@@ -8,6 +8,10 @@ venv/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
+
+# Go
+workers/ingestion/ingestion-worker
 
 # Environment
 .env

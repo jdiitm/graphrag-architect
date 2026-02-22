@@ -31,6 +31,8 @@ Represents a discrete microservice, API, or application component identified dur
 | `language` | `STRING` | `INDEXED` | Primary programming language (`go`, `python`, `java`, `typescript`). |
 | `framework` | `STRING` | `INDEXED` | Web/RPC framework (`fastapi`, `gin`, `spring-boot`, `express`). |
 | `opentelemetry_enabled` | `BOOLEAN` | — | Whether the service has OpenTelemetry instrumentation detected in source. |
+| `team_owner` | `STRING` | — | Team that owns this service (for ACL filtering). |
+| `namespace_acl` | `LIST<STRING>` | — | Namespaces with access to this service. |
 
 **Cypher constraint:**
 ```cypher
@@ -293,6 +295,9 @@ CREATE CONSTRAINT k8s_pod_id IF NOT EXISTS FOR (p:K8sPod) REQUIRE p.id IS UNIQUE
 -- Secondary indexes (query acceleration)
 CREATE INDEX service_lang_idx IF NOT EXISTS FOR (s:Service) ON (s.language);
 CREATE INDEX service_framework_idx IF NOT EXISTS FOR (s:Service) ON (s.framework);
+
+-- Fulltext index (vector search path)
+CREATE FULLTEXT INDEX service_name_index IF NOT EXISTS FOR (n:Service) ON EACH [n.name];
 ```
 
 **Index usage guidance:**
@@ -404,29 +409,15 @@ RETURN labels(n)[0] AS source_label,
 
 ## 7. Aggregate Model
 
-The `SystemTopology` Pydantic model in `orchestrator/app/extraction_models.py` is the canonical representation of a complete extracted topology. It is the output of a full ingestion DAG run and the input to `commit_to_neo4j`.
+The ingestion DAG operates on a mixed `List[Any]` of Pydantic node and edge models (`extracted_nodes` in `IngestionState`). The following cardinality expectations apply per ingestion batch:
 
-```python
-class SystemTopology(BaseModel):
-    services: List[ServiceNode]
-    databases: List[DatabaseNode]
-    topics: List[KafkaTopicNode]
-    deployments: List[K8sDeploymentNode]
-    calls: List[CallsEdge]
-    produces: List[ProducesEdge]
-    consumes: List[ConsumesEdge]
-    deployed_in: List[DeployedInEdge]
-```
-
-**Cardinality expectations (per ingestion batch):**
-
-| Collection | Expected Range | Notes |
+| Entity Type | Expected Range | Notes |
 |---|---|---|
-| `services` | 5–200 | Bounded by repository size |
-| `databases` | 1–20 | Typically fewer unique database instances |
-| `topics` | 5–100 | Bounded by Kafka cluster configuration |
-| `deployments` | 5–200 | One per service in typical K8s deployments |
-| `calls` | 10–1,000 | Grows quadratically with service count in dense graphs |
-| `produces` | 5–200 | Bounded by topic count |
-| `consumes` | 5–200 | Bounded by topic count and consumer group count |
-| `deployed_in` | 5–200 | 1:1 with services in typical configurations |
+| `ServiceNode` | 5–200 | Bounded by repository size |
+| `DatabaseNode` | 1–20 | Typically fewer unique database instances |
+| `KafkaTopicNode` | 5–100 | Bounded by Kafka cluster configuration |
+| `K8sDeploymentNode` | 5–200 | One per service in typical K8s deployments |
+| `CallsEdge` | 10–1,000 | Grows quadratically with service count in dense graphs |
+| `ProducesEdge` | 5–200 | Bounded by topic count |
+| `ConsumesEdge` | 5–200 | Bounded by topic count and consumer group count |
+| `DeployedInEdge` | 5–200 | 1:1 with services in typical configurations |

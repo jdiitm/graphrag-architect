@@ -35,7 +35,7 @@ A production-grade GraphRAG system that analyzes distributed systems by building
 | Component | Technology |
 |---|---|
 | Orchestration | Python, LangGraph, FastAPI |
-| Knowledge Graph | Neo4j 5.15 |
+| Knowledge Graph | Neo4j 5.26 |
 | Event Bus | Apache Kafka 3.9 (KRaft) |
 | LLM Extraction | Gemini (via LangChain) |
 | Data Models | Pydantic v2 |
@@ -64,9 +64,12 @@ graphrag-architect/
 │   │   ├── workspace_loader.py          # Filesystem workspace scanner
 │   │   ├── circuit_breaker.py           # Three-state circuit breaker (NFR-6)
 │   │   └── schema_init.cypher           # Neo4j constraints and indexes
-│   ├── tests/                           # 233 tests across 12 test files
+│   ├── tests/
+│   │   ├── conftest.py                  # Shared fixtures (query state, mock helpers)
 │   │   ├── test_access_control.py
+│   │   ├── test_circuit_breaker.py
 │   │   ├── test_ingest_api.py
+│   │   ├── test_integration.py
 │   │   ├── test_manifest_parser.py
 │   │   ├── test_neo4j_client.py
 │   │   ├── test_observability.py
@@ -75,9 +78,7 @@ graphrag-architect/
 │   │   ├── test_query_engine.py
 │   │   ├── test_schema_validation.py
 │   │   ├── test_service_extractor.py
-│   │   ├── test_workspace_loader.py
-│   │   ├── test_circuit_breaker.py
-│   │   └── test_integration.py
+│   │   └── test_workspace_loader.py
 │   └── requirements.txt
 ├── workers/                             # Go high-throughput ingestion
 │   └── ingestion/
@@ -146,18 +147,21 @@ pip install pytest pytest-asyncio
 export GOOGLE_API_KEY="your-gemini-api-key"
 
 # Optional overrides
-export EXTRACTION_MODEL="gemini-2.5-pro"        # default: gemini-2.0-flash
-export EXTRACTION_MAX_CONCURRENCY="5"            # default: 5
-export EXTRACTION_TOKEN_BUDGET="200000"           # default: 200000
+export EXTRACTION_MODEL="gemini-2.5-pro"           # default: gemini-2.0-flash
+export EXTRACTION_MAX_CONCURRENCY="5"              # default: 5
+export EXTRACTION_TOKEN_BUDGET="200000"            # default: 200000
+export EXTRACTION_MAX_RETRIES="5"                  # default: 5
+export EXTRACTION_RETRY_MIN_WAIT="1.0"             # default: 1.0s
+export EXTRACTION_RETRY_MAX_WAIT="60.0"            # default: 60.0s
 ```
 
 ### 4. Run tests
 
 ```bash
-# Python tests (233 tests)
+# Python tests
 python -m pytest orchestrator/tests/ -v
 
-# Go tests (46 tests)
+# Go tests
 cd workers/ingestion && go test ./... -v
 ```
 

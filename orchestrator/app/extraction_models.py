@@ -54,14 +54,3 @@ class DeployedInEdge(BaseModel):
 class ServiceExtractionResult(BaseModel):
     services: List[ServiceNode]
     calls: List[CallsEdge]
-
-
-class SystemTopology(BaseModel):
-    services: List[ServiceNode]
-    databases: List[DatabaseNode]
-    topics: List[KafkaTopicNode]
-    deployments: List[K8sDeploymentNode]
-    calls: List[CallsEdge]
-    produces: List[ProducesEdge]
-    consumes: List[ConsumesEdge]
-    deployed_in: List[DeployedInEdge]

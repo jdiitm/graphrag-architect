@@ -10,30 +10,13 @@ from orchestrator.app.circuit_breaker import (
 )
 from orchestrator.app.extraction_models import ServiceNode, CallsEdge
 from orchestrator.app.neo4j_client import GraphRepository
-
-
-def _mock_async_session(execute_write_side_effect=None):
-    mock_session = AsyncMock()
-    if execute_write_side_effect:
-        mock_session.execute_write = AsyncMock(
-            side_effect=execute_write_side_effect
-        )
-
-    mock_driver = MagicMock()
-
-    @asynccontextmanager
-    async def session_ctx(**kwargs):
-        yield mock_session
-
-    mock_driver.session = session_ctx
-    mock_driver.close = AsyncMock()
-    return mock_driver, mock_session
+from orchestrator.tests.conftest import mock_async_session
 
 
 class TestGraphRepositoryWithCircuitBreaker:
     @pytest.mark.asyncio
     async def test_commit_succeeds_through_circuit_breaker(self):
-        mock_driver, mock_session = _mock_async_session()
+        mock_driver, mock_session = mock_async_session()
         cb = CircuitBreaker(CircuitBreakerConfig(failure_threshold=2))
         repo = GraphRepository(mock_driver, circuit_breaker=cb)
 
@@ -48,7 +31,7 @@ class TestGraphRepositoryWithCircuitBreaker:
 
     @pytest.mark.asyncio
     async def test_circuit_opens_after_repeated_failures(self):
-        mock_driver, _ = _mock_async_session(
+        mock_driver, _ = mock_async_session(
             execute_write_side_effect=OSError("conn refused")
         )
         cb = CircuitBreaker(CircuitBreakerConfig(failure_threshold=2))
@@ -70,7 +53,7 @@ class TestGraphRepositoryWithCircuitBreaker:
 
     @pytest.mark.asyncio
     async def test_empty_entities_skips_circuit_breaker(self):
-        mock_driver, mock_session = _mock_async_session()
+        mock_driver, mock_session = mock_async_session()
         cb = CircuitBreaker(CircuitBreakerConfig(failure_threshold=1))
         repo = GraphRepository(mock_driver, circuit_breaker=cb)
 
@@ -105,7 +88,7 @@ class TestIngestionDAGFlow:
             ),
         ]
 
-        mock_driver, mock_session = _mock_async_session()
+        mock_driver, mock_session = mock_async_session()
 
         with (
             patch.dict("os.environ", _ENV_VARS),

@@ -38,4 +38,7 @@ class ExtractionConfig:
             token_budget_per_batch=int(
                 os.environ.get("EXTRACTION_TOKEN_BUDGET", "200000")
             ),
+            max_retries=int(os.environ.get("EXTRACTION_MAX_RETRIES", "5")),
+            retry_min_wait=float(os.environ.get("EXTRACTION_RETRY_MIN_WAIT", "1.0")),
+            retry_max_wait=float(os.environ.get("EXTRACTION_RETRY_MAX_WAIT", "60.0")),
         )
