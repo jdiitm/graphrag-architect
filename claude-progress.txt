@@ -1,3 +1,46 @@
+## 2026-02-22: FR-5 Schema Validation with Correction Loop — Green Phase Complete
+
+### Completed
+- Created orchestrator/app/schema_validation.py: validate_topology() with:
+  - Type checking: rejects entities not in the 8 known Pydantic types
+  - Referential integrity: CallsEdge, ProducesEdge, ConsumesEdge, DeployedInEdge checked against existing nodes
+  - Index building: service_ids, topic_names, deployment_ids sets for O(1) lookups
+  - Per-edge-type validators: _validate_calls, _validate_produces, _validate_consumes, _validate_deployed_in
+- Updated orchestrator/app/graph_builder.py:
+  - Added validation_retries field to IngestionState TypedDict
+  - Added MAX_VALIDATION_RETRIES = 3 constant
+  - validate_extracted_schema now delegates to validate_topology()
+  - route_validation now checks retry count: routes to commit when retries >= 3 (gives up gracefully)
+  - fix_extraction_errors is now async, re-invokes ServiceExtractor.extract_all(), increments retry counter
+- TDD: 19 new tests written and passing (validate_topology x12, route_validation x3, DAG nodes x4)
+
+### Architecture Decisions
+- Validation is pure functions in schema_validation.py (no I/O, fully deterministic, fast)
+- Referential integrity checks all 4 edge types against their referenced node types
+- Correction loop re-extracts from raw_files via the existing ServiceExtractor (same LLM path)
+- Max 3 retries before routing to commit with whatever valid entities remain
+- Unknown entity types (non-Pydantic) are flagged but don't block valid entities
+
+### Quality Gates
+- Pylint: 10/10
+- Python tests: 45/45 passing (19 new + 26 existing)
+- Go tests: 8/8 passing (no regressions)
+- Total: 53/53 passing, 0 regressions
+
+### PR Status
+- Branch: feat/schema-validation-loop — PR raised, awaiting human review
+
+### Unresolved
+- load_workspace_files node is still a stub
+- parse_k8s_and_kafka_manifests node is still a stub
+- No integration test with real LLM correction loop (requires GOOGLE_API_KEY)
+
+### Next Step
+- Implement load_workspace_files to recursively read a directory into raw_files
+- OR implement the FastAPI /ingest HTTP endpoint to receive payloads from Go workers
+
+---
+
 ## 2026-02-22: FR-3 Neo4j Knowledge Graph Persistence — Green Phase Complete
 
 ### Completed

@@ -7,6 +7,10 @@ from neo4j.exceptions import Neo4jError
 from orchestrator.app.config import ExtractionConfig, Neo4jConfig
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.neo4j_client import GraphRepository
+from orchestrator.app.schema_validation import validate_topology
+
+
+MAX_VALIDATION_RETRIES = 3
 
 
 class IngestionState(TypedDict):
@@ -14,6 +18,7 @@ class IngestionState(TypedDict):
     raw_files: List[Dict[str, str]]
     extracted_nodes: List[Any]
     extraction_errors: List[str]
+    validation_retries: int
     commit_status: str
 
 
@@ -31,15 +36,26 @@ def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
     return {"extracted_nodes": []}
 
 def validate_extracted_schema(state: IngestionState) -> dict:
-    return {"extraction_errors": []}
+    errors = validate_topology(state.get("extracted_nodes", []))
+    return {"extraction_errors": errors}
 
 def route_validation(state: IngestionState) -> str:
     if state.get("extraction_errors"):
+        if state.get("validation_retries", 0) >= MAX_VALIDATION_RETRIES:
+            return "commit_to_neo4j"
         return "fix_extraction_errors"
     return "commit_to_neo4j"
 
-def fix_extraction_errors(state: IngestionState) -> dict:
-    return {"extracted_nodes": [], "extraction_errors": []}
+async def fix_extraction_errors(state: IngestionState) -> dict:
+    config = ExtractionConfig.from_env()
+    extractor = ServiceExtractor(config)
+    result = await extractor.extract_all(state.get("raw_files", []))
+    retries = state.get("validation_retries", 0)
+    return {
+        "extracted_nodes": list(result.services) + list(result.calls),
+        "extraction_errors": [],
+        "validation_retries": retries + 1,
+    }
 
 async def commit_to_neo4j(state: IngestionState) -> dict:
     config = Neo4jConfig.from_env()
