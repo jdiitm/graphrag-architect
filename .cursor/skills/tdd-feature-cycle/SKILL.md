@@ -10,12 +10,13 @@ Autonomous workflow: launch an independent audit (zero-context subagent), discov
 ## FSM Position
 
 ```
-AUDIT (separate session) → **TDD** ─┬─ [RED]  → implement → PR → REVIEW ─┬─ [merged]  → AUDIT → TDD
-                                     └─ [!RED] → idle                      └─ [changes] → FIX → REVIEW
+AUDIT (separate session) → **TDD** ─┬─ [RED/YELLOW] → implement → PR → REVIEW ─┬─ [merged]  → AUDIT → TDD
+                                     └─ [GREEN]      → idle                      └─ [changes] → FIX → REVIEW
 ```
 
 You are in the **TDD** state. You are the primary entry point for development cycles.
 Phase 0 verifies an independent audit exists. The audit MUST have run in a separate chat — never in this session.
+Only GREEN halts — both RED and YELLOW have actionable work.
 
 ## Isolation Protocol
 
@@ -73,15 +74,15 @@ The subagent will produce `audit-report.md` on disk. Wait for it to complete, th
 
 **If `audit-report.md` exists** (either already present or just produced by the subagent): Read the `## Verdict` section.
 
-- **If verdict is GREEN or YELLOW:** HALT. Delete the report and tell the user:
+- **If verdict is GREEN:** HALT. Delete the report and tell the user:
   ```bash
   rm audit-report.md
   ```
-  > Audit verdict is [VERDICT]. No RED-priority work. System is healthy.
+  > Audit verdict is GREEN. All Phase 1 FRs implemented, all gates pass, zero findings. System is healthy.
 
   Then STOP.
 
-- **If verdict is RED:** Continue to Phase 1. The report identifies what needs building.
+- **If verdict is RED or YELLOW:** Continue to Phase 1. The report identifies what needs building — RED has CRITICAL/Stub gaps, YELLOW has HIGH findings. Either way, there is real work to do.
 
 ## Phase 1: Discovery & Branching
 
