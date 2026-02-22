@@ -257,14 +257,43 @@ Produce the report in this exact format. Write it to `audit-report.md` in the re
 1. ...
 2. ...
 3. ...
+
+## Verdict
+
+**Status:** RED / YELLOW / GREEN
+**Action:** Trigger `@tdd-feature-cycle` / No action needed
 ```
 
 Also present the full report content in your response to the user.
 
-## Step 7: Done
+## Step 7: Verdict — Gate the Next Action
 
-After presenting the report, tell the user:
+The audit controls whether further development work should happen. This prevents the skill loop from running endlessly when there is nothing useful to do.
+
+### If RED (any CRITICAL or HIGH findings, or unimplemented FRs with no open PR):
+
+Tell the user exactly this:
 
 > Audit complete. Report written to `audit-report.md`.
-> **Next:** Review findings. If action is needed, open a new chat and trigger `@tdd-feature-cycle` or `@pr-fix` as appropriate.
+> **X CRITICAL, Y HIGH findings. Z/8 FRs unimplemented.**
+> **Next:** Open a new chat and trigger `@tdd-feature-cycle` to address the highest-priority gap.
 > **Next audit:** Trigger `@cron-audit` again in ~30 minutes.
+
+### If YELLOW (only LOW findings, or all remaining FRs are Phase 2 / spec'd-not-yet-planned):
+
+Tell the user exactly this:
+
+> Audit complete. Report written to `audit-report.md`.
+> **No CRITICAL or HIGH findings. Only LOW suggestions remain.**
+> All planned FRs are implemented or explicitly deferred to Phase 2.
+> **Do NOT trigger `@tdd-feature-cycle`** — there is no high-priority work to pick up.
+> **Next:** Review LOW findings at your discretion. Trigger `@cron-audit` again in ~30 minutes.
+
+### If GREEN (zero findings, all quality gates pass, all Phase 1 FRs implemented):
+
+Tell the user exactly this:
+
+> Audit complete. Report written to `audit-report.md`.
+> **System is GREEN. All quality gates pass. No findings.**
+> **Do NOT trigger `@tdd-feature-cycle`** — the system is healthy and complete for the current phase.
+> **Next audit:** Trigger `@cron-audit` again in ~30 minutes to monitor for drift.
