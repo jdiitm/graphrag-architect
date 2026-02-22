@@ -7,6 +7,43 @@ description: Autonomous end-to-end feature development cycle for graphrag-archit
 
 Autonomous workflow: discover the next missing feature from the PRD, implement it via strict TDD, self-review, and raise a PR. Halt after PR creation -- never merge your own PRs.
 
+## FSM Position
+
+```
+AUDIT → DOC_SYNC → [RED] → **TDD** → REVIEW → (FIX loop) → AUDIT → ...
+                   [YELLOW/GREEN] → wait → AUDIT
+```
+
+You are in the **TDD** state. You were triggered because the last audit verdict was RED.
+Your only exit: HALT and emit `→ REVIEW`.
+
+## Isolation Protocol
+
+This skill MUST run in a **fresh conversation** with no prior context from `@pr-review`, `@pr-fix`, `@cron-audit`, or `@cron-doc-sync`.
+You are Engineer 1. You have never seen the review feedback, fix commits, or audit reports from any other skill.
+
+If you have any memory of reviewing, fixing, or auditing code in this session, STOP — you are contaminated.
+Tell the user: "This skill must run in a new conversation to maintain isolation."
+
+## Precondition Gate
+
+Before doing ANY work, verify these conditions. If any fail, HALT immediately.
+
+```bash
+# 1. Must be on main
+git branch --show-current  # must output "main"
+
+# 2. No open PRs (would mean a review/fix cycle is in progress)
+gh pr list --state open --limit 1  # must be empty
+
+# 3. Audit verdict must be RED (this skill only runs when there's work to do)
+cat audit-report.md  # read the Verdict section
+```
+
+**If not on main:** HALT. Tell the user: "Not on main branch. Resolve the current branch first."
+**If open PRs exist:** HALT. Tell the user: "Open PR detected. Complete the review/fix cycle first via `@pr-review`."
+**If audit-report.md is missing or verdict is not RED:** HALT. Tell the user: "Audit verdict is not RED. No high-priority work to do. Run `@cron-audit` to re-assess."
+
 ## Integrity Invariants (Non-Negotiable)
 
 These rules are absolute. Violating any of them is a **showstopper** — stop, undo, and fix.
@@ -143,11 +180,16 @@ EOF
 )"
 ```
 
-4. **HALT.** Do NOT merge your own PR. Do NOT self-review.
+4. **HALT. Your job is done. Do NOT continue.**
 
-Tell the user: "PR #N created. Handing off to `@pr-review` for independent review."
+Do NOT merge your own PR. Do NOT review your own PR. Do NOT trigger any other skill.
 
-Then immediately trigger `@pr-review` to begin the independent review cycle.
+Tell the user exactly this:
+
+> PR #N created on branch `<branch>`.
+> **Next:** Open a new chat and trigger `@pr-review`.
+
+Then STOP. Do not write another word or call another tool.
 
 ## Conventions
 

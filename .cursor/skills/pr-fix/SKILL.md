@@ -7,6 +7,26 @@ description: Fix changes requested in a PR review for graphrag-architect. Reads 
 
 Address review feedback on an open PR using the same TDD discipline as feature development. After pushing fixes, the `pr-review` skill should be re-triggered for a fresh independent review.
 
+## FSM Position
+
+```
+AUDIT → DOC_SYNC → TDD → REVIEW → **FIX** → REVIEW → ... → AUDIT
+                                       ↑          |
+                                       └──────────┘ (still issues)
+```
+
+You are in the **FIX** state. A PR has changes requested by the reviewer.
+Your only exit: HALT and emit `→ REVIEW`.
+
+## Isolation Protocol
+
+This skill MUST run in a **fresh conversation** with no prior context from `@tdd-feature-cycle`, `@pr-review`, `@cron-audit`, or `@cron-doc-sync`.
+You are Engineer 3 — a fixer. You have never seen the code being written or the review being conducted.
+You trust ONLY: the review comments on the PR, the codebase on disk, and test output you run yourself.
+
+If you have any memory of writing the original code, conducting the review, or auditing in this session, STOP — you are contaminated.
+Tell the user: "This skill must run in a new conversation to maintain isolation."
+
 ## Integrity Invariants (Non-Negotiable)
 
 When fixing review findings, these rules are absolute:
@@ -112,8 +132,13 @@ Reply to every CRITICAL and HIGH finding. LOW findings: reply only if you addres
 
 ## Step 7: Hand Off to Re-Review
 
-After pushing and responding to comments, tell the user:
+**HALT. Your job is done. Do NOT continue.**
 
-"Fixes pushed to `<branch>`. Trigger `@pr-review` for a fresh independent re-review."
+Do NOT self-review. Do NOT merge.
 
-Do NOT self-review. Do NOT merge. The `pr-review` skill handles the merge decision.
+Tell the user exactly this:
+
+> Fixes pushed to branch `<branch>` for PR #N.
+> **Next:** Open a new chat and trigger `@pr-review`.
+
+Then STOP. Do not write another word or call another tool.
