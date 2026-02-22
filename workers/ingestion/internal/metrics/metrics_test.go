@@ -87,3 +87,29 @@ func TestRecordJobsProcessedTotal(t *testing.T) {
 		t.Error("expected ingestion_jobs_processed_total metric in output")
 	}
 }
+
+func TestRecordDLQSinkError(t *testing.T) {
+	m := metrics.New()
+	m.RecordDLQSinkError()
+	m.RecordDLQSinkError()
+	m.RecordDLQSinkError()
+
+	handler := m.Handler()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "ingestion_dlq_sink_error_total") {
+		t.Error("expected ingestion_dlq_sink_error_total metric in output")
+	}
+	if !strings.Contains(body, "3") {
+		t.Error("expected counter value 3 in output")
+	}
+}
+
+func TestMetricsImplementsPipelineObserver(t *testing.T) {
+	m := metrics.New()
+	var obs metrics.PipelineObserver = m
+	obs.RecordDLQSinkError()
+}

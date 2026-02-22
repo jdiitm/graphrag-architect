@@ -13,6 +13,7 @@ type Metrics struct {
 	consumerLag   *prometheus.GaugeVec
 	batchDuration prometheus.Histogram
 	dlqRouted     prometheus.Counter
+	dlqSinkError  prometheus.Counter
 	jobsProcessed *prometheus.CounterVec
 }
 
@@ -35,18 +36,24 @@ func New() *Metrics {
 		Help: "Total number of jobs routed to the DLQ",
 	})
 
+	dlqSinkError := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "ingestion_dlq_sink_error_total",
+		Help: "Total number of DLQ sink publish failures",
+	})
+
 	jobsProcessed := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "ingestion_jobs_processed_total",
 		Help: "Total number of jobs processed by outcome",
 	}, []string{"outcome"})
 
-	reg.MustRegister(consumerLag, batchDuration, dlqRouted, jobsProcessed)
+	reg.MustRegister(consumerLag, batchDuration, dlqRouted, dlqSinkError, jobsProcessed)
 
 	return &Metrics{
 		registry:      reg,
 		consumerLag:   consumerLag,
 		batchDuration: batchDuration,
 		dlqRouted:     dlqRouted,
+		dlqSinkError:  dlqSinkError,
 		jobsProcessed: jobsProcessed,
 	}
 }
@@ -61,6 +68,10 @@ func (m *Metrics) RecordBatchDuration(seconds float64) {
 
 func (m *Metrics) RecordDLQRouted() {
 	m.dlqRouted.Inc()
+}
+
+func (m *Metrics) RecordDLQSinkError() {
+	m.dlqSinkError.Inc()
 }
 
 func (m *Metrics) RecordJobProcessed(outcome string) {

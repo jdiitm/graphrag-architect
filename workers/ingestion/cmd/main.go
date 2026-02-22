@@ -88,7 +88,7 @@ func main() {
 		sink = kafkaSink
 		log.Printf("DLQ sink: kafka topic=%s", dlqTopic)
 	}
-	dlqHandler := dlq.NewHandler(disp.DLQ(), sink)
+	dlqHandler := dlq.NewHandler(disp.DLQ(), sink, dlq.WithObserver(m))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

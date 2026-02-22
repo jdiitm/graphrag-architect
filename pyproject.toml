@@ -10,6 +10,7 @@ disable = [
     "R0913",  # too-many-arguments: OTel Sampler ABC mandates 8-param should_sample signature
     "R0917",  # too-many-positional-arguments: same OTel Sampler ABC constraint
     "W0613",  # unused-argument: LangGraph node stubs must accept `state` per framework contract
+    "W0718",  # broad-exception-caught: OTel span processors must never crash the app on export
 ]
 
 [tool.pylint.format]

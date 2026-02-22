@@ -78,7 +78,7 @@ class ErrorForceExportProcessor(SimpleSpanProcessor):
         token = otel_context.attach(otel_context.set_value(_SUPPRESS_KEY, True))
         try:
             self._error_exporter.export((span,))
-        except Exception:  # pylint: disable=broad-except
+        except Exception:
             pass
         finally:
             otel_context.detach(token)
