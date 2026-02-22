@@ -1,3 +1,44 @@
+## 2026-02-22: load_workspace_files DAG Node — Complete
+
+### Completed
+- Created orchestrator/app/workspace_loader.py with load_directory():
+  - Recursive directory walk via os.walk with in-place pruning of excluded dirs
+  - Extension filtering: .go, .py, .yaml, .yml (matching FR-2 input spec)
+  - Excluded directories: .git, .venv, __pycache__, node_modules, .mypy_cache, .pytest_cache, .tox, .eggs, venv
+  - Size guard: skips files > 1MB (MAX_FILE_SIZE_BYTES)
+  - Returns List[Dict[str, str]] with relative POSIX paths and UTF-8 content
+  - Deterministic sort by path for reproducible ordering
+  - Graceful handling: unreadable files, nonexistent directories, UnicodeDecodeError
+- Updated orchestrator/app/graph_builder.py:
+  - load_workspace_files now delegates to load_directory(state["directory_path"])
+  - First DAG node is no longer a stub — pipeline has working input
+- TDD: 23 new tests written and passing across 7 test classes
+
+### Architecture Decisions
+- Pure function (no I/O side effects beyond reading filesystem) for testability
+- POSIX path normalization via PurePosixPath for cross-platform consistency
+- Extension pre-filtering at loader level (matches the 4 extensions the downstream nodes consume)
+- frozenset constants for O(1) membership checks on excluded dirs and included extensions
+
+### Quality Gates
+- Pylint: 10/10
+- Python tests: 68/68 passing (23 new + 45 existing)
+- Go tests: 8/8 passing (no regressions)
+- Total: 76/76 passing, 0 regressions
+
+### PR Status
+- Branch: feat/workspace-loader — PR pending
+
+### Unresolved
+- parse_k8s_and_kafka_manifests node is still a stub
+- No FastAPI /ingest HTTP endpoint yet (FR-1 integration point)
+
+### Next Step
+- Implement parse_k8s_and_kafka_manifests to extract K8sDeploymentNode and KafkaTopicNode from YAML
+- OR implement FastAPI /ingest endpoint to receive payloads from Go ForwardingProcessor
+
+---
+
 ## 2026-02-22: FR-5 Schema Validation with Correction Loop — Green Phase Complete
 
 ### Completed
