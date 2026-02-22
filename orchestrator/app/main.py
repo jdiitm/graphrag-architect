@@ -10,6 +10,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import Response
 
+from orchestrator.app.access_control import InvalidTokenError
 from orchestrator.app.graph_builder import ingestion_graph
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
 from orchestrator.app.neo4j_pool import close_driver, init_driver
@@ -110,6 +111,8 @@ async def query(
     }
     try:
         result = await query_graph.ainvoke(initial_state)
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Query graph failed")
         raise HTTPException(

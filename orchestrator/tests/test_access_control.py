@@ -1,8 +1,13 @@
+import hashlib
+import hmac
+
 import pytest
 
 from orchestrator.app.access_control import (
     CypherPermissionFilter,
+    InvalidTokenError,
     SecurityPrincipal,
+    sign_token,
 )
 
 
@@ -185,6 +190,97 @@ class TestCypherPermissionFilter:
         filtered, params = filt.inject_into_cypher(original)
         assert filtered == original
         assert params == {}
+
+
+class TestSignToken:
+    def test_produces_payload_dot_signature_format(self):
+        payload = "team=ops,role=admin"
+        secret = "test-secret-key"
+        token = sign_token(payload, secret)
+        assert "." in token
+        parts = token.rsplit(".", 1)
+        assert len(parts) == 2
+        assert parts[0] == payload
+
+    def test_signature_is_valid_hmac_sha256(self):
+        payload = "team=ops,role=admin"
+        secret = "test-secret-key"
+        token = sign_token(payload, secret)
+        _, signature = token.rsplit(".", 1)
+        expected = hmac.new(
+            secret.encode(), payload.encode(), hashlib.sha256
+        ).hexdigest()
+        assert signature == expected
+
+    def test_different_secrets_produce_different_signatures(self):
+        payload = "team=ops,role=admin"
+        token_a = sign_token(payload, "secret-a")
+        token_b = sign_token(payload, "secret-b")
+        assert token_a != token_b
+
+
+class TestHMACTokenVerification:
+    def test_valid_signed_token_parses_correctly(self):
+        secret = "production-secret"
+        payload = "team=platform,namespace=production,role=admin"
+        token = sign_token(payload, secret)
+        principal = SecurityPrincipal.from_header(
+            f"Bearer {token}", token_secret=secret
+        )
+        assert principal.team == "platform"
+        assert principal.namespace == "production"
+        assert principal.role == "admin"
+
+    def test_invalid_signature_raises_error(self):
+        secret = "real-secret"
+        payload = "team=ops,role=admin"
+        forged_token = f"{payload}.deadbeef0000"
+        with pytest.raises(InvalidTokenError):
+            SecurityPrincipal.from_header(
+                f"Bearer {forged_token}", token_secret=secret
+            )
+
+    def test_tampered_payload_raises_error(self):
+        secret = "real-secret"
+        original_payload = "team=ops,role=viewer"
+        token = sign_token(original_payload, secret)
+        _, sig = token.rsplit(".", 1)
+        tampered_token = f"team=ops,role=admin.{sig}"
+        with pytest.raises(InvalidTokenError):
+            SecurityPrincipal.from_header(
+                f"Bearer {tampered_token}", token_secret=secret
+            )
+
+    def test_missing_signature_raises_error(self):
+        secret = "real-secret"
+        with pytest.raises(InvalidTokenError):
+            SecurityPrincipal.from_header(
+                "Bearer team=ops,role=admin", token_secret=secret
+            )
+
+    def test_empty_header_still_returns_anonymous(self):
+        principal = SecurityPrincipal.from_header("", token_secret="some-secret")
+        assert principal.role == "anonymous"
+        assert principal.team == "*"
+
+    def test_none_header_still_returns_anonymous(self):
+        principal = SecurityPrincipal.from_header(None, token_secret="some-secret")
+        assert principal.role == "anonymous"
+        assert principal.team == "*"
+
+    def test_no_secret_skips_verification(self):
+        principal = SecurityPrincipal.from_header(
+            "Bearer team=ops,role=admin", token_secret=""
+        )
+        assert principal.role == "admin"
+        assert principal.team == "ops"
+
+    def test_no_secret_default_skips_verification(self):
+        principal = SecurityPrincipal.from_header(
+            "Bearer team=ops,role=admin"
+        )
+        assert principal.role == "admin"
+        assert principal.team == "ops"
 
 
 class TestNodeMetadataOnIngestion:
