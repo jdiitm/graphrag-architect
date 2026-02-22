@@ -27,10 +27,7 @@ spec:
     - type: External
       external:
         metric:
-          name: ingestion_consumer_lag_total
-          selector:
-            matchLabels:
-              consumer_group: graphrag-ingestion
+          name: ingestion_consumer_lag
         target:
           type: AverageValue
           averageValue: "1000"

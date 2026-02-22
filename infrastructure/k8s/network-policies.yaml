@@ -54,6 +54,12 @@ spec:
       ports:
         - port: 7687
     - to:
+        - podSelector:
+            matchLabels:
+              app: otel-collector
+      ports:
+        - port: 4317
+    - to:
         - namespaceSelector: {}
       ports:
         - port: 53
@@ -90,6 +96,12 @@ spec:
               app: orchestrator
       ports:
         - port: 8000
+    - to:
+        - podSelector:
+            matchLabels:
+              app: otel-collector
+      ports:
+        - port: 4317
     - to:
         - namespaceSelector: {}
       ports:

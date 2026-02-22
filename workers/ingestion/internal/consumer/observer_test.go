@@ -48,6 +48,8 @@ func (r *recordingObserver) RecordDLQRouted() {
 	r.dlqCount++
 }
 
+func (r *recordingObserver) RecordDLQSinkError() {}
+
 type lagAwareSource struct {
 	batches [][]domain.Job
 	index   int
