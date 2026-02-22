@@ -160,6 +160,14 @@ class TestLoadDirectoryErrorHandling:
         result = load_directory("/nonexistent/path/that/does/not/exist")
         assert result == []
 
+    def test_empty_string_path_returns_empty(self):
+        result = load_directory("")
+        assert result == []
+
+    def test_whitespace_only_path_returns_empty(self):
+        result = load_directory("   ")
+        assert result == []
+
 
 class TestLoadDirectoryConstants:
 

@@ -3,7 +3,7 @@ from pathlib import PurePosixPath
 from typing import Dict, List
 
 
-EXCLUDED_DIRS: frozenset = frozenset({
+EXCLUDED_DIRS: frozenset[str] = frozenset({
     ".git",
     ".venv",
     "__pycache__",
@@ -15,7 +15,7 @@ EXCLUDED_DIRS: frozenset = frozenset({
     "venv",
 })
 
-INCLUDED_EXTENSIONS: frozenset = frozenset({
+INCLUDED_EXTENSIONS: frozenset[str] = frozenset({
     ".go",
     ".py",
     ".yaml",
@@ -26,6 +26,9 @@ MAX_FILE_SIZE_BYTES: int = 1_048_576
 
 
 def load_directory(directory_path: str) -> List[Dict[str, str]]:
+    if not directory_path or not directory_path.strip():
+        return []
+
     root = os.path.abspath(directory_path)
     if not os.path.isdir(root):
         return []
