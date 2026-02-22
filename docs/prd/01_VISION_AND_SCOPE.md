@@ -41,9 +41,9 @@ This is not a general-purpose enterprise search engine. It is purpose-built for 
 | Knowledge graph storage in Neo4j with unique constraints and secondary indexes | Cypher schema implemented (`orchestrator/app/schema_init.cypher`) |
 | LangGraph ingestion DAG with schema validation and correction loop | `StateGraph` compiled (`orchestrator/app/graph_builder.py`) |
 | Dead Letter Queue fault tolerance with zero message loss | DLQ handler implemented (`workers/ingestion/internal/dlq/handler.go`) |
-| Hybrid query routing: vector search for entity disambiguation, Cypher traversals for multi-hop reasoning | Spec'd, not yet implemented |
-| OpenTelemetry instrumentation across Go and Python components | Spec'd, not yet implemented |
-| FastAPI HTTP interface accepting ingestion payloads and query requests | Spec'd, not yet implemented |
+| Hybrid query routing: vector search for entity disambiguation, Cypher traversals for multi-hop reasoning | Implemented (`orchestrator/app/query_engine.py`, `query_classifier.py`) |
+| OpenTelemetry instrumentation across Go and Python components | Implemented (`orchestrator/app/observability.py`, `workers/ingestion/internal/telemetry/`) |
+| FastAPI HTTP interface accepting ingestion payloads and query requests | Implemented (`orchestrator/app/main.py`: `/health`, `/ingest`, `/query`) |
 
 ### 3.2 Out-of-Scope
 
