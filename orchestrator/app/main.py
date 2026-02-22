@@ -1,7 +1,6 @@
 import base64
 import binascii
 import logging
-import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
@@ -15,6 +14,7 @@ from orchestrator.app.access_control import (
     InvalidTokenError,
     SecurityPrincipal,
 )
+from orchestrator.app.config import AuthConfig
 from orchestrator.app.graph_builder import ingestion_graph
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
 from orchestrator.app.neo4j_pool import close_driver, init_driver
@@ -30,10 +30,26 @@ async def lifespan(_app: FastAPI):
     configure_telemetry()
     configure_metrics()
     init_driver()
+    _warn_insecure_auth()
     try:
         yield
     finally:
         await close_driver()
+
+
+def _warn_insecure_auth() -> None:
+    auth = AuthConfig.from_env()
+    if not auth.token_secret:
+        if auth.require_tokens:
+            logger.error(
+                "AUTH_REQUIRE_TOKENS is true but AUTH_TOKEN_SECRET is not set. "
+                "All authenticated endpoints will reject requests."
+            )
+        else:
+            logger.warning(
+                "AUTH_TOKEN_SECRET is not set. Token verification is disabled. "
+                "Set AUTH_TOKEN_SECRET for production deployments."
+            )
 
 
 app = FastAPI(title="GraphRAG Orchestrator", version="1.0.0", lifespan=lifespan)
@@ -66,13 +82,18 @@ def prometheus_metrics() -> Response:
 
 
 def _verify_ingest_auth(authorization: Optional[str]) -> None:
-    secret = os.environ.get("AUTH_TOKEN_SECRET", "")
-    if not secret:
+    auth = AuthConfig.from_env()
+    if not auth.token_secret:
+        if auth.require_tokens:
+            raise HTTPException(
+                status_code=503,
+                detail="server misconfigured: token verification required but no secret set",
+            )
         return
     if not authorization or not authorization.strip():
         raise HTTPException(status_code=401, detail="missing authorization token")
     try:
-        SecurityPrincipal.from_header(authorization, token_secret=secret)
+        SecurityPrincipal.from_header(authorization, token_secret=auth.token_secret)
     except InvalidTokenError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 

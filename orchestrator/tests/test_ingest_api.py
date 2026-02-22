@@ -291,6 +291,80 @@ class TestIngestAuth:
         assert response.status_code == 200
 
 
+class TestAuthRequireTokensFailClosed:
+    @patch("orchestrator.app.main.ingestion_graph")
+    @patch.dict("os.environ", {"AUTH_REQUIRE_TOKENS": "true"}, clear=False)
+    def test_ingest_rejects_when_require_tokens_and_no_secret(
+        self, mock_graph, client
+    ):
+        import os
+        os.environ.pop("AUTH_TOKEN_SECRET", None)
+        response = client.post(
+            "/ingest",
+            json={
+                "documents": [{
+                    "file_path": "main.go",
+                    "content": _b64("package main"),
+                    "source_type": "source_code",
+                }],
+            },
+        )
+        assert response.status_code == 503
+
+    @patch("orchestrator.app.main.ingestion_graph")
+    @patch.dict(
+        "os.environ",
+        {"AUTH_REQUIRE_TOKENS": "true", "AUTH_TOKEN_SECRET": "prod-secret"},
+        clear=False,
+    )
+    def test_ingest_works_when_require_tokens_and_secret_present(
+        self, mock_graph, client
+    ):
+        mock_graph.ainvoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "extraction_errors": [],
+            "commit_status": "success",
+        })
+        token = sign_token("team=ops,role=admin", "prod-secret")
+        response = client.post(
+            "/ingest",
+            json={
+                "documents": [{
+                    "file_path": "main.go",
+                    "content": _b64("package main"),
+                    "source_type": "source_code",
+                }],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+
+    @patch("orchestrator.app.main.ingestion_graph")
+    @patch.dict("os.environ", {}, clear=False)
+    def test_ingest_allows_when_require_tokens_not_set(
+        self, mock_graph, client
+    ):
+        mock_graph.ainvoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "extraction_errors": [],
+            "commit_status": "success",
+        })
+        import os
+        os.environ.pop("AUTH_TOKEN_SECRET", None)
+        os.environ.pop("AUTH_REQUIRE_TOKENS", None)
+        response = client.post(
+            "/ingest",
+            json={
+                "documents": [{
+                    "file_path": "main.go",
+                    "content": _b64("package main"),
+                    "source_type": "source_code",
+                }],
+            },
+        )
+        assert response.status_code == 200
+
+
 class TestLoadWorkspacePreservesRawFiles:
     def test_empty_directory_preserves_existing_raw_files(self):
         from orchestrator.app.graph_builder import load_workspace_files

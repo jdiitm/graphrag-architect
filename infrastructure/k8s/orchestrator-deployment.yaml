@@ -29,6 +29,9 @@ spec:
           ports:
             - containerPort: 8000
               name: http
+          env:
+            - name: AUTH_REQUIRE_TOKENS
+              value: "true"
           envFrom:
             - configMapRef:
                 name: graphrag-config

@@ -192,6 +192,107 @@ class TestCypherPermissionFilter:
         assert filtered == original
         assert params == {}
 
+    def test_inject_skips_where_inside_nested_subquery(self):
+        principal = SecurityPrincipal(
+            team="platform", namespace="production", role="viewer"
+        )
+        filt = CypherPermissionFilter(principal)
+        original = (
+            "MATCH (n:Service) "
+            "CALL { MATCH (m:Database) WHERE m.type = 'PostgreSQL' RETURN m } "
+            "RETURN n, m"
+        )
+        filtered, params = filt.inject_into_cypher(original)
+        assert params["acl_team"] == "platform"
+        assert "m.type = 'PostgreSQL'" in filtered, (
+            "Subquery WHERE condition must be preserved"
+        )
+        subquery_where = filtered.find("WHERE", filtered.find("CALL {"))
+        outer_acl_pos = filtered.find("n.team_owner")
+        subquery_end = filtered.find("}")
+        assert outer_acl_pos > subquery_end, (
+            "ACL clause must not be injected inside the subquery"
+        )
+
+    def test_inject_skips_where_inside_case_expression(self):
+        principal = SecurityPrincipal(
+            team="platform", namespace="production", role="viewer"
+        )
+        filt = CypherPermissionFilter(principal)
+        original = (
+            "MATCH (n:Service) "
+            "RETURN CASE WHEN n.language = 'Go' THEN 'backend' ELSE 'other' END"
+        )
+        filtered, params = filt.inject_into_cypher(original)
+        assert params["acl_team"] == "platform"
+        assert "CASE WHEN" in filtered, "CASE expression must be preserved intact"
+        where_pos = filtered.find("WHERE")
+        case_pos = filtered.find("CASE")
+        assert where_pos < case_pos, (
+            "ACL WHERE must be before CASE expression"
+        )
+
+    def test_inject_skips_where_in_string_literal(self):
+        principal = SecurityPrincipal(
+            team="platform", namespace="production", role="viewer"
+        )
+        filt = CypherPermissionFilter(principal)
+        original = (
+            "MATCH (n:Service) WHERE n.name = 'WHERE_SERVICE' RETURN n"
+        )
+        filtered, params = filt.inject_into_cypher(original)
+        assert params["acl_team"] == "platform"
+        assert "'WHERE_SERVICE'" in filtered, (
+            "String literal must be preserved"
+        )
+
+    def test_inject_skips_return_in_string_literal(self):
+        principal = SecurityPrincipal(
+            team="platform", namespace="production", role="viewer"
+        )
+        filt = CypherPermissionFilter(principal)
+        original = (
+            "MATCH (n:Service) WHERE n.description CONTAINS 'RETURN value' RETURN n"
+        )
+        filtered, params = filt.inject_into_cypher(original)
+        assert params["acl_team"] == "platform"
+        assert "'RETURN value'" in filtered, (
+            "String literal containing RETURN must be preserved"
+        )
+        acl_clause_pos = filtered.find("n.team_owner")
+        final_return_pos = filtered.rfind("RETURN n")
+        assert acl_clause_pos < final_return_pos
+
+    def test_inject_handles_multiple_match_clauses(self):
+        principal = SecurityPrincipal(
+            team="platform", namespace="production", role="viewer"
+        )
+        filt = CypherPermissionFilter(principal)
+        original = (
+            "MATCH (n:Service)-[:CALLS]->(m:Service) "
+            "WHERE n.language = 'Go' "
+            "RETURN n, m"
+        )
+        filtered, params = filt.inject_into_cypher(original)
+        assert params["acl_team"] == "platform"
+        assert "n.language = 'Go'" in filtered
+
+    def test_inject_nested_braces_depth_tracking(self):
+        principal = SecurityPrincipal(
+            team="ops", namespace="staging", role="viewer"
+        )
+        filt = CypherPermissionFilter(principal)
+        original = (
+            "MATCH (n:Service) "
+            "CALL { WITH n MATCH (n)-[:CALLS]->(t:Service) WHERE t.active = true RETURN count(t) AS cnt } "
+            "WHERE n.language = 'Python' "
+            "RETURN n, cnt"
+        )
+        filtered, params = filt.inject_into_cypher(original)
+        assert params["acl_team"] == "ops"
+        assert "t.active = true" in filtered
+        assert "n.language = 'Python'" in filtered
+
 
 class TestSignToken:
     def test_produces_payload_dot_signature_format(self):

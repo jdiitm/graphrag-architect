@@ -8,12 +8,14 @@ from dataclasses import dataclass
 class AuthConfig:
     token_secret: str = ""
     token_ttl_seconds: int = 3600
+    require_tokens: bool = False
 
     @classmethod
     def from_env(cls) -> AuthConfig:
         return cls(
             token_secret=os.environ.get("AUTH_TOKEN_SECRET", ""),
             token_ttl_seconds=int(os.environ.get("AUTH_TOKEN_TTL", "3600")),
+            require_tokens=os.environ.get("AUTH_REQUIRE_TOKENS", "").lower() == "true",
         )
 
 

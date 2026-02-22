@@ -16,6 +16,9 @@ DEFAULT_REPLICAS = 1
 DEFAULT_PARTITIONS = 1
 DEFAULT_RETENTION_MS = 604800000
 
+TEAM_OWNER_LABEL = "graphrag.io/team-owner"
+NAMESPACE_ACL_ANNOTATION = "graphrag.io/namespace-acl"
+
 
 def _safe_load_all(content: str) -> List[Dict[str, Any]]:
     if not content or not content.strip():
@@ -26,6 +29,24 @@ def _safe_load_all(content: str) -> List[Dict[str, Any]]:
         logger.warning("Failed to parse YAML: %s", exc)
         return []
     return [doc for doc in documents if isinstance(doc, dict)]
+
+
+def _extract_team_owner(metadata: Dict[str, Any]) -> Optional[str]:
+    labels: Dict[str, Any] = metadata.get("labels", {})
+    if not isinstance(labels, dict):
+        return None
+    owner = labels.get(TEAM_OWNER_LABEL)
+    return str(owner) if owner is not None else None
+
+
+def _extract_namespace_acl(metadata: Dict[str, Any]) -> List[str]:
+    annotations: Dict[str, Any] = metadata.get("annotations", {})
+    if not isinstance(annotations, dict):
+        return []
+    raw = annotations.get(NAMESPACE_ACL_ANNOTATION)
+    if not raw:
+        return []
+    return [ns.strip() for ns in str(raw).split(",") if ns.strip()]
 
 
 def _extract_deployment(doc: Dict[str, Any]) -> Optional[K8sDeploymentNode]:
@@ -42,7 +63,13 @@ def _extract_deployment(doc: Dict[str, Any]) -> Optional[K8sDeploymentNode]:
     if not isinstance(spec, dict):
         spec = {}
     replicas = spec.get("replicas", DEFAULT_REPLICAS)
-    return K8sDeploymentNode(id=str(name), namespace=str(namespace), replicas=int(replicas))
+    return K8sDeploymentNode(
+        id=str(name),
+        namespace=str(namespace),
+        replicas=int(replicas),
+        team_owner=_extract_team_owner(metadata),
+        namespace_acl=_extract_namespace_acl(metadata),
+    )
 
 
 def _extract_kafka_topic(doc: Dict[str, Any]) -> Optional[KafkaTopicNode]:
@@ -66,6 +93,8 @@ def _extract_kafka_topic(doc: Dict[str, Any]) -> Optional[KafkaTopicNode]:
         name=str(name),
         partitions=int(partitions),
         retention_ms=int(retention_raw),
+        team_owner=_extract_team_owner(metadata),
+        namespace_acl=_extract_namespace_acl(metadata),
     )
 
 

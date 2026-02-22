@@ -8,6 +8,7 @@ import pytest
 
 INFRA_DIR = Path(__file__).resolve().parents[2] / "infrastructure"
 NETWORK_POLICIES_PATH = INFRA_DIR / "k8s" / "network-policies.yaml"
+KAFKA_STATEFULSET_PATH = INFRA_DIR / "k8s" / "kafka-statefulset.yaml"
 DOCKER_COMPOSE_PATH = INFRA_DIR / "docker-compose.yml"
 
 
@@ -178,6 +179,108 @@ class TestDeploymentSecurityContext:
         assert ctx.get("allowPrivilegeEscalation") is False, (
             "Ingestion worker container must set "
             "allowPrivilegeEscalation: false"
+        )
+
+
+class TestKafkaAdvertisedListeners:
+
+    @pytest.fixture(name="kafka_statefulset")
+    def _kafka_statefulset(self) -> dict:
+        docs = list(yaml.safe_load_all(
+            KAFKA_STATEFULSET_PATH.read_text(encoding="utf-8")
+        ))
+        for doc in docs:
+            if doc and doc.get("kind") == "StatefulSet":
+                return doc
+        pytest.fail("No StatefulSet found in kafka-statefulset.yaml")
+
+    def _get_kafka_env(self, statefulset: dict) -> list[dict]:
+        containers = statefulset["spec"]["template"]["spec"]["containers"]
+        for container in containers:
+            if container["name"] == "kafka":
+                return container.get("env", [])
+        pytest.fail("No kafka container found")
+
+    def test_advertised_listeners_env_var_present(
+        self, kafka_statefulset: dict
+    ) -> None:
+        env_vars = self._get_kafka_env(kafka_statefulset)
+        names = [e["name"] for e in env_vars]
+        assert "KAFKA_ADVERTISED_LISTENERS" in names, (
+            "Kafka StatefulSet must define KAFKA_ADVERTISED_LISTENERS "
+            "to ensure external pods can resolve broker addresses"
+        )
+
+    def test_advertised_listeners_uses_statefulset_dns(
+        self, kafka_statefulset: dict
+    ) -> None:
+        env_vars = self._get_kafka_env(kafka_statefulset)
+        adv_listener = None
+        for var in env_vars:
+            if var["name"] == "KAFKA_ADVERTISED_LISTENERS":
+                adv_listener = var["value"]
+                break
+        assert adv_listener is not None
+        assert "kafka-headless" in adv_listener, (
+            "Advertised listeners must reference the headless service DNS"
+        )
+        assert "9092" in adv_listener
+
+
+class TestSchemaInitNetworkPolicy:
+
+    def test_neo4j_ingress_allows_schema_init(
+        self, network_policies: list[dict]
+    ) -> None:
+        policy = _find_network_policy(
+            network_policies, "allow-neo4j-ingress"
+        )
+        assert policy is not None
+
+        allowed_apps = set()
+        for rule in policy["spec"].get("ingress", []):
+            for from_entry in rule.get("from", []):
+                pod_sel = from_entry.get("podSelector", {})
+                app_label = pod_sel.get("matchLabels", {}).get("app")
+                if app_label:
+                    allowed_apps.add(app_label)
+
+        assert "neo4j-schema-init" in allowed_apps, (
+            "allow-neo4j-ingress must permit ingress from "
+            "app: neo4j-schema-init on port 7687"
+        )
+
+    def test_schema_init_egress_policy_exists(
+        self, network_policies: list[dict]
+    ) -> None:
+        policy = _find_network_policy(
+            network_policies, "allow-schema-init-egress"
+        )
+        assert policy is not None, (
+            "A NetworkPolicy allowing neo4j-schema-init egress "
+            "to Neo4j must exist"
+        )
+
+    def test_schema_init_egress_targets_neo4j_on_7687(
+        self, network_policies: list[dict]
+    ) -> None:
+        policy = _find_network_policy(
+            network_policies, "allow-schema-init-egress"
+        )
+        assert policy is not None
+
+        egress_rules = policy["spec"].get("egress", [])
+        targets_neo4j = False
+        for rule in egress_rules:
+            for to_entry in rule.get("to", []):
+                pod_sel = to_entry.get("podSelector", {})
+                if pod_sel.get("matchLabels", {}).get("app") == "neo4j":
+                    for port_entry in rule.get("ports", []):
+                        if port_entry.get("port") == 7687:
+                            targets_neo4j = True
+        assert targets_neo4j, (
+            "Schema init egress policy must allow traffic "
+            "to app: neo4j on port 7687"
         )
 
 
