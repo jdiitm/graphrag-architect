@@ -93,12 +93,11 @@ class TestIngestionDAGFlow:
         with (
             patch.dict("os.environ", _ENV_VARS),
             patch("orchestrator.app.graph_builder.ServiceExtractor") as mock_ext,
-            patch("orchestrator.app.graph_builder.AsyncGraphDatabase") as mock_neo4j,
+            patch("orchestrator.app.graph_builder.get_driver", return_value=mock_driver),
         ):
             mock_extractor = AsyncMock()
             mock_extractor.extract_all = AsyncMock(return_value=mock_topology)
             mock_ext.return_value = mock_extractor
-            mock_neo4j.driver.return_value = mock_driver
 
             result = await ingestion_graph.ainvoke({
                 "directory_path": "",
@@ -126,12 +125,14 @@ class TestIngestionDAGFlow:
         with (
             patch.dict("os.environ", _ENV_VARS),
             patch("orchestrator.app.graph_builder.ServiceExtractor") as mock_ext,
-            patch("orchestrator.app.graph_builder.AsyncGraphDatabase") as mock_neo4j,
+            patch(
+                "orchestrator.app.graph_builder.get_driver",
+                side_effect=OSError("connection refused"),
+            ),
         ):
             mock_extractor = AsyncMock()
             mock_extractor.extract_all = AsyncMock(return_value=mock_topology)
             mock_ext.return_value = mock_extractor
-            mock_neo4j.driver.side_effect = OSError("connection refused")
 
             result = await ingestion_graph.ainvoke({
                 "directory_path": "",
@@ -184,6 +185,7 @@ class TestQueryDAGRouting:
                 "answer": "",
                 "max_results": 10,
                 "iteration_count": 0,
+                "authorization": "",
             })
 
             assert result["complexity"].value == "entity_lookup"

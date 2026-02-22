@@ -124,19 +124,18 @@ class TestIngestionSpans:
             "validation_retries": 0,
             "commit_status": "",
         }
+        mock_driver = MagicMock()
+        mock_driver.close = AsyncMock()
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.execute_write = AsyncMock()
+        mock_driver.session.return_value = mock_session
+
         with patch(
-            "orchestrator.app.graph_builder.AsyncGraphDatabase"
-        ) as mock_db, patch.dict(
-            "os.environ", {"NEO4J_PASSWORD": "test-pass"}
+            "orchestrator.app.graph_builder.get_driver",
+            return_value=mock_driver,
         ):
-            mock_driver = MagicMock()
-            mock_driver.close = AsyncMock()
-            mock_session = AsyncMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.execute_write = AsyncMock()
-            mock_driver.session.return_value = mock_session
-            mock_db.driver.return_value = mock_driver
             await commit_to_neo4j(state)
 
         span_names = [s.name for s in telemetry.get_finished_spans()]
@@ -482,21 +481,20 @@ class TestMetricsRecording:
             "validation_retries": 0,
             "commit_status": "",
         }
+        mock_driver = MagicMock()
+        mock_driver.close = AsyncMock()
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.execute_write = AsyncMock()
+        mock_driver.session.return_value = mock_session
+
         with patch(
-            "orchestrator.app.graph_builder.AsyncGraphDatabase"
-        ) as mock_db, patch.dict(
-            "os.environ", {"NEO4J_PASSWORD": "test-pass"}
+            "orchestrator.app.graph_builder.get_driver",
+            return_value=mock_driver,
         ), patch(
             "orchestrator.app.graph_builder.NEO4J_TRANSACTION_DURATION"
         ) as mock_metric:
-            mock_driver = MagicMock()
-            mock_driver.close = AsyncMock()
-            mock_session = AsyncMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.execute_write = AsyncMock()
-            mock_driver.session.return_value = mock_session
-            mock_db.driver.return_value = mock_driver
             await commit_to_neo4j(state)
             mock_metric.record.assert_called_once()
             elapsed_ms = mock_metric.record.call_args[0][0]

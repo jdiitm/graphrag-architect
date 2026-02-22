@@ -19,6 +19,7 @@ def base_query_state():
         "iteration_count": 0,
         "answer": "",
         "sources": [],
+        "authorization": "",
     }
 
 
