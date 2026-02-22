@@ -233,6 +233,46 @@ func TestForwardingProcessor_MissingSourceType(t *testing.T) {
 	}
 }
 
+func TestForwardingProcessor_SetsAuthHeader(t *testing.T) {
+	var capturedAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"committed","entities_extracted":0,"errors":[]}`))
+	}))
+	defer srv.Close()
+
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client(), processor.WithAuthToken("my-secret-token"))
+	err := fp.Process(context.Background(), validJob())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedAuth != "Bearer my-secret-token" {
+		t.Errorf("Authorization = %q, want 'Bearer my-secret-token'", capturedAuth)
+	}
+}
+
+func TestForwardingProcessor_OmitsAuthHeaderWhenEmpty(t *testing.T) {
+	var capturedAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"committed","entities_extracted":0,"errors":[]}`))
+	}))
+	defer srv.Close()
+
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client())
+	err := fp.Process(context.Background(), validJob())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedAuth != "" {
+		t.Errorf("Authorization should be empty when no token configured, got %q", capturedAuth)
+	}
+}
+
 func TestForwardingProcessor_OptionalHeadersOmitted(t *testing.T) {
 	var captured []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

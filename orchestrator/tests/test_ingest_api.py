@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from starlette.testclient import TestClient
 
+from orchestrator.app.access_control import sign_token
 from orchestrator.app.main import app
 
 
@@ -206,6 +207,87 @@ class TestIngestOptionalFields:
                 "source_type": "source_code",
             }],
         })
+        assert response.status_code == 200
+
+
+class TestIngestAuth:
+    @patch("orchestrator.app.main.ingestion_graph")
+    @patch.dict("os.environ", {"AUTH_TOKEN_SECRET": "test-secret"})
+    def test_ingest_with_valid_token_succeeds(self, mock_graph, client):
+        mock_graph.ainvoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "extraction_errors": [],
+            "commit_status": "success",
+        })
+        token = sign_token("team=ops,role=admin", "test-secret")
+        response = client.post(
+            "/ingest",
+            json={
+                "documents": [{
+                    "file_path": "main.go",
+                    "content": _b64("package main"),
+                    "source_type": "source_code",
+                }],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+
+    @patch("orchestrator.app.main.ingestion_graph")
+    @patch.dict("os.environ", {"AUTH_TOKEN_SECRET": "test-secret"})
+    def test_ingest_with_invalid_token_returns_401(self, mock_graph, client):
+        response = client.post(
+            "/ingest",
+            json={
+                "documents": [{
+                    "file_path": "main.go",
+                    "content": _b64("package main"),
+                    "source_type": "source_code",
+                }],
+            },
+            headers={"Authorization": "Bearer forged.deadbeef"},
+        )
+        assert response.status_code == 401
+
+    @patch("orchestrator.app.main.ingestion_graph")
+    @patch.dict("os.environ", {"AUTH_TOKEN_SECRET": "test-secret"})
+    def test_ingest_without_token_when_secret_configured_returns_401(
+        self, mock_graph, client
+    ):
+        response = client.post(
+            "/ingest",
+            json={
+                "documents": [{
+                    "file_path": "main.go",
+                    "content": _b64("package main"),
+                    "source_type": "source_code",
+                }],
+            },
+        )
+        assert response.status_code == 401
+
+    @patch("orchestrator.app.main.ingestion_graph")
+    @patch.dict("os.environ", {}, clear=False)
+    def test_ingest_without_token_when_no_secret_allows_anonymous(
+        self, mock_graph, client
+    ):
+        mock_graph.ainvoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "extraction_errors": [],
+            "commit_status": "success",
+        })
+        import os
+        os.environ.pop("AUTH_TOKEN_SECRET", None)
+        response = client.post(
+            "/ingest",
+            json={
+                "documents": [{
+                    "file_path": "main.go",
+                    "content": _b64("package main"),
+                    "source_type": "source_code",
+                }],
+            },
+        )
         assert response.status_code == 200
 
 

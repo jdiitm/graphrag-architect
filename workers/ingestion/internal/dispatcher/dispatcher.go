@@ -85,7 +85,15 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			result := d.processWithRetry(processCtx, job)
 			if result.Err != nil {
 				_, dlqSpan := telemetry.StartDLQSpan(processCtx, result)
+				result.Done = make(chan struct{})
 				d.dlq <- result
+				select {
+				case <-result.Done:
+				case <-ctx.Done():
+					dlqSpan.End()
+					processSpan.End()
+					return
+				}
 				dlqSpan.End()
 				d.observer.RecordDLQRouted()
 				d.observer.RecordJobProcessed("dlq")

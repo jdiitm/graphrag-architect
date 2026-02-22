@@ -293,6 +293,88 @@ func TestDispatcherExtractsTraceContextFromJobHeaders(t *testing.T) {
 	}
 }
 
+func TestDispatcherDLQBlocksAckUntilDoneSignal(t *testing.T) {
+	proc := &spyProcessor{
+		handler: func(ctx context.Context, job domain.Job) error {
+			return errProcessing
+		},
+	}
+
+	cfg := dispatcher.Config{NumWorkers: 1, MaxRetries: 1, JobBuffer: 1, DLQBuffer: 1}
+	d := dispatcher.New(cfg, proc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	d.Jobs() <- makeJob("dlq-block-key")
+
+	var dlqResult domain.Result
+	select {
+	case dlqResult = <-d.DLQ():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for DLQ result")
+	}
+
+	if dlqResult.Done == nil {
+		t.Fatal("expected Done channel on DLQ result")
+	}
+
+	select {
+	case <-d.Acks():
+		t.Fatal("ack sent before DLQ Done signal")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(dlqResult.Done)
+
+	select {
+	case <-d.Acks():
+	case <-time.After(2 * time.Second):
+		t.Fatal("ack not sent after DLQ Done signal")
+	}
+
+	cancel()
+	<-done
+}
+
+func TestDispatcherDLQAckUnblockedByContextCancel(t *testing.T) {
+	proc := &spyProcessor{
+		handler: func(ctx context.Context, job domain.Job) error {
+			return errProcessing
+		},
+	}
+
+	cfg := dispatcher.Config{NumWorkers: 1, MaxRetries: 1, JobBuffer: 1, DLQBuffer: 1}
+	d := dispatcher.New(cfg, proc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	d.Jobs() <- makeJob("dlq-cancel-key")
+
+	select {
+	case <-d.DLQ():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for DLQ result")
+	}
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() did not exit after context cancel while waiting on DLQ Done")
+	}
+}
+
 func TestDispatcherDrainsOnClosedChannel(t *testing.T) {
 	proc := &spyProcessor{}
 	cfg := dispatcher.Config{NumWorkers: 2, MaxRetries: 1, JobBuffer: 4, DLQBuffer: 1}

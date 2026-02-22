@@ -37,6 +37,30 @@ func (s *spySink) Last() domain.Result {
 	return s.results[len(s.results)-1]
 }
 
+type retrySink struct {
+	mu        sync.Mutex
+	calls     int
+	failUntil int
+	sendErr   error
+}
+
+func (s *retrySink) Send(_ context.Context, result domain.Result) error {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.mu.Unlock()
+	if call <= s.failUntil {
+		return s.sendErr
+	}
+	return nil
+}
+
+func (s *retrySink) CallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
 type spyObserver struct {
 	mu             sync.Mutex
 	sinkErrorCount int
@@ -127,7 +151,10 @@ func TestDLQHandlerRecordsMetricOnSinkError(t *testing.T) {
 	source := make(chan domain.Result, 1)
 	sink := &spySink{sendErr: errors.New("kafka broker unavailable")}
 	observer := &spyObserver{}
-	handler := dlq.NewHandler(source, sink, dlq.WithObserver(observer))
+	handler := dlq.NewHandler(source, sink,
+		dlq.WithObserver(observer),
+		dlq.WithConfig(dlq.Config{MaxSinkRetries: 0}),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -155,7 +182,10 @@ func TestDLQHandlerContinuesAfterSinkError(t *testing.T) {
 	source := make(chan domain.Result, 3)
 	sink := &spySink{sendErr: errors.New("transient failure")}
 	observer := &spyObserver{}
-	handler := dlq.NewHandler(source, sink, dlq.WithObserver(observer))
+	handler := dlq.NewHandler(source, sink,
+		dlq.WithObserver(observer),
+		dlq.WithConfig(dlq.Config{MaxSinkRetries: 0}),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -209,6 +239,172 @@ func TestDLQHandlerNoMetricOnSinkSuccess(t *testing.T) {
 
 	if observer.SinkErrorCount() != 0 {
 		t.Fatalf("expected 0 DLQ sink errors on success, got %d", observer.SinkErrorCount())
+	}
+}
+
+func TestDLQHandlerRetriesSinkOnTransientError(t *testing.T) {
+	source := make(chan domain.Result, 1)
+	sink := &retrySink{failUntil: 2, sendErr: errors.New("transient")}
+	handler := dlq.NewHandler(source, sink,
+		dlq.WithConfig(dlq.Config{MaxSinkRetries: 3, RetryDelay: 0}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		handler.Run(ctx)
+		close(done)
+	}()
+
+	resultDone := make(chan struct{})
+	source <- domain.Result{
+		Job:      domain.Job{Key: []byte("retry-me")},
+		Err:      errors.New("fail"),
+		Attempts: 1,
+		Done:     resultDone,
+	}
+
+	select {
+	case <-resultDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Done signal")
+	}
+
+	cancel()
+	<-done
+
+	if sink.CallCount() != 3 {
+		t.Fatalf("expected 3 sink attempts (2 failures + 1 success), got %d", sink.CallCount())
+	}
+}
+
+func TestDLQHandlerClosesDoneOnSuccess(t *testing.T) {
+	source := make(chan domain.Result, 1)
+	sink := &spySink{}
+	handler := dlq.NewHandler(source, sink)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		handler.Run(ctx)
+		close(done)
+	}()
+
+	resultDone := make(chan struct{})
+	source <- domain.Result{
+		Job:      domain.Job{Key: []byte("done-test")},
+		Err:      errors.New("fail"),
+		Attempts: 1,
+		Done:     resultDone,
+	}
+
+	select {
+	case <-resultDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done channel not closed after successful sink write")
+	}
+
+	cancel()
+	<-done
+}
+
+func TestDLQHandlerClosesDoneAfterRetriesExhausted(t *testing.T) {
+	source := make(chan domain.Result, 1)
+	sink := &spySink{sendErr: errors.New("permanent failure")}
+	handler := dlq.NewHandler(source, sink,
+		dlq.WithConfig(dlq.Config{MaxSinkRetries: 2, RetryDelay: 0}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		handler.Run(ctx)
+		close(done)
+	}()
+
+	resultDone := make(chan struct{})
+	source <- domain.Result{
+		Job:      domain.Job{Key: []byte("exhaust-test")},
+		Err:      errors.New("fail"),
+		Attempts: 1,
+		Done:     resultDone,
+	}
+
+	select {
+	case <-resultDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done channel not closed after retries exhausted")
+	}
+
+	cancel()
+	<-done
+}
+
+func TestDLQHandlerFallbackOnPermanentFailure(t *testing.T) {
+	source := make(chan domain.Result, 1)
+	sink := &spySink{sendErr: errors.New("permanent failure")}
+	fallback := &spySink{}
+	handler := dlq.NewHandler(source, sink,
+		dlq.WithConfig(dlq.Config{MaxSinkRetries: 1, RetryDelay: 0}),
+		dlq.WithFallback(fallback),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		handler.Run(ctx)
+		close(done)
+	}()
+
+	resultDone := make(chan struct{})
+	source <- domain.Result{
+		Job:      domain.Job{Key: []byte("fallback-test"), Topic: "raw-documents"},
+		Err:      errors.New("fail"),
+		Attempts: 3,
+		Done:     resultDone,
+	}
+
+	select {
+	case <-resultDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Done signal")
+	}
+
+	cancel()
+	<-done
+
+	if fallback.Count() != 1 {
+		t.Fatalf("expected 1 fallback write, got %d", fallback.Count())
+	}
+	if string(fallback.Last().Job.Key) != "fallback-test" {
+		t.Fatalf("fallback got wrong job key: %s", string(fallback.Last().Job.Key))
+	}
+}
+
+func TestDLQHandlerNilDoneChannelIsHandledSafely(t *testing.T) {
+	source := make(chan domain.Result, 1)
+	sink := &spySink{}
+	handler := dlq.NewHandler(source, sink)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		handler.Run(ctx)
+		close(done)
+	}()
+
+	source <- domain.Result{
+		Job:      domain.Job{Key: []byte("nil-done")},
+		Err:      errors.New("fail"),
+		Attempts: 1,
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if sink.Count() != 1 {
+		t.Fatalf("expected 1 sink write, got %d", sink.Count())
 	}
 }
 

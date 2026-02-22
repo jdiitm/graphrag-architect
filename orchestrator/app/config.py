@@ -7,11 +7,13 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class AuthConfig:
     token_secret: str = ""
+    token_ttl_seconds: int = 3600
 
     @classmethod
     def from_env(cls) -> AuthConfig:
         return cls(
             token_secret=os.environ.get("AUTH_TOKEN_SECRET", ""),
+            token_ttl_seconds=int(os.environ.get("AUTH_TOKEN_TTL", "3600")),
         )
 
 

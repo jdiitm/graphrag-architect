@@ -58,7 +58,12 @@ func main() {
 		}
 	}()
 
-	fp := processor.NewForwardingProcessor(orchestratorURL, &http.Client{Timeout: 30 * time.Second})
+	var fpOpts []processor.ForwardingOption
+	if authToken := os.Getenv("AUTH_TOKEN"); authToken != "" {
+		fpOpts = append(fpOpts, processor.WithAuthToken(authToken))
+		log.Println("auth token configured for orchestrator requests")
+	}
+	fp := processor.NewForwardingProcessor(orchestratorURL, &http.Client{Timeout: 30 * time.Second}, fpOpts...)
 
 	cfg := dispatcher.Config{
 		NumWorkers: numWorkers,

@@ -27,13 +27,26 @@ type ingestRequest struct {
 type ForwardingProcessor struct {
 	orchestratorURL string
 	client          *http.Client
+	authToken       string
 }
 
-func NewForwardingProcessor(orchestratorURL string, client *http.Client) *ForwardingProcessor {
-	return &ForwardingProcessor{
+type ForwardingOption func(*ForwardingProcessor)
+
+func WithAuthToken(token string) ForwardingOption {
+	return func(fp *ForwardingProcessor) {
+		fp.authToken = token
+	}
+}
+
+func NewForwardingProcessor(orchestratorURL string, client *http.Client, opts ...ForwardingOption) *ForwardingProcessor {
+	fp := &ForwardingProcessor{
 		orchestratorURL: orchestratorURL,
 		client:          client,
 	}
+	for _, o := range opts {
+		o(fp)
+	}
+	return fp
 }
 
 func (f *ForwardingProcessor) Process(ctx context.Context, job domain.Job) error {
@@ -72,6 +85,9 @@ func (f *ForwardingProcessor) Process(ctx context.Context, job domain.Job) error
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if f.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+f.authToken)
+	}
 	telemetry.InjectTraceContext(ctx, req.Header)
 
 	resp, err := f.client.Do(req)
