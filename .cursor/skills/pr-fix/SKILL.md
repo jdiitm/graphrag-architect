@@ -20,7 +20,7 @@ Your only exit: HALT and emit `→ REVIEW`.
 
 ## Model Requirement
 
-This skill runs on **Claude Opus 4**. When opening a new chat to trigger this skill, select Claude Opus 4 from the model picker.
+This skill runs on **Claude Opus 4 (Thinking)**. When opening a new chat to trigger this skill, select `claude-4-opus-thinking` from the model picker.
 
 ## Isolation Protocol
 
@@ -143,6 +143,6 @@ Do NOT self-review. Do NOT merge.
 Tell the user exactly this:
 
 > Fixes pushed to branch `<branch>` for PR #N.
-> **Next:** Open a new chat **(model: Claude Opus 4)** and trigger `@pr-review`.
+> **Next:** Open a new chat **(model: claude-4-opus-thinking)** and trigger `@pr-review`.
 
 Then STOP. Do not write another word or call another tool.

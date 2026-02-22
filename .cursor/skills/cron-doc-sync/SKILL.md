@@ -21,7 +21,7 @@ Your exits depend on the audit verdict in `audit-report.md`:
 
 ## Model Requirement
 
-This skill runs on **Gemini 2.5 Pro**. When opening a new chat to trigger this skill, select Gemini 2.5 Pro from the model picker.
+This skill runs on **Claude Opus 4 (Thinking)**. When opening a new chat to trigger this skill, select `claude-4-opus-thinking` from the model picker.
 
 ## Isolation Protocol
 
@@ -274,7 +274,7 @@ Tell the user exactly this:
 
 > Documentation sync complete. N files updated, M files already accurate.
 > Audit verdict is **RED** — there is high-priority work to do.
-> **Next:** Open a new chat **(model: Claude Opus 4)** and trigger `@tdd-feature-cycle`.
+> **Next:** Open a new chat **(model: claude-4-opus-thinking)** and trigger `@tdd-feature-cycle`.
 
 Then STOP. Do not write another word or call another tool.
 
@@ -287,6 +287,6 @@ Tell the user exactly this:
 > Documentation sync complete. N files updated, M files already accurate.
 > Audit verdict is **YELLOW/GREEN** — no high-priority work. System is healthy.
 > **Do NOT trigger `@tdd-feature-cycle`.**
-> **Next:** Trigger `@cron-audit` again in ~30 minutes **(model: Gemini 2.5 Pro)**.
+> **Next:** Trigger `@cron-audit` again in ~30 minutes **(model: claude-4-opus-thinking)**.
 
 Then STOP. Do not write another word or call another tool.
