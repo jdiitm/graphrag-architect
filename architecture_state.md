@@ -77,8 +77,8 @@ LangGraph-based extraction pipeline.
 
 ### 3. Infrastructure (`infrastructure/`)
 
-- **Neo4j 5.15**: Knowledge graph store (ports 7474/7687).
-- **Apache Kafka 3.9**: Event bus, KRaft single-node (port 9092).
+- **Neo4j 5.26**: Knowledge graph store (ports 7474/7687).
+- **Apache Kafka 3.9**: Event bus, KRaft mode (port 9092).
 
 ## Data Flow
 

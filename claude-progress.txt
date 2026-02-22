@@ -1,540 +1,62 @@
-## 2026-02-22: Phase 3 — Production Deployment Infrastructure — Complete
+## Project Status: Feature-Complete
 
-### Completed
-- Dockerfiles: multi-stage builds for Python orchestrator (python:3.12-slim) and Go worker (golang:1.24-alpine)
-- K8s manifests (infrastructure/k8s/):
-  - namespace.yaml: graphrag namespace
-  - configmap.yaml: all service configuration (Neo4j, Kafka, OTLP, worker settings)
-  - secrets.yaml: template for NEO4J_PASSWORD and GOOGLE_API_KEY
-  - orchestrator-deployment.yaml: 2 replicas, health/readiness probes, resource limits
-  - ingestion-worker-deployment.yaml: 2 replicas, Prometheus scrape annotations, metrics port
-  - hpa.yaml: NFR-4 scaling triggers (consumer lag > 1000, CPU > 80%) for both components
-  - neo4j-schema-job.yaml: one-shot Job applying schema_init.cypher to Neo4j on startup
-- Prometheus metrics endpoint (Go):
-  - internal/metrics/metrics.go: ingestion_consumer_lag (gauge), ingestion_batch_duration_seconds (histogram), ingestion_dlq_routed_total (counter), ingestion_jobs_processed_total (counter)
-  - Wired into cmd/main.go: HTTP server on :9090/metrics
-- Trace sampling (NFR-8):
-  - ParentBasedTraceIdRatio sampler in Python observability.py
-  - Configurable via OTEL_TRACES_SAMPLER_ARG env var (default 0.1 = 10%)
-
-### TDD: 8 new tests
-- test_observability.py: 3 sampler config tests
-- metrics_test.go: 5 Prometheus metrics tests
-
-### Quality Gates
-- Pylint: 10/10
-- Python tests: 207/207 passing (3 new + 204 existing)
-- Go tests: 42/42 passing (5 new + 37 existing)
+All functional requirements (FR-1 through FR-8) and non-functional requirements
+have been implemented, tested, and merged to main.
 
 ---
 
-## 2026-02-22: FR-7 Access Control — Zanzibar-Inspired Permission Filtering — Complete
+## Implementation Summary
 
-### Completed
-- Created orchestrator/app/access_control.py:
-  - SecurityPrincipal: frozen dataclass, parsed from Authorization header (Bearer team=X,namespace=Y,role=Z)
-  - PermissionMetadata: team_owner + namespace_acl for graph nodes
-  - CypherPermissionFilter: generates node/edge WHERE clauses, injects into arbitrary Cypher
-    - Admin bypass (no filter), team-scoped, namespace-scoped, anonymous (public-only)
-    - Edge traversal authorization: target node filtered by same ACL rules
-    - inject_into_cypher: regex-based WHERE/AND insertion preserving existing clauses
-- Updated extraction_models.py:
-  - ServiceNode: added team_owner (Optional[str]) and namespace_acl (List[str])
-  - K8sDeploymentNode: added team_owner (Optional[str]) and namespace_acl (List[str])
-- Updated neo4j_client.py:
-  - _service_cypher: persists team_owner, namespace_acl to graph
-  - _k8s_deployment_cypher: persists team_owner, namespace_acl to graph
+### Phase 1: Core Pipeline
 
-### TDD: 19 new tests
-- test_access_control.py: SecurityPrincipal (6), PermissionMetadata (2), CypherPermissionFilter (9), node metadata (2)
+| Feature | Module | Status |
+|---|---|---|
+| FR-1: Async Kafka Ingestion | `workers/ingestion/` | Complete |
+| FR-2: LLM Entity Extraction | `orchestrator/app/llm_extraction.py` | Complete |
+| FR-3: Neo4j Persistence | `orchestrator/app/neo4j_client.py` | Complete |
+| FR-4: Hybrid Query Routing | `orchestrator/app/query_engine.py` | Complete |
+| FR-5: Schema Validation Loop | `orchestrator/app/schema_validation.py` | Complete |
+| FR-6: DLQ Fault Tolerance | `workers/ingestion/internal/dlq/` | Complete |
 
-### Quality Gates
-- Pylint: 10/10
-- Python tests: 199/199 passing (19 new + 180 existing)
-- Go tests: 37/37 passing (no regressions)
+### Phase 2: Cross-Cutting Concerns
 
----
+| Feature | Module | Status |
+|---|---|---|
+| FR-7: Access Control | `orchestrator/app/access_control.py` | Complete |
+| FR-8: Observability (Python) | `orchestrator/app/observability.py` | Complete |
+| FR-8: Observability (Go) | `workers/ingestion/internal/telemetry/` | Complete |
 
-## 2026-02-22: FR-8 Observability (Go) — OpenTelemetry Spans on Ingestion Pipeline — Complete
+### Phase 3: NFR Hardening & Deployment
 
-### Completed
-- Created workers/ingestion/internal/telemetry/telemetry.go:
-  - Init() with configurable SpanExporter (OTLP gRPC for production, injectable for tests)
-  - Tracer() accessor
-  - StartPollSpan (batch.size attribute)
-  - StartProcessSpan (job.topic, job.partition, job.offset attributes)
-  - StartForwardSpan (http.target, job.file_path attributes)
-  - StartDLQSpan (dlq.attempts, dlq.error, dlq.topic attributes)
-  - StartCommitSpan for offset commits
-- Instrumented consumer/consumer.go: kafka.poll and kafka.commit spans wrapping batch lifecycle
-- Instrumented dispatcher/dispatcher.go: job.process spans on each worker, dlq.route spans on failure
-- Instrumented processor/forwarding.go: http.forward span on each HTTP POST to orchestrator
-
-### TDD: 9 new Go tests
-- telemetry_test.go: Init (2), Tracer (1), exporter capture (1)
-- spans_test.go: poll (1), process (1), forward (1), DLQ (1), commit (1)
-
-### Quality Gates
-- Pylint: 10/10
-- Python tests: 180/180 passing (no regressions)
-- Go tests: 35/35 passing (9 new + 26 existing)
-
-### FR-8 Status: Complete (Python + Go)
-- Python: TracerProvider, FastAPI auto-instrumentation, manual spans on all 12 DAG nodes, 4 metric histograms
-- Go: TracerProvider, manual spans on kafka.poll, job.process, http.forward, dlq.route, kafka.commit
+| Item | Module | Status |
+|---|---|---|
+| Circuit Breaker (NFR-6) | `orchestrator/app/circuit_breaker.py` | Complete |
+| Error-Aware Sampling (NFR-8) | `orchestrator/app/observability.py` | Complete |
+| Prometheus Metrics Wiring | `workers/ingestion/internal/metrics/` | Complete |
+| Integration Tests | `orchestrator/tests/test_integration.py` | Complete |
+| CI/CD Pipeline | `.github/workflows/ci.yml` | Complete |
+| Dockerfiles | `orchestrator/Dockerfile`, `workers/ingestion/Dockerfile` | Complete |
+| K8s Manifests | `infrastructure/k8s/` | Complete |
+| StatefulSets (Neo4j, Kafka) | `infrastructure/k8s/` | Complete |
+| Ingress, NetworkPolicies | `infrastructure/k8s/` | Complete |
+| Alerting (PrometheusRule) | `infrastructure/k8s/alerting.yaml` | Complete |
 
 ---
 
-## 2026-02-22: FR-8 Observability (Python) — TracerProvider, Spans, Metrics — Complete
+## Architecture
 
-### Completed
-- Created orchestrator/app/observability.py:
-  - configure_telemetry(): TracerProvider with configurable SpanExporter
-  - OTLP gRPC exporter (BatchSpanProcessor) for production, SimpleSpanProcessor for tests
-  - get_tracer(): module-level tracer accessor
-  - 4 metric histograms: INGESTION_DURATION, LLM_EXTRACTION_DURATION, NEO4J_TRANSACTION_DURATION, QUERY_DURATION
-- Instrumented orchestrator/app/graph_builder.py with manual spans:
-  - ingestion.load_workspace (with file_count attribute)
-  - ingestion.parse_services
-  - ingestion.validate_schema
-  - ingestion.commit_neo4j
-- Instrumented orchestrator/app/query_engine.py with manual spans:
-  - query.classify (with query.complexity attribute)
-  - query.synthesize
-- Added FastAPI auto-instrumentation in main.py via FastAPIInstrumentor
-- Updated orchestrator/requirements.txt with OpenTelemetry dependencies
-
-### TDD: 14 new tests
-- test_observability.py: configure (2), ingestion spans (4), query spans (2), span attributes (2), metrics (4)
-
-### Quality Gates
-- Pylint: 10/10
-- Python tests: 173/173 passing (14 new + 159 existing)
-- Go tests: 26/26 passing (no regressions)
-
-### Next Step
-- FR-8 Go side: OpenTelemetry spans on Kafka consume, dispatch, process, DLQ routing
+- Python orchestrator: FastAPI + LangGraph (ingestion DAG + query DAG)
+- Go ingestion workers: Kafka consumer, dispatcher, forwarding processor, DLQ
+- Neo4j 5.26: Knowledge graph with 5 constraints, 3 indexes, fulltext search
+- Apache Kafka 3.9: KRaft mode, at-least-once delivery
+- OpenTelemetry: Distributed tracing across Go -> HTTP -> Python boundary
+- Prometheus: Consumer lag, batch duration, DLQ rate, jobs processed metrics
 
 ---
 
-## 2026-02-22: FR-4 Hybrid Query Routing — Classifier, Router DAG, /query Endpoint — Complete
-
-### Completed
-- Created orchestrator/app/query_models.py:
-  - QueryComplexity enum: entity_lookup, single_hop, multi_hop, aggregate
-  - QueryRequest: query (min_length=1), max_results (1-100, default 10)
-  - QueryResponse: answer, sources, complexity, retrieval_path
-  - QueryState TypedDict for LangGraph DAG state
-- Created orchestrator/app/query_classifier.py:
-  - Keyword-based query complexity classification using regex patterns
-  - Aggregate > Multi-hop > Single-hop > Entity lookup (priority order)
-  - Patterns from architecture doc: "blast radius", "downstream", "produces", "top N", etc.
-  - Case-insensitive matching
-- Created orchestrator/app/query_engine.py:
-  - LangGraph StateGraph: classify → route → {vector|cypher|hybrid}_retrieve → synthesize → END
-  - classify_query_node: maps query text to complexity + retrieval_path
-  - route_query: conditional edge routing to correct retrieval node
-  - vector_retrieve: Neo4j fulltext index query for entity lookups
-  - cypher_retrieve: LLM generates Cypher, executes against Neo4j, returns results
-  - hybrid_retrieve: vector pre-filter candidates, then LLM-generated Cypher aggregation
-  - synthesize_answer: LLM produces NL answer grounded in retrieved context
-  - query_graph: compiled StateGraph exposed for import
-- Modified orchestrator/app/main.py:
-  - POST /query endpoint accepting QueryRequest, returning QueryResponse
-  - Delegates to query_graph.ainvoke with full QueryState initialization
-  - Generic error message on failure (consistent with /ingest pattern)
-
-### TDD: 36 new tests
-- test_query_classifier.py (18 tests): entity lookup (3), single hop (4), multi hop (5), aggregate (4), case insensitivity (2)
-- test_query_engine.py (12 tests): classify node (2), route query (4), vector retrieve (2), cypher retrieve (1), hybrid retrieve (1), synthesize (2)
-- test_query_api.py (6 tests): validation (2), success (2), custom max_results (1), error (1)
-
-### Architecture Decisions
-- Keyword-based classifier first (deterministic, fully testable) — LLM classifier can enhance later
-- Neo4j fulltext index for vector path (doesn't require embedding infrastructure yet)
-- All 3 retrieval paths implemented with proper Neo4j + LLM mocking in tests
-- LLM calls (Cypher generation, synthesis) use Gemini via LangChain, mockable for testing
-
-### Quality Gates
-- Pylint: 10/10
-- Python tests: 153/153 passing (36 new + 117 existing)
-- Go tests: 26/26 passing (no regressions)
-- Total: 179/179 passing
-
-### Next Step
-- FR-7: Access Control (Phase 2) or FR-8: Observability
-
----
-
-## 2026-02-22: FR-1 Kafka Pipeline — ForwardingProcessor, Consumer, cmd/main.go — Complete
-
-### Completed
-- Created workers/ingestion/internal/processor/forwarding.go (ForwardingProcessor):
-  - Implements DocumentProcessor interface
-  - Constructs IngestRequest JSON from domain.Job (base64 encodes Value, maps Headers)
-  - HTTP POSTs to orchestrator /ingest endpoint
-  - Validates required headers (file_path, source_type), optional (repository, commit_sha)
-  - Content-Type: application/json, error on non-2xx response
-- Created workers/ingestion/internal/consumer/consumer.go:
-  - JobSource interface (Poll, Close) for abstracting Kafka dependency
-  - Consumer loop: polls batches from source, sends to dispatcher jobs channel
-  - Clean shutdown on context cancellation or ErrSourceClosed
-- Created workers/ingestion/cmd/main.go (entry point):
-  - Wires: KafkaJobSource → Consumer → Dispatcher → ForwardingProcessor
-  - DLQ Handler with LogDLQSink (logging-based DLQ for initial deployment)
-  - Graceful shutdown via SIGINT/SIGTERM signal handling
-  - Config from environment: ORCHESTRATOR_URL, KAFKA_BROKERS, KAFKA_TOPIC, KAFKA_CONSUMER_GROUP, NUM_WORKERS, MAX_RETRIES
-- Created workers/ingestion/cmd/kafka.go:
-  - KafkaJobSource: franz-go kgo.Client wrapper implementing JobSource
-  - Converts kgo.Record → domain.Job (headers, key, value, metadata)
-  - Manual offset commit after successful poll (at-least-once delivery)
-  - LogDLQSink: logs DLQ results for observability
-- Fixed LOW-001 (security): orchestrator/app/main.py now returns generic "Internal ingestion error" instead of str(exc), logs full exception server-side
-- Updated README.md: accurate project tree (all 10 app modules, 6 test files), test counts (117 Python, 25 Go), Go 1.24+ prereq
-- Updated tdd-feature-cycle SKILL.md: YELLOW verdict now continues to Phase 1 (only GREEN halts)
-
-### TDD: 17 new tests + 8 existing = 25 Go tests total
-- ForwardingProcessor (11 tests): success, JSON format, base64 encoding, /ingest path, Content-Type, server error, connection refused, context cancelled, missing file_path, missing source_type, optional headers omitted
-- Consumer (4 tests): polls and sends all jobs, stops on context cancel, returns source error, stops on source closed
-- End-to-End wiring (2 tests): consumer → dispatcher → forwarding (success), failed job routes to DLQ
-
-### Architecture Decisions
-- Job.Value = raw bytes, ForwardingProcessor base64-encodes for HTTP transport (efficient on Kafka wire)
-- Job.Headers carry metadata (file_path, source_type, repository, commit_sha) matching Python IngestDocument schema
-- JobSource interface decouples consumer loop from franz-go — fully unit-testable with stubs
-- One Job = one HTTP POST with one document (batching is a Kafka-level concern)
-- DisableAutoCommit + manual CommitUncommittedOffsets after poll for at-least-once semantics
-
-### Quality Gates
-- Pylint: 10/10
-- Python tests: 117/117 passing
-- Go tests: 25/25 passing
-- Total: 142/142 passing, 0 regressions
-
-### FR-1 Status: Complete
-- KafkaConsumer (franz-go integration): ✅
-- ForwardingProcessor (HTTP POST to Python): ✅
-- cmd/main.go entry point: ✅
-- Dispatcher + DLQ Handler: ✅ (pre-existing)
-- FastAPI /ingest receiver: ✅ (pre-existing)
-
-### Next Step
-- FR-4: Hybrid Query Routing (LangGraph StateGraph with conditional Vector/Cypher/Hybrid paths)
-
----
-
-## 2026-02-22: FastAPI /ingest Endpoint — Complete
-
-### Completed
-- Created orchestrator/app/ingest_models.py with Pydantic request/response models:
-  - SourceType enum: source_code, k8s_manifest, kafka_schema
-  - IngestDocument: file_path, base64 content, source_type, optional repository/commit_sha
-  - IngestRequest: documents list with min_length=1 validation
-  - IngestResponse: status, entities_extracted count, errors list
-- Created orchestrator/app/main.py with FastAPI endpoints:
-  - GET /health: K8s readiness/liveness probe (returns {"status": "healthy"})
-  - POST /ingest: accepts base64-encoded documents, decodes, invokes LangGraph DAG
-  - _decode_documents(): strict base64 validation, UTF-8 decode, returns raw_files format
-  - Error handling: 400 for invalid base64, 422 for validation errors, 500 for graph failures
-- Modified orchestrator/app/graph_builder.py:
-  - load_workspace_files now preserves existing raw_files when directory_path is empty
-  - Enables HTTP-injected files to pass through the DAG without being overwritten
-- TDD: 19 new tests written and passing across 6 test classes
-  - TestHealthEndpoint (2 tests): status code, response body
-  - TestIngestRequestValidation (6 tests): missing fields, empty list, invalid source_type
-  - TestIngestBase64Decoding (2 tests): invalid base64, correct decode verification
-  - TestIngestGraphInvocation (4 tests): state format, success, failed status, exception handling
-  - TestIngestOptionalFields (2 tests): repository/commit_sha optional
-  - TestLoadWorkspacePreservesRawFiles (3 tests): empty path, missing path, directory path
-
-### Architecture Decisions
-- Matches Kafka message schema from architecture doc: file_path, base64 content, source_type, repository, commit_sha
-- SourceType enum restricts input to valid document types (source_code, k8s_manifest, kafka_schema)
-- base64.b64decode(validate=True) for strict validation (rejects non-base64 payloads)
-- Graph invoked with directory_path="" to signal HTTP mode (load_workspace_files preserves injected raw_files)
-- Broad Exception catch in /ingest endpoint is intentional: any graph failure returns structured 500
-
-### Quality Gates
-- Pylint: 10/10
-- Python tests: 117/117 passing (19 new + 98 existing)
-- Go tests: 8/8 passing (no regressions)
-- Total: 125/125 passing, 0 regressions
-
-### PR Status
-- Branch: feat/ingest-api — PR pending
-
-### Unresolved
-- FR-4: Hybrid Query Routing not yet started
-- FR-6: KafkaDLQSink not yet implemented (Go side)
-- FR-8: Observability not yet implemented
-- Go ForwardingProcessor not yet implemented (will HTTP POST to this endpoint)
-- No uvicorn in requirements.txt (needed to run server, not needed for tests)
-
-### Next Step
-- Implement Go ForwardingProcessor (HTTP POST to /ingest)
-- OR begin FR-4: Hybrid Query Routing
-
----
-
-## 2026-02-22: parse_k8s_and_kafka_manifests DAG Node — Complete
-
-### Completed
-- Created orchestrator/app/manifest_parser.py with deterministic YAML parsing:
-  - _safe_load_all(): multi-document YAML deserialization with malformed input protection
-  - _extract_deployment(): K8s Deployment -> K8sDeploymentNode (kind filtering, default namespace/replicas)
-  - _extract_kafka_topic(): Strimzi KafkaTopic -> KafkaTopicNode (kind filtering, default partitions/retention)
-  - parse_k8s_manifests(): public entry point for K8s Deployments from YAML content
-  - parse_kafka_topics(): public entry point for Kafka Topics from YAML content
-  - parse_all_manifests(): orchestrator filtering .yaml/.yml files and combining both entity types
-- Updated orchestrator/app/graph_builder.py:
-  - parse_k8s_and_kafka_manifests now delegates to parse_all_manifests
-  - Fixed state accumulation bug: appends manifest entities to existing extracted_nodes (was overwriting)
-  - Last DAG stub is now implemented — full ingestion pipeline is functional
-- TDD: 28 new tests written and passing across 4 test classes
-  - TestParseK8sManifests (10 tests): valid, defaults, wrong kind, missing name, multi-doc, malformed, empty
-  - TestParseKafkaTopics (9 tests): Strimzi format, defaults, wrong kind, missing name, multi-doc, retention types
-  - TestParseAllManifests (6 tests): extension filtering, combination, empty, invalid, mixed multi-doc
-  - TestDagNodeIntegration (3 tests): state accumulation, preservation, empty state
-
-### Architecture Decisions
-- Deterministic YAML parsing (no LLM): manifests have well-defined schemas, so parsing is faster, cheaper, deterministic, and hallucination-free
-- Supports multi-document YAML (--- separators) — common in K8s manifests
-- Sensible defaults: namespace=default, replicas=1, partitions=1, retention=7 days (604800000ms)
-- Strimzi KafkaTopic CRD format: retention.ms read from spec.config (supports both string and int values)
-- State accumulation fix: parse_manifests reads existing extracted_nodes and appends (LangGraph uses replace semantics for un-annotated List)
-
-### Quality Gates
-- Pylint: 10/10
-- Python tests: 98/98 passing (28 new + 70 existing)
-- Go tests: 8/8 passing (no regressions)
-- Total: 106/106 passing, 0 regressions
-
-### PR Status
-- Branch: feat/manifest-parser — PR pending
-
-### Unresolved
-- No FastAPI /ingest HTTP endpoint yet (FR-1 integration point)
-- FR-4: Hybrid Query Routing not yet started
-- FR-6: KafkaDLQSink not yet implemented (Go side)
-- FR-8: Observability not yet implemented
-
-### Next Step
-- Implement FastAPI /ingest endpoint to receive payloads from Go ForwardingProcessor
-- OR begin FR-4: Hybrid Query Routing (LangGraph StateGraph with conditional edges for vector/graph/hybrid paths)
-
----
-
-## 2026-02-22: load_workspace_files DAG Node — Complete
-
-### Completed
-- Created orchestrator/app/workspace_loader.py with load_directory():
-  - Recursive directory walk via os.walk with in-place pruning of excluded dirs
-  - Extension filtering: .go, .py, .yaml, .yml (matching FR-2 input spec)
-  - Excluded directories: .git, .venv, __pycache__, node_modules, .mypy_cache, .pytest_cache, .tox, .eggs, venv
-  - Size guard: skips files > 1MB (MAX_FILE_SIZE_BYTES)
-  - Returns List[Dict[str, str]] with relative POSIX paths and UTF-8 content
-  - Deterministic sort by path for reproducible ordering
-  - Graceful handling: unreadable files, nonexistent directories, UnicodeDecodeError
-- Updated orchestrator/app/graph_builder.py:
-  - load_workspace_files now delegates to load_directory(state["directory_path"])
-  - First DAG node is no longer a stub — pipeline has working input
-- TDD: 23 new tests written and passing across 7 test classes
-
-### Architecture Decisions
-- Pure function (no I/O side effects beyond reading filesystem) for testability
-- POSIX path normalization via PurePosixPath for cross-platform consistency
-- Extension pre-filtering at loader level (matches the 4 extensions the downstream nodes consume)
-- frozenset constants for O(1) membership checks on excluded dirs and included extensions
-
-### Quality Gates
-- Pylint: 10/10
-- Python tests: 68/68 passing (23 new + 45 existing)
-- Go tests: 8/8 passing (no regressions)
-- Total: 76/76 passing, 0 regressions
-
-### PR Status
-- Branch: feat/workspace-loader — PR pending
-
-### Unresolved
-- parse_k8s_and_kafka_manifests node is still a stub
-- No FastAPI /ingest HTTP endpoint yet (FR-1 integration point)
-
-### Next Step
-- Implement parse_k8s_and_kafka_manifests to extract K8sDeploymentNode and KafkaTopicNode from YAML
-- OR implement FastAPI /ingest endpoint to receive payloads from Go ForwardingProcessor
-
----
-
-## 2026-02-22: FR-5 Schema Validation with Correction Loop — Green Phase Complete
-
-### Completed
-- Created orchestrator/app/schema_validation.py: validate_topology() with:
-  - Type checking: rejects entities not in the 8 known Pydantic types
-  - Referential integrity: CallsEdge, ProducesEdge, ConsumesEdge, DeployedInEdge checked against existing nodes
-  - Index building: service_ids, topic_names, deployment_ids sets for O(1) lookups
-  - Per-edge-type validators: _validate_calls, _validate_produces, _validate_consumes, _validate_deployed_in
-- Updated orchestrator/app/graph_builder.py:
-  - Added validation_retries field to IngestionState TypedDict
-  - Added MAX_VALIDATION_RETRIES = 3 constant
-  - validate_extracted_schema now delegates to validate_topology()
-  - route_validation now checks retry count: routes to commit when retries >= 3 (gives up gracefully)
-  - fix_extraction_errors is now async, re-invokes ServiceExtractor.extract_all(), increments retry counter
-- TDD: 19 new tests written and passing (validate_topology x12, route_validation x3, DAG nodes x4)
-
-### Architecture Decisions
-- Validation is pure functions in schema_validation.py (no I/O, fully deterministic, fast)
-- Referential integrity checks all 4 edge types against their referenced node types
-- Correction loop re-extracts from raw_files via the existing ServiceExtractor (same LLM path)
-- Max 3 retries before routing to commit with whatever valid entities remain
-- Unknown entity types (non-Pydantic) are flagged but don't block valid entities
-
-### Quality Gates
-- Pylint: 10/10
-- Python tests: 45/45 passing (19 new + 26 existing)
-- Go tests: 8/8 passing (no regressions)
-- Total: 53/53 passing, 0 regressions
-
-### PR Status
-- Branch: feat/schema-validation-loop — PR raised, awaiting human review
-
-### Unresolved
-- load_workspace_files node is still a stub
-- parse_k8s_and_kafka_manifests node is still a stub
-- No integration test with real LLM correction loop (requires GOOGLE_API_KEY)
-
-### Next Step
-- Implement load_workspace_files to recursively read a directory into raw_files
-- OR implement the FastAPI /ingest HTTP endpoint to receive payloads from Go workers
-
----
-
-## 2026-02-22: FR-3 Neo4j Knowledge Graph Persistence — Green Phase Complete
-
-### Completed
-- Added Neo4jConfig frozen dataclass to orchestrator/app/config.py (uri, username, password from env vars)
-- Created orchestrator/app/neo4j_client.py: GraphRepository class with:
-  - cypher_op_for_entity() — dispatches Pydantic model to type-specific Cypher MERGE query + params
-  - 8 Cypher generators: ServiceNode, DatabaseNode, KafkaTopicNode, K8sDeploymentNode, CallsEdge, ProducesEdge, ConsumesEdge, DeployedInEdge
-  - _partition_entities() — separates nodes from edges for ordered execution
-  - GraphRepository.commit_topology() — async, opens session, execute_write in single transaction
-  - GraphRepository._merge_all() — static transaction function, merges nodes first then edges
-- Updated orchestrator/app/graph_builder.py: commit_to_neo4j is now async, creates AsyncGraphDatabase driver, delegates to GraphRepository
-- TDD: 15 new tests written and passing (Cypher gen x10, commit_topology x2, empty x1, rollback x1, idempotent x1)
-
-### Architecture Decisions
-- Cypher MERGE on unique-constrained key properties (Service.id, KafkaTopic.name, etc.) for idempotency
-- Single transaction per batch: nodes merged first, then edges (edges depend on MATCH of existing nodes)
-- Entity dispatch via dict mapping type -> generator function (avoids if/elif chain)
-- Driver injected into GraphRepository for testability (constructor injection)
-- Error handling: catches Neo4jError and OSError (connection failures), returns commit_status="failed"
-
-### Quality Gates
-- Pylint: 10/10
-- Python tests: 26/26 passing (15 new + 11 existing)
-- Go tests: 8/8 passing (no regressions)
-- Total: 34/34 passing, 0 regressions
-
-### PR Status
-- Branch: feat/neo4j-persistence — PR raised, awaiting human review
-
-### Unresolved
-- load_workspace_files node is still a stub
-- parse_k8s_and_kafka_manifests node is still a stub
-- validate_extracted_schema and fix_extraction_errors are still stubs (FR-5)
-- No integration test with real Neo4j (requires running instance)
-
-### Next Step
-- Implement FR-5: Schema Validation with Correction Loop (validate_extracted_schema + fix_extraction_errors)
-- OR implement load_workspace_files to recursively read a directory into raw_files
-
----
-
-## 2026-02-21: parse_go_and_python_services — Green Phase Complete
-
-### Completed
-- Created orchestrator/app/config.py: ExtractionConfig frozen dataclass (GOOGLE_API_KEY, model_name, concurrency, token budget, retry params)
-- Added ServiceExtractionResult to orchestrator/app/extraction_models.py (services + calls contract)
-- Created orchestrator/app/llm_extraction.py: ServiceExtractor class with:
-  - filter_source_files() — static, keeps only .go/.py
-  - batch_by_token_budget() — static generator, greedy bin-packing by estimated tokens
-  - extract_batch() — async, builds system+human prompt, calls chain (ChatGoogleGenerativeAI.with_structured_output)
-  - extract_all() — async orchestrator: filter → batch → semaphore-gated gather → deduplicate by ServiceNode.id
-  - Retry: tenacity exponential backoff on google.api_core ResourceExhausted/ServiceUnavailable
-- Updated orchestrator/app/graph_builder.py: parse_go_and_python_services is now async, wired to ServiceExtractor
-- TDD: 11 tests written and passing (filter x3, batch x3, extract_batch x2, extract_all x3)
-- Infrastructure: .venv created, all deps + pytest + pytest-asyncio installed, google-api-core added
-
-### Architecture Decisions
-- LLM: Gemini via langchain-google-genai (Anthropic access is Cursor-proxied only, no standalone API key)
-- Default model: gemini-2.0-flash (fast extraction), overridable to gemini-2.5-pro via EXTRACTION_MODEL env var
-- self.chain = structured_llm.ainvoke (bound method) — allows direct AsyncMock in tests
-- Token estimation: len(content) // 4
-
-### Unresolved
-- load_workspace_files node is still a stub
-- parse_k8s_and_kafka_manifests node is still a stub
-- No integration test with real LLM (requires GOOGLE_API_KEY)
-- CallsEdge deduplication not yet implemented (only ServiceNode.id dedup)
-
-### Next Step
-- Implement load_workspace_files to recursively read a directory into raw_files
-- OR add integration test that calls Gemini with the Go/Python fixtures to validate prompt quality
-
----
-
-## 2026-02-21: Go Kafka Ingestion Worker Pool — Green Phase Complete
-
-### Completed
-- Initialized architecture_state.md with full system design (Go workers + Python orchestrator + Kafka + Neo4j)
-- Created workers/ingestion/ Go module (github.com/jdiitm/graphrag-architect/workers/ingestion)
-- Created internal/domain/job.go: Job and Result value types
-- Created internal/processor/processor.go: DocumentProcessor interface
-- Created internal/dispatcher/dispatcher.go: Dispatcher with concurrent worker pool
-  - Run(ctx) launches NumWorkers goroutines reading from shared jobs channel
-  - processWithRetry() retries up to MaxRetries times, checks ctx on each failure
-  - Failed jobs (after max retries) routed to DLQ channel
-  - Graceful shutdown: context cancellation + sync.WaitGroup ensures in-flight jobs complete
-- Created internal/dlq/handler.go: DLQ Handler
-  - Run(ctx) drains results from channel, forwards each to DeadLetterSink interface
-  - Exits on context cancellation or closed channel
-- TDD Red-Green cycle complete: 8 tests written and passing
-  - Dispatcher: 6 tests (process, concurrency, retry, DLQ routing, graceful shutdown, drain)
-  - DLQ Handler: 2 tests (forward to sink, stop on closed channel)
-
-### Architecture Decisions
-- Worker pool pattern: N goroutines sharing a single buffered jobs channel (fan-out)
-- Retry is synchronous within each worker (no sleep, no backoff at dispatcher level)
-- DLQ is a buffered channel bridged by a separate Handler goroutine to a DeadLetterSink interface
-- Kafka library: franz-go selected (not yet imported — will be wired in consumer phase)
-- No external dependencies yet — pure stdlib for dispatcher and DLQ
-
-### Full Test Suite Status
-- Python: 11/11 passing (orchestrator/tests/test_service_extractor.py)
-- Go: 8/8 passing (dispatcher x6, dlq x2)
-- Total: 19/19 passing, 0 regressions
-
-### Unresolved
-- (none remaining from Phase 1-3)
-
----
-
-## Phase 3: Deployment Infrastructure (Complete)
-
-### Implemented
-- Orchestrator Dockerfile: multi-stage build, non-root user, correct package hierarchy
-- Ingestion worker Dockerfile: multi-stage build (builder + runtime), non-root user
-- Kubernetes manifests: namespace, configmap, secrets, orchestrator deployment, ingestion worker deployment, HPA, neo4j schema init job
-- Prometheus metrics: consumer lag, batch duration, DLQ routed, jobs processed — wired into dispatcher via PipelineObserver interface
-- OpenTelemetry trace sampling: configurable ParentBasedTraceIdRatio (default 0.1)
-- .dockerignore files for both containers
-
-### Quality Gates
-- Pylint: 10/10, Python: 207/207, Go: 42/42
-
-### Audit
-- Post-merge audit: GREEN. All Phase 1 FRs implemented. All Phase 2 FRs implemented ahead of schedule.
-- 2 LOW documentation findings (stale test counts, missing metrics/ in tree) — fixed.
-
-### Next Step
-- System is feature-complete for Phase 1-3. Candidate for production deployment.
-- Remaining follow-ups: wire RecordConsumerLag/RecordBatchDuration into consumer loop, custom error-aware sampler for NFR-8.
+## Quality Gates
+
+All gates pass before every push:
+1. Pylint: 10/10
+2. Python tests: all passing
+3. Go tests: all passing

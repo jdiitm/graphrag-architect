@@ -25,6 +25,10 @@ MAX_VALIDATION_RETRIES = 3
 _NEO4J_CIRCUIT_BREAKER = CircuitBreaker(CircuitBreakerConfig())
 
 
+def _build_extractor() -> ServiceExtractor:
+    return ServiceExtractor(ExtractionConfig.from_env())
+
+
 class IngestionState(TypedDict):
     directory_path: str
     raw_files: List[Dict[str, str]]
@@ -58,8 +62,7 @@ async def parse_go_and_python_services(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.parse_services"):
         start = time.monotonic()
-        config = ExtractionConfig.from_env()
-        extractor = ServiceExtractor(config)
+        extractor = _build_extractor()
         result = await extractor.extract_all(state["raw_files"])
         elapsed_ms = (time.monotonic() - start) * 1000
         LLM_EXTRACTION_DURATION.record(elapsed_ms, {"node": "parse_services"})
@@ -93,8 +96,7 @@ async def fix_extraction_errors(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.fix_errors"):
         start = time.monotonic()
-        config = ExtractionConfig.from_env()
-        extractor = ServiceExtractor(config)
+        extractor = _build_extractor()
         result = await extractor.extract_all(state.get("raw_files", []))
         retries = state.get("validation_retries", 0)
         LLM_EXTRACTION_DURATION.record(

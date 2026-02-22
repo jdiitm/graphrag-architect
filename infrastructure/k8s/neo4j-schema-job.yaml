@@ -12,7 +12,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: schema-init
-          image: neo4j:5.15.0
+          image: neo4j:5.26-community
           command:
             - /bin/bash
             - -c

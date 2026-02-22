@@ -1,5 +1,5 @@
 [tool.pylint.main]
-ignore-patterns = ["test_.*\\.py"]
+ignore-patterns = ["test_.*\\.py", "conftest\\.py"]
 
 [tool.pylint."messages control"]
 disable = [

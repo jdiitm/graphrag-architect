@@ -32,7 +32,7 @@ These are as non-negotiable as the integrity rules in the other skills:
 2. **Never inflate severity.** A style preference is not HIGH. A missing Phase 2 feature is not CRITICAL. Severity must match actual impact.
 3. **Never report a false positive.** Every finding must include the exact file, line, and evidence. If you cannot point to a specific line, it is not a finding.
 4. **Never suppress a real problem.** If tests fail, pylint scores below 10, or code contradicts the PRD, report it honestly regardless of how inconvenient it is.
-5. **Never count Phase 2 / spec'd-not-yet-planned items as gaps.** FR-4, FR-7, FR-8 are explicitly deferred in the PRD. Missing implementation of these is expected, not a finding. Only flag them if the PRD says they should be done now.
+5. **Never count deferred items as gaps.** Only flag a feature as missing if the PRD explicitly requires it in the current phase.
 6. **The verdict must follow mechanically from the evidence.** You do not get to "feel" like something is RED. Apply the verdict criteria below.
 
 ## Verdict Criteria (Objective)
@@ -41,12 +41,11 @@ Apply these rules mechanically. No judgment calls.
 
 | Verdict | Criteria |
 |---------|----------|
-| **RED** | ANY of: pylint < 10/10, ANY test failure, a Phase 1 FR with status Stub or Not Started, a CRITICAL finding with file:line evidence |
+| **RED** | ANY of: pylint < 10/10, ANY test failure, any FR with status Stub or Not Started, a CRITICAL finding with file:line evidence |
 | **YELLOW** | No RED triggers, but at least one HIGH finding with file:line evidence |
-| **GREEN** | All quality gates pass, all Phase 1 FRs implemented with tests, zero CRITICAL or HIGH findings |
+| **GREEN** | All quality gates pass, all FRs implemented with tests, zero CRITICAL or HIGH findings |
 
-Phase 1 FRs (must be implemented): FR-1, FR-2, FR-3, FR-5, FR-6.
-Phase 2 FRs (deferred, not counted): FR-4, FR-7, FR-8.
+All FRs (FR-1 through FR-8) are implemented. The audit verifies they remain functional.
 
 ## Precondition Gate
 
@@ -66,7 +65,7 @@ Read in full:
 - `docs/architecture/02_DATA_DICTIONARY.md`
 - `CLAUDE.md`
 
-Note which FRs are Phase 1 vs Phase 2.
+Note which FRs exist and their scope.
 
 ## Step 2: Read the Entire Codebase
 
@@ -115,9 +114,9 @@ Record: `Pylint: X/10, Python: A/B passed, Go: C/D passed`.
 
 For each dimension, look for actual problems. If a dimension is clean, move on — do not force findings.
 
-### 5a. Requirement Coverage (Phase 1 FRs only)
+### 5a. Requirement Coverage
 
-For each Phase 1 FR (FR-1, FR-2, FR-3, FR-5, FR-6):
+For each FR (FR-1 through FR-8):
 
 | Status | Meaning | Verdict Impact |
 |--------|---------|----------------|
@@ -125,8 +124,6 @@ For each Phase 1 FR (FR-1, FR-2, FR-3, FR-5, FR-6):
 | **Partial** | Code exists but incomplete, or tests missing | HIGH |
 | **Stub** | Function/node exists but is a no-op | RED trigger |
 | **Not Started** | No code at all | RED trigger |
-
-Phase 2 FRs (FR-4, FR-7, FR-8): note status for informational purposes only. NOT a finding.
 
 ### 5b. Test Coverage Gaps
 
@@ -201,7 +198,7 @@ Write to `audit-report.md`. **Only include sections that have findings.** Omit e
 ## Executive Summary
 
 - Quality Gates: Pylint X/10, Python A/B, Go C/D
-- Phase 1 FRs: N/5 implemented
+- FRs: N/8 implemented
 - Findings: X CRITICAL, Y HIGH, Z LOW
 - **Verdict: RED / YELLOW / GREEN**
 ```
@@ -209,7 +206,7 @@ Write to `audit-report.md`. **Only include sections that have findings.** Omit e
 **If GREEN:** The report ends after the Executive Summary. Add:
 
 ```markdown
-All quality gates pass. All Phase 1 requirements implemented with tests.
+All quality gates pass. All requirements (FR-1 through FR-8) implemented with tests.
 No CRITICAL or HIGH findings. System is healthy.
 
 ## Verdict
@@ -235,7 +232,7 @@ No CRITICAL or HIGH findings. System is healthy.
 
 1. **[LOW-001]** `file:line` — <description>
 
-## Requirement Gaps (if any Phase 1 FR is not Implemented)
+## Requirement Gaps (if any FR is not Implemented)
 
 | FR | Status | What's Missing |
 |----|--------|---------------|
@@ -252,7 +249,6 @@ No CRITICAL or HIGH findings. System is healthy.
 - Every finding must have `file:line` and evidence. No vague findings.
 - Do NOT include a Requirement Coverage Matrix row for FRs that are Implemented — only gaps.
 - Do NOT include Documentation Discrepancies, Test Coverage Gaps, or Stale Code sections if they are empty.
-- Do NOT include Phase 2 FRs in the gaps table.
 - Do NOT pad the report. Shorter is better. Actionable is everything.
 
 ## Step 7: HALT

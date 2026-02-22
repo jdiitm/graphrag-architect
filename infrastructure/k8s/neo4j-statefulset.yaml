@@ -25,11 +25,13 @@ spec:
             - name: http
               containerPort: 7474
           env:
-            - name: NEO4J_AUTH
+            - name: NEO4J_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: graphrag-secrets
                   key: NEO4J_PASSWORD
+            - name: NEO4J_AUTH
+              value: "neo4j/$(NEO4J_PASSWORD)"
             - name: NEO4J_PLUGINS
               value: '["apoc"]'
             - name: NEO4J_dbms_memory_heap_initial__size
