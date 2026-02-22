@@ -24,6 +24,19 @@ def _find_network_policy(policies: list[dict], name: str) -> dict | None:
     return None
 
 
+def _egress_allows_port_to_app(
+    policy: dict, app_label: str, port: int
+) -> bool:
+    for rule in policy.get("spec", {}).get("egress", []):
+        for to_entry in rule.get("to", []):
+            pod_sel = to_entry.get("podSelector", {})
+            if pod_sel.get("matchLabels", {}).get("app") == app_label:
+                for port_entry in rule.get("ports", []):
+                    if port_entry.get("port") == port:
+                        return True
+    return False
+
+
 @pytest.fixture(name="network_policies")
 def _network_policies() -> list[dict]:
     return _load_network_policies()
@@ -281,6 +294,152 @@ class TestSchemaInitNetworkPolicy:
         assert targets_neo4j, (
             "Schema init egress policy must allow traffic "
             "to app: neo4j on port 7687"
+        )
+
+
+class TestKafkaEgressNetworkPolicy:
+
+    def test_kafka_egress_policy_exists(
+        self, network_policies: list[dict]
+    ) -> None:
+        policy = _find_network_policy(
+            network_policies, "allow-kafka-egress"
+        )
+        assert policy is not None, (
+            "A NetworkPolicy named 'allow-kafka-egress' must exist. "
+            "Without it, the deny-all policy blocks all inter-broker "
+            "communication, preventing KRaft quorum formation."
+        )
+
+    def test_kafka_egress_selects_kafka_pods(
+        self, network_policies: list[dict]
+    ) -> None:
+        policy = _find_network_policy(
+            network_policies, "allow-kafka-egress"
+        )
+        assert policy is not None
+        pod_selector = policy["spec"]["podSelector"]
+        assert pod_selector.get("matchLabels", {}).get("app") == "kafka", (
+            "Kafka egress policy must select pods with app: kafka"
+        )
+
+    def test_kafka_egress_allows_inter_broker_replication(
+        self, network_policies: list[dict]
+    ) -> None:
+        policy = _find_network_policy(
+            network_policies, "allow-kafka-egress"
+        )
+        assert policy is not None
+        assert _egress_allows_port_to_app(policy, "kafka", 9092), (
+            "Kafka egress must allow traffic to app: kafka on port 9092 "
+            "for inter-broker replication"
+        )
+
+    def test_kafka_egress_allows_controller_quorum(
+        self, network_policies: list[dict]
+    ) -> None:
+        policy = _find_network_policy(
+            network_policies, "allow-kafka-egress"
+        )
+        assert policy is not None
+        assert _egress_allows_port_to_app(policy, "kafka", 9093), (
+            "Kafka egress must allow traffic to app: kafka on port 9093 "
+            "for KRaft controller quorum communication"
+        )
+
+    def test_kafka_egress_allows_dns(
+        self, network_policies: list[dict]
+    ) -> None:
+        policy = _find_network_policy(
+            network_policies, "allow-kafka-egress"
+        )
+        assert policy is not None
+        egress_rules = policy["spec"].get("egress", [])
+        dns_udp = False
+        dns_tcp = False
+        for rule in egress_rules:
+            for port_entry in rule.get("ports", []):
+                if port_entry.get("port") == 53:
+                    if port_entry.get("protocol") == "UDP":
+                        dns_udp = True
+                    elif port_entry.get("protocol") == "TCP":
+                        dns_tcp = True
+        assert dns_udp, (
+            "Kafka egress must allow DNS resolution on port 53/UDP"
+        )
+        assert dns_tcp, (
+            "Kafka egress must allow DNS resolution on port 53/TCP"
+        )
+
+
+class TestKafkaClusterId:
+
+    @pytest.fixture(name="kafka_statefulset")
+    def _kafka_statefulset(self) -> dict:
+        docs = list(yaml.safe_load_all(
+            KAFKA_STATEFULSET_PATH.read_text(encoding="utf-8")
+        ))
+        for doc in docs:
+            if doc and doc.get("kind") == "StatefulSet":
+                return doc
+        pytest.fail("No StatefulSet found in kafka-statefulset.yaml")
+
+    @pytest.fixture(name="kafka_env_vars")
+    def _kafka_env_vars(self, kafka_statefulset: dict) -> list[dict]:
+        containers = kafka_statefulset["spec"]["template"]["spec"]["containers"]
+        for container in containers:
+            if container["name"] == "kafka":
+                return container.get("env", [])
+        pytest.fail("No kafka container found")
+
+    def test_cluster_id_env_var_present(
+        self, kafka_env_vars: list[dict]
+    ) -> None:
+        names = [e["name"] for e in kafka_env_vars]
+        assert "CLUSTER_ID" in names, (
+            "Kafka StatefulSet must define CLUSTER_ID env var. "
+            "Without it, each KRaft broker auto-generates its own "
+            "cluster ID, forming separate single-node clusters."
+        )
+
+    def test_cluster_id_is_non_empty(
+        self, kafka_env_vars: list[dict]
+    ) -> None:
+        cluster_id_value = None
+        for var in kafka_env_vars:
+            if var["name"] == "CLUSTER_ID":
+                cluster_id_value = var.get("value", "")
+                break
+        assert cluster_id_value is not None, "CLUSTER_ID env var not found"
+        assert len(cluster_id_value.strip()) > 0, (
+            "CLUSTER_ID must be a non-empty string"
+        )
+
+    def test_cluster_id_matches_docker_compose(
+        self, kafka_env_vars: list[dict], compose_config: dict
+    ) -> None:
+        k8s_cluster_id = None
+        for var in kafka_env_vars:
+            if var["name"] == "CLUSTER_ID":
+                k8s_cluster_id = var.get("value")
+                break
+        assert k8s_cluster_id is not None, "CLUSTER_ID env var not found"
+
+        compose_kafka_env = compose_config["services"]["kafka"].get(
+            "environment", []
+        )
+        compose_cluster_id = None
+        for entry in compose_kafka_env:
+            if isinstance(entry, str) and entry.startswith("CLUSTER_ID="):
+                compose_cluster_id = entry.split("=", 1)[1]
+                break
+        assert compose_cluster_id is not None, (
+            "docker-compose.yml must define CLUSTER_ID for kafka"
+        )
+        assert k8s_cluster_id == compose_cluster_id, (
+            f"K8s CLUSTER_ID ({k8s_cluster_id}) must match "
+            f"docker-compose CLUSTER_ID ({compose_cluster_id}) "
+            f"to ensure consistent cluster identity across environments"
         )
 
 

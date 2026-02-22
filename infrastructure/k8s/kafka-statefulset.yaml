@@ -38,6 +38,8 @@ spec:
               export KAFKA_ADVERTISED_LISTENERS="PLAINTEXT://${HOSTNAME}.kafka-headless.graphrag.svc.cluster.local:9092"
               exec /etc/kafka/docker/run
           env:
+            - name: CLUSTER_ID
+              value: MkU3OEVBNTcwNTJENDM2Qk
             - name: KAFKA_PROCESS_ROLES
               value: broker,controller
             - name: KAFKA_LISTENERS
