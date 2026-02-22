@@ -1,6 +1,6 @@
 ---
-name: cron-audit
-description: Periodic full-system audit for graphrag-architect. Performs a deep, wide, context-complete audit of the entire codebase, tests, documentation, and infrastructure against the PRD and architecture specs. Produces a structured report. Trigger every 30 minutes, or when asked to audit, health-check, or assess system state.
+name: system-audit
+description: Full-system audit for graphrag-architect. Performs a deep, wide, context-complete audit of the entire codebase, tests, documentation, and infrastructure against the PRD and architecture specs. Produces a structured report. Trigger when asked to audit, health-check, or assess system state, after a PR merge lands on main, or to start a new development cycle.
 ---
 
 # System Audit
@@ -10,11 +10,12 @@ Full-depth, full-width audit of the graphrag-architect system. Verdict must be e
 ## FSM Position
 
 ```
-**AUDIT** → DOC_SYNC → [RED] → TDD → REVIEW → (FIX loop) → AUDIT → ...
-                       [YELLOW/GREEN] → wait → AUDIT
+**AUDIT** → DOC_SYNC → ┬─ [RED + no PR] → TDD → REVIEW ─┬─ [merged]  → AUDIT → ...
+                        ├─ [open PR]     → REVIEW ─────────┤  [changes] → FIX → REVIEW
+                        └─ [GREEN]       → idle             └──────────────────────────┘
 ```
 
-You are in the **AUDIT** state. You are the entry point of every cycle.
+You are in the **AUDIT** state. You run after a PR merge lands on main (or as the initial entry point). AUDIT only produces useful results when main has changed — never between TDD and REVIEW.
 Your only exit: HALT and emit `→ DOC_SYNC`. Always. The verdict is written to `audit-report.md`; `DOC_SYNC` reads it and decides what happens next.
 
 ## Isolation Protocol
@@ -196,7 +197,7 @@ Write to `audit-report.md`. **Only include sections that have findings.** Omit e
 # System Audit Report
 
 **Generated:** <timestamp>
-**Auditor:** cron-audit (automated)
+**Auditor:** system-audit (automated)
 **Commit:** <current HEAD sha>
 
 ## Executive Summary
@@ -263,6 +264,6 @@ No CRITICAL or HIGH findings. System is healthy.
 Tell the user exactly this:
 
 > Audit complete. Report written to `audit-report.md`. **Verdict: RED / YELLOW / GREEN.**
-> **Next:** Open a new chat and trigger `@cron-doc-sync`.
+> **Next:** Open a new chat and trigger `@doc-sync`.
 
 Then STOP. Do not write another word or call another tool.

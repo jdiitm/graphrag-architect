@@ -1,23 +1,25 @@
 ---
-name: cron-doc-sync
-description: Periodic documentation truth-sync for graphrag-architect. Reads the entire repository (every source file, test, config) and updates all mutable documentation to reflect the actual state of the code. Code is truth — docs must match. Trigger every 30 minutes, or when asked to sync docs, update docs, fix stale docs, or reconcile documentation.
+name: doc-sync
+description: Documentation truth-sync for graphrag-architect. Reads the entire repository (every source file, test, config) and updates all mutable documentation to reflect the actual state of the code. Then routes to the next pipeline stage based on audit verdict and repo state. Trigger after system-audit completes, or when asked to sync docs, update docs, fix stale docs, or reconcile documentation.
 ---
 
 # Documentation Truth Sync
 
-Read the entire repo. Compare every mutable doc against reality. Update docs to match what the code actually does. Code is the single source of truth — documentation is its reflection.
+Read the entire repo. Compare every mutable doc against reality. Update docs to match what the code actually does. Then route to the next pipeline stage. Code is the single source of truth — documentation is its reflection.
 
 ## FSM Position
 
 ```
-AUDIT → **DOC_SYNC** → [RED] → TDD → REVIEW → (FIX loop) → AUDIT → ...
-                       [YELLOW/GREEN] → wait → AUDIT
+AUDIT → **DOC_SYNC** → ┬─ [RED + no PR] → TDD → REVIEW ─┬─ [merged]  → AUDIT → ...
+                        ├─ [open PR]     → REVIEW ─────────┤  [changes] → FIX → REVIEW
+                        └─ [GREEN]       → idle             └──────────────────────────┘
 ```
 
-You are in the **DOC_SYNC** state. You always run immediately after `@cron-audit`.
-Your exits depend on the audit verdict in `audit-report.md`:
-- RED → HALT and emit `→ TDD`
-- YELLOW/GREEN → HALT and emit `→ wait for next @cron-audit`
+You are in the **DOC_SYNC** state. You always run immediately after `@system-audit`.
+After syncing docs, you are the **central router** — you determine the next pipeline stage based on two signals:
+
+1. The audit verdict in `audit-report.md` (RED / YELLOW / GREEN)
+2. Whether an open PR exists (`gh pr list --state open`)
 
 ## Isolation Protocol
 
@@ -36,12 +38,12 @@ Before doing ANY work:
 git branch --show-current   # must be "main"
 git status --porcelain      # must be empty
 
-# 2. audit-report.md must exist (this skill always runs after @cron-audit)
+# 2. audit-report.md must exist (this skill always runs after @system-audit)
 cat audit-report.md | head -5
 ```
 
 **If not on main or dirty tree:** HALT. Tell the user: "Working tree is not clean on main."
-**If audit-report.md is missing:** HALT. Tell the user: "No audit report found. Run `@cron-audit` first."
+**If audit-report.md is missing:** HALT. Tell the user: "No audit report found. Run `@system-audit` first."
 
 Read the `## Verdict` section of `audit-report.md` and note the status (RED/YELLOW/GREEN). You will use this in Step 8.
 
@@ -228,7 +230,7 @@ git add README.md architecture_state.md claude-progress.txt docs/architecture/
 git commit -m "$(cat <<'EOF'
 docs: sync documentation with codebase reality
 
-Automated truth-sync by cron-doc-sync skill.
+Automated truth-sync by doc-sync skill.
 - [list specific changes: updated test counts, fixed project tree, etc.]
 EOF
 )"
@@ -258,11 +260,32 @@ Present a summary to the user:
 - docs/prd/*: specification files, not modified
 ```
 
-## Step 8: HALT — Gate Based on Audit Verdict
+## Step 8: HALT — Route to Next Pipeline Stage
 
 Read the `## Verdict` section from `audit-report.md` (you noted this in the Precondition Gate).
+Check for open PRs:
 
-### If audit verdict = RED:
+```bash
+gh pr list --state open --limit 5
+```
+
+### Route A: Open PR exists (any verdict)
+
+An open PR means a TDD cycle completed and the code needs review.
+
+**HALT. Your job is done. Do NOT continue.**
+
+Tell the user exactly this:
+
+> Documentation sync complete. N files updated, M files already accurate.
+> Open PR detected — code is ready for independent review.
+> **Next:** Open a new chat and trigger `@pr-review`.
+
+Then STOP.
+
+### Route B: Audit verdict = RED, no open PR
+
+RED with no open PR means there is high-priority work to implement.
 
 **HALT. Your job is done. Do NOT continue.**
 
@@ -272,9 +295,11 @@ Tell the user exactly this:
 > Audit verdict is **RED** — there is high-priority work to do.
 > **Next:** Open a new chat and trigger `@tdd-feature-cycle`.
 
-Then STOP. Do not write another word or call another tool.
+Then STOP.
 
-### If audit verdict = YELLOW or GREEN:
+### Route C: Audit verdict = YELLOW or GREEN, no open PR
+
+No urgent work. The system is healthy or has only minor findings.
 
 **HALT. Your job is done. Do NOT continue.**
 
@@ -282,7 +307,6 @@ Tell the user exactly this:
 
 > Documentation sync complete. N files updated, M files already accurate.
 > Audit verdict is **YELLOW/GREEN** — no high-priority work. System is healthy.
-> **Do NOT trigger `@tdd-feature-cycle`.**
-> **Next:** Trigger `@cron-audit` again in ~30 minutes.
+> **Next:** Trigger `@system-audit` when ready for the next development cycle.
 
-Then STOP. Do not write another word or call another tool.
+Then STOP.

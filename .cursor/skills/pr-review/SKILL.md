@@ -10,17 +10,17 @@ Act as an independent senior engineer on the team. You have **zero context** fro
 ## FSM Position
 
 ```
-AUDIT → DOC_SYNC → TDD → **REVIEW** → (FIX loop) → AUDIT → ...
-                                ↑              |
-                                └── FIX ◄──────┘ (issues found)
+AUDIT → DOC_SYNC → [RED + no PR] → TDD → **REVIEW** ─┬─ [changes] → FIX → REVIEW
+                   [open PR]     → **REVIEW** ─────────┤  [merged]  → AUDIT → ...
+                   [GREEN]       → idle                 └──────────────────────┘
 ```
 
-You are in the **REVIEW** state. An open PR exists and needs independent review.
+You are in the **REVIEW** state. You were triggered either by TDD (new PR) or by doc-sync (existing open PR).
 Your exits: HALT and emit `→ FIX` (issues found) or `→ AUDIT` (merged).
 
 ## Isolation Protocol
 
-This skill MUST run in a **fresh conversation** with no prior context from `@tdd-feature-cycle`, `@pr-fix`, `@cron-audit`, or `@cron-doc-sync`.
+This skill MUST run in a **fresh conversation** with no prior context from `@tdd-feature-cycle`, `@pr-fix`, `@system-audit`, or `@doc-sync`.
 You are Engineer 2 — a skeptical reviewer. You have never seen the implementation being built.
 You trust ONLY: the PR diff, the codebase on disk, the PRD, and test output you run yourself.
 
@@ -57,16 +57,29 @@ gh pr view <number> --json title,body,headRefName,baseRefName
 gh pr diff <number>
 ```
 
-## Step 2: Gather Independent Context
+## Step 2: Check Out the PR Branch
+
+You must test the **actual PR code**, not main. Check out the feature branch so that file reads and quality gates operate on the new code:
+
+```bash
+gh pr view <number> --json headRefName -q '.headRefName'
+git fetch origin
+git checkout <branch-name>
+git pull origin <branch-name>
+```
+
+**Why this matters:** If you stay on main, you'd be reading OLD file versions and running tests against OLD code. That makes your review a rubber stamp — you'd just be re-confirming main is fine, not independently verifying the PR. The entire point of this skill is to independently assess the NEW code.
+
+## Step 3: Gather Independent Context
 
 Read these files fresh (do NOT rely on any prior conversation context):
 
 - `docs/prd/02_SYSTEM_REQUIREMENTS.md` -- to verify the PR implements the claimed requirement
 - `docs/architecture/01_SYSTEM_DESIGN.md` -- to verify architectural alignment
 - `CLAUDE.md` -- to verify coding invariants
-- Every file touched by the PR diff (read full file, not just the diff hunks)
+- Every file touched by the PR diff (read full file, not just the diff hunks — you are now on the branch, so you see the new versions)
 
-## Step 3: Review Checklist
+## Step 4: Review Checklist
 
 Evaluate each dimension. For every issue found, record it with a severity:
 
@@ -124,15 +137,18 @@ gh pr diff <number> | grep -iE '(pylint.*disable|noqa|nolint|skip|xfail|expected
 
 Any match must be investigated. If it is a genuine integrity violation, flag it as CRITICAL.
 
-## Step 4: Run Quality Gates Independently
+## Step 5: Run Quality Gates Independently (On the Branch)
+
+You are on the feature branch. These gates verify the **PR's code**, not main. This is the independent verification that prevents rubber-stamping — you are running the tests yourself, not trusting TDD's claims.
 
 ```bash
+cd /home/j/side/graphrag-architect
 source .venv/bin/activate && pylint orchestrator/
 python -m pytest orchestrator/tests/ -v
-cd workers/ingestion && go test ./... -v -count=1 -timeout 30s
+cd /home/j/side/graphrag-architect/workers/ingestion && go test ./... -v -count=1 -timeout 30s
 ```
 
-## Step 5: Resolve Addressed Comments (Re-Review Only)
+## Step 6: Resolve Addressed Comments (Re-Review Only)
 
 If this is a re-review (prior review comments exist on the PR), check whether each previously-raised CRITICAL/HIGH finding has been fixed in the current code.
 
@@ -166,7 +182,7 @@ gh api graphql -f query='
 
 For findings that are NOT properly addressed, note them for inclusion in the new review verdict.
 
-## Step 6: Verdict
+## Step 7: Verdict
 
 ### If issues found (any CRITICAL or HIGH):
 
@@ -189,6 +205,12 @@ gh pr review <number> --request-changes --body "$(cat <<'EOF'
 Address the CRITICAL and HIGH items, push fixes, then request re-review.
 EOF
 )"
+```
+
+Switch back to main for clean handoff:
+
+```bash
+git checkout main
 ```
 
 **HALT. Your job is done. Do NOT continue.**
@@ -215,6 +237,6 @@ git checkout main && git pull origin main
 Tell the user exactly this:
 
 > PR #N merged. Local main is up to date.
-> **Next:** Open a new chat and trigger `@cron-audit`.
+> **Next:** Open a new chat and trigger `@system-audit`.
 
 Then STOP. Do not write another word or call another tool.
