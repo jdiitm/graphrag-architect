@@ -5,6 +5,21 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class Neo4jConfig:
+    uri: str
+    username: str
+    password: str
+
+    @classmethod
+    def from_env(cls) -> Neo4jConfig:
+        return cls(
+            uri=os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
+            username=os.environ.get("NEO4J_USERNAME", "neo4j"),
+            password=os.environ["NEO4J_PASSWORD"],
+        )
+
+
+@dataclass(frozen=True)
 class ExtractionConfig:
     google_api_key: str
     model_name: str = "gemini-2.0-flash"

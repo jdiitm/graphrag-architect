@@ -1,3 +1,44 @@
+## 2026-02-22: FR-3 Neo4j Knowledge Graph Persistence — Green Phase Complete
+
+### Completed
+- Added Neo4jConfig frozen dataclass to orchestrator/app/config.py (uri, username, password from env vars)
+- Created orchestrator/app/neo4j_client.py: GraphRepository class with:
+  - cypher_op_for_entity() — dispatches Pydantic model to type-specific Cypher MERGE query + params
+  - 8 Cypher generators: ServiceNode, DatabaseNode, KafkaTopicNode, K8sDeploymentNode, CallsEdge, ProducesEdge, ConsumesEdge, DeployedInEdge
+  - _partition_entities() — separates nodes from edges for ordered execution
+  - GraphRepository.commit_topology() — async, opens session, execute_write in single transaction
+  - GraphRepository._merge_all() — static transaction function, merges nodes first then edges
+- Updated orchestrator/app/graph_builder.py: commit_to_neo4j is now async, creates AsyncGraphDatabase driver, delegates to GraphRepository
+- TDD: 15 new tests written and passing (Cypher gen x10, commit_topology x2, empty x1, rollback x1, idempotent x1)
+
+### Architecture Decisions
+- Cypher MERGE on unique-constrained key properties (Service.id, KafkaTopic.name, etc.) for idempotency
+- Single transaction per batch: nodes merged first, then edges (edges depend on MATCH of existing nodes)
+- Entity dispatch via dict mapping type -> generator function (avoids if/elif chain)
+- Driver injected into GraphRepository for testability (constructor injection)
+- Error handling: catches Neo4jError and OSError (connection failures), returns commit_status="failed"
+
+### Quality Gates
+- Pylint: 10/10
+- Python tests: 26/26 passing (15 new + 11 existing)
+- Go tests: 8/8 passing (no regressions)
+- Total: 34/34 passing, 0 regressions
+
+### PR Status
+- Branch: feat/neo4j-persistence — PR raised, awaiting human review
+
+### Unresolved
+- load_workspace_files node is still a stub
+- parse_k8s_and_kafka_manifests node is still a stub
+- validate_extracted_schema and fix_extraction_errors are still stubs (FR-5)
+- No integration test with real Neo4j (requires running instance)
+
+### Next Step
+- Implement FR-5: Schema Validation with Correction Loop (validate_extracted_schema + fix_extraction_errors)
+- OR implement load_workspace_files to recursively read a directory into raw_files
+
+---
+
 ## 2026-02-21: parse_go_and_python_services — Green Phase Complete
 
 ### Completed

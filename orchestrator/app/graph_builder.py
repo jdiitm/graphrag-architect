@@ -1,9 +1,12 @@
 from typing import Any, Dict, List, TypedDict
 
 from langgraph.graph import END, START, StateGraph
+from neo4j import AsyncGraphDatabase
+from neo4j.exceptions import Neo4jError
 
-from orchestrator.app.config import ExtractionConfig
+from orchestrator.app.config import ExtractionConfig, Neo4jConfig
 from orchestrator.app.llm_extraction import ServiceExtractor
+from orchestrator.app.neo4j_client import GraphRepository
 
 
 class IngestionState(TypedDict):
@@ -38,8 +41,19 @@ def route_validation(state: IngestionState) -> str:
 def fix_extraction_errors(state: IngestionState) -> dict:
     return {"extracted_nodes": [], "extraction_errors": []}
 
-def commit_to_neo4j(state: IngestionState) -> dict:
-    return {"commit_status": "success"}
+async def commit_to_neo4j(state: IngestionState) -> dict:
+    config = Neo4jConfig.from_env()
+    driver = AsyncGraphDatabase.driver(
+        config.uri, auth=(config.username, config.password)
+    )
+    try:
+        repo = GraphRepository(driver)
+        await repo.commit_topology(state.get("extracted_nodes", []))
+        return {"commit_status": "success"}
+    except (Neo4jError, OSError):
+        return {"commit_status": "failed"}
+    finally:
+        await driver.close()
 
 builder = StateGraph(IngestionState)
 
