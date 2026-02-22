@@ -7,6 +7,8 @@ disable = [
     "C0115",  # missing-class-docstring: Pydantic models and TypedDicts are self-describing
     "C0116",  # missing-function-docstring: self-documenting names per CLAUDE.md
     "R0903",  # too-few-public-methods: Pydantic BaseModel subclasses are data containers
+    "R0913",  # too-many-arguments: OTel Sampler ABC mandates 8-param should_sample signature
+    "R0917",  # too-many-positional-arguments: same OTel Sampler ABC constraint
     "W0613",  # unused-argument: LangGraph node stubs must accept `state` per framework contract
 ]
 
