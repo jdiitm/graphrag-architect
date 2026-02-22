@@ -1,3 +1,27 @@
+## Completed: Prometheus Metrics Export (HIGH-1 + MINOR-1)
+
+Branch: `feat/prometheus-metrics-export`
+Quality Gates: Pylint 10/10, Python 269/269, Go 49/49
+
+### Audit Findings Addressed
+
+1. **HIGH-1** — Python Prometheus metrics recorded but never exported
+   - Added `configure_metrics()` to `observability.py` using `PrometheusMetricReader` + `MeterProvider`
+   - Added `GET /metrics` endpoint to `main.py` serving Prometheus exposition format via `prometheus_client`
+   - Wired `configure_metrics()` into FastAPI lifespan alongside `configure_telemetry()`
+   - Removed redundant `unit="ms"` from histogram definitions to avoid double-suffixed Prometheus names
+   - All four OTel histograms (ingestion, llm_extraction, neo4j_transaction, query duration) now exported
+   - FastAPI auto-instrumentation metrics (http_server_request_duration_seconds) also exported
+   - Both alert rules (SlowQueryResponse, OrchestratorHighErrorRate) now reference scrapable metrics
+   - 9 new tests: configure_metrics unit tests, /metrics endpoint tests, histogram export integration tests
+
+2. **MINOR-1** — Architecture doc drift
+   - Added `cypher_validator.py` and `ingest_models.py` to module listing in `01_SYSTEM_DESIGN.md`
+   - Removed duplicate `config.py` entry
+   - Updated observability.py description and test count
+
+---
+
 ## Completed: DLQ Error Handling + Infrastructure Fixes
 
 Branch: `feat/dlq-error-handling-and-infra-fixes`

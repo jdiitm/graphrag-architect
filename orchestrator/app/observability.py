@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Optional, Sequence
 from opentelemetry import context as otel_context
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.prometheus import PrometheusMetricReader
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
@@ -124,28 +126,31 @@ def get_tracer() -> trace.Tracer:
     return tracer
 
 
+def configure_metrics() -> MeterProvider:
+    reader = PrometheusMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+    metrics.set_meter_provider(provider)
+    return provider
+
+
 meter = metrics.get_meter(_SERVICE_NAME)
 
 INGESTION_DURATION = meter.create_histogram(
     name="ingestion.duration_ms",
     description="Ingestion pipeline node duration in milliseconds",
-    unit="ms",
 )
 
 LLM_EXTRACTION_DURATION = meter.create_histogram(
     name="llm.extraction_duration_ms",
     description="LLM extraction call duration in milliseconds",
-    unit="ms",
 )
 
 NEO4J_TRANSACTION_DURATION = meter.create_histogram(
     name="neo4j.transaction_duration_ms",
     description="Neo4j transaction duration in milliseconds",
-    unit="ms",
 )
 
 QUERY_DURATION = meter.create_histogram(
     name="query.duration_ms",
     description="Query pipeline node duration in milliseconds",
-    unit="ms",
 )

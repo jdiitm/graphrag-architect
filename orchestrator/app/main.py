@@ -7,10 +7,12 @@ from typing import Any, Dict, List
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from starlette.responses import Response
 
 from orchestrator.app.graph_builder import ingestion_graph
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
-from orchestrator.app.observability import configure_telemetry
+from orchestrator.app.observability import configure_metrics, configure_telemetry
 from orchestrator.app.query_engine import query_graph
 from orchestrator.app.query_models import QueryRequest, QueryResponse
 
@@ -20,6 +22,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     configure_telemetry()
+    configure_metrics()
     yield
 
 
@@ -45,6 +48,11 @@ def _decode_documents(request: IngestRequest) -> List[Dict[str, str]]:
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "healthy"}
+
+
+@app.get("/metrics")
+def prometheus_metrics() -> Response:
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/ingest", response_model=IngestResponse)
