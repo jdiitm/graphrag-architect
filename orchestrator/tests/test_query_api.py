@@ -121,3 +121,23 @@ class TestQueryEndpointError:
 
         assert response.status_code == 500
         assert "detail" in response.json()
+
+
+class TestQueryEndpointTokenVerification:
+    def test_invalid_token_returns_401(self, client):
+        from orchestrator.app.access_control import InvalidTokenError
+
+        mock_graph = MagicMock()
+        mock_graph.ainvoke = AsyncMock(
+            side_effect=InvalidTokenError("invalid signature")
+        )
+
+        with patch("orchestrator.app.main.query_graph", mock_graph):
+            response = client.post(
+                "/query",
+                json={"query": "What is auth-service?"},
+                headers={"Authorization": "Bearer forged.token"},
+            )
+
+        assert response.status_code == 401
+        assert "detail" in response.json()

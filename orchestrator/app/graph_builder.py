@@ -5,6 +5,7 @@ from langgraph.graph import END, START, StateGraph
 from neo4j.exceptions import Neo4jError
 
 from orchestrator.app.config import ExtractionConfig
+from orchestrator.app.extraction_models import K8sDeploymentNode, KafkaTopicNode
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.manifest_parser import parse_all_manifests
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitOpenError
@@ -92,6 +93,13 @@ def route_validation(state: IngestionState) -> str:
         return "fix_extraction_errors"
     return "commit_to_neo4j"
 
+def _extract_manifest_entities(nodes: List[Any]) -> List[Any]:
+    return [
+        n for n in nodes
+        if isinstance(n, (K8sDeploymentNode, KafkaTopicNode))
+    ]
+
+
 async def fix_extraction_errors(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.fix_errors"):
@@ -99,11 +107,16 @@ async def fix_extraction_errors(state: IngestionState) -> dict:
         extractor = _build_extractor()
         result = await extractor.extract_all(state.get("raw_files", []))
         retries = state.get("validation_retries", 0)
+        manifest_entities = _extract_manifest_entities(
+            state.get("extracted_nodes", [])
+        )
         LLM_EXTRACTION_DURATION.record(
             (time.monotonic() - start) * 1000, {"node": "fix_errors"}
         )
         return {
-            "extracted_nodes": list(result.services) + list(result.calls),
+            "extracted_nodes": (
+                list(result.services) + list(result.calls) + manifest_entities
+            ),
             "extraction_errors": [],
             "validation_retries": retries + 1,
         }

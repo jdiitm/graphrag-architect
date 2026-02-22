@@ -325,3 +325,145 @@ class TestFixExtractionErrorsNode:
 
         assert len(result["extracted_nodes"]) == 3
         assert result["validation_retries"] == 1
+
+    @pytest.mark.asyncio
+    async def test_preserves_manifest_entities_during_fix_cycle(self) -> None:
+        from orchestrator.app.graph_builder import fix_extraction_errors
+
+        state = {
+            "raw_files": [
+                {"path": "main.go", "content": "package main"},
+                {"path": "deploy.yaml", "content": "kind: Deployment"},
+            ],
+            "extracted_nodes": [
+                AUTH_SERVICE,
+                ORDER_DEPLOY,
+                ORDER_EVENTS_TOPIC,
+                {"bad": True},
+            ],
+            "extraction_errors": ["Unknown entity type: dict"],
+            "validation_retries": 0,
+        }
+
+        with (
+            patch("orchestrator.app.graph_builder.ExtractionConfig"),
+            patch(
+                "orchestrator.app.graph_builder.ServiceExtractor"
+            ) as mock_cls,
+        ):
+            from orchestrator.app.extraction_models import (
+                ServiceExtractionResult,
+            )
+
+            mock_extractor = mock_cls.return_value
+            mock_extractor.extract_all = AsyncMock(
+                return_value=ServiceExtractionResult(
+                    services=[AUTH_SERVICE], calls=[VALID_CALLS]
+                )
+            )
+
+            result = await fix_extraction_errors(state)
+
+        extracted = result["extracted_nodes"]
+        k8s_nodes = [e for e in extracted if isinstance(e, K8sDeploymentNode)]
+        kafka_nodes = [e for e in extracted if isinstance(e, KafkaTopicNode)]
+        assert len(k8s_nodes) == 1
+        assert k8s_nodes[0].id == "order-deploy"
+        assert len(kafka_nodes) == 1
+        assert kafka_nodes[0].name == "order-events"
+
+    @pytest.mark.asyncio
+    async def test_replaces_only_llm_entities_during_fix(self) -> None:
+        from orchestrator.app.graph_builder import fix_extraction_errors
+
+        old_service = ServiceNode(
+            id="stale-service",
+            name="stale-service",
+            language="rust",
+            framework="actix",
+            opentelemetry_enabled=False,
+        )
+        state = {
+            "raw_files": [
+                {"path": "main.go", "content": "package main"},
+            ],
+            "extracted_nodes": [
+                old_service,
+                ORDER_DEPLOY,
+                ORDER_EVENTS_TOPIC,
+            ],
+            "extraction_errors": ["dangling edge"],
+            "validation_retries": 1,
+        }
+
+        with (
+            patch("orchestrator.app.graph_builder.ExtractionConfig"),
+            patch(
+                "orchestrator.app.graph_builder.ServiceExtractor"
+            ) as mock_cls,
+        ):
+            from orchestrator.app.extraction_models import (
+                ServiceExtractionResult,
+            )
+
+            mock_extractor = mock_cls.return_value
+            mock_extractor.extract_all = AsyncMock(
+                return_value=ServiceExtractionResult(
+                    services=[AUTH_SERVICE, ORDER_SERVICE],
+                    calls=[VALID_CALLS],
+                )
+            )
+
+            result = await fix_extraction_errors(state)
+
+        extracted = result["extracted_nodes"]
+        service_ids = [
+            e.id for e in extracted if isinstance(e, ServiceNode)
+        ]
+        assert "stale-service" not in service_ids
+        assert "auth-service" in service_ids
+        assert "order-service" in service_ids
+        assert any(isinstance(e, K8sDeploymentNode) for e in extracted)
+        assert any(isinstance(e, KafkaTopicNode) for e in extracted)
+        assert result["validation_retries"] == 2
+
+    @pytest.mark.asyncio
+    async def test_preserves_manifests_with_no_prior_llm_entities(self) -> None:
+        from orchestrator.app.graph_builder import fix_extraction_errors
+
+        state = {
+            "raw_files": [
+                {"path": "main.go", "content": "package main"},
+            ],
+            "extracted_nodes": [
+                ORDER_DEPLOY,
+                ORDER_EVENTS_TOPIC,
+            ],
+            "extraction_errors": ["some error"],
+            "validation_retries": 0,
+        }
+
+        with (
+            patch("orchestrator.app.graph_builder.ExtractionConfig"),
+            patch(
+                "orchestrator.app.graph_builder.ServiceExtractor"
+            ) as mock_cls,
+        ):
+            from orchestrator.app.extraction_models import (
+                ServiceExtractionResult,
+            )
+
+            mock_extractor = mock_cls.return_value
+            mock_extractor.extract_all = AsyncMock(
+                return_value=ServiceExtractionResult(
+                    services=[AUTH_SERVICE], calls=[]
+                )
+            )
+
+            result = await fix_extraction_errors(state)
+
+        extracted = result["extracted_nodes"]
+        assert len(extracted) == 3
+        assert any(isinstance(e, K8sDeploymentNode) for e in extracted)
+        assert any(isinstance(e, KafkaTopicNode) for e in extracted)
+        assert any(isinstance(e, ServiceNode) for e in extracted)

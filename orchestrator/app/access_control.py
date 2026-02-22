@@ -1,8 +1,35 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
+
+
+class InvalidTokenError(Exception):
+    pass
+
+
+def sign_token(payload: str, secret: str) -> str:
+    signature = hmac.new(
+        secret.encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def _verify_signature(token: str, secret: str) -> str:
+    dot_pos = token.rfind(".")
+    if dot_pos < 0:
+        raise InvalidTokenError("token missing signature")
+    payload = token[:dot_pos]
+    provided_sig = token[dot_pos + 1:]
+    expected_sig = hmac.new(
+        secret.encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(provided_sig, expected_sig):
+        raise InvalidTokenError("token signature invalid")
+    return payload
 
 
 @dataclass(frozen=True)
@@ -16,13 +43,23 @@ class SecurityPrincipal:
         return self.role == "admin"
 
     @classmethod
-    def from_header(cls, header: Optional[str]) -> SecurityPrincipal:
+    def from_header(
+        cls,
+        header: Optional[str],
+        token_secret: str = "",
+    ) -> SecurityPrincipal:
         if not header or not header.strip():
             return cls(team="*", namespace="*", role="anonymous")
 
         token = header.removeprefix("Bearer ").strip()
+
+        if token_secret:
+            payload = _verify_signature(token, token_secret)
+        else:
+            payload = token
+
         fields: Dict[str, str] = {}
-        for pair in token.split(","):
+        for pair in payload.split(","):
             if "=" in pair:
                 key, value = pair.split("=", 1)
                 fields[key.strip()] = value.strip()

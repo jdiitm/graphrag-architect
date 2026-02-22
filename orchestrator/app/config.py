@@ -5,6 +5,17 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class AuthConfig:
+    token_secret: str = ""
+
+    @classmethod
+    def from_env(cls) -> AuthConfig:
+        return cls(
+            token_secret=os.environ.get("AUTH_TOKEN_SECRET", ""),
+        )
+
+
+@dataclass(frozen=True)
 class Neo4jConfig:
     uri: str
     username: str

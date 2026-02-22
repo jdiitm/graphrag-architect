@@ -7,7 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from neo4j import AsyncDriver, AsyncManagedTransaction
 
 from orchestrator.app.access_control import CypherPermissionFilter, SecurityPrincipal
-from orchestrator.app.config import ExtractionConfig
+from orchestrator.app.config import AuthConfig, ExtractionConfig
 from orchestrator.app.cypher_validator import CypherValidationError, validate_cypher_readonly
 from orchestrator.app.neo4j_pool import get_driver
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
@@ -43,7 +43,11 @@ async def _neo4j_session() -> AsyncIterator[AsyncDriver]:
 def _build_acl_filter(
     state: QueryState,
 ) -> CypherPermissionFilter:
-    principal = SecurityPrincipal.from_header(state.get("authorization", ""))
+    auth_config = AuthConfig.from_env()
+    principal = SecurityPrincipal.from_header(
+        state.get("authorization", ""),
+        token_secret=auth_config.token_secret,
+    )
     return CypherPermissionFilter(principal)
 
 

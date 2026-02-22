@@ -1,3 +1,39 @@
+## Completed: Fix Manifest Entity Loss + HMAC Token Verification (H-1, H-2, M-10)
+
+Branch: `feat/fix-manifest-loss-and-token-verification`
+Quality Gates: Pylint 10/10, Python 323/323, Go 49/49
+
+### Audit Findings Addressed
+- **H-2** — fix_extraction_errors silently discards manifest entities (K8sDeploymentNode, KafkaTopicNode)
+- **H-1** — No cryptographic token verification in RBAC authentication
+- **M-10** — No test coverage for manifest entity preservation in fix cycle
+
+### Changes
+1. H-2: Modified `fix_extraction_errors` in `graph_builder.py` to filter existing
+   `extracted_nodes` for manifest-derived entities (K8sDeploymentNode, KafkaTopicNode)
+   and merge them with re-extracted LLM entities (services + calls). Previously the
+   function replaced all extracted_nodes, silently dropping manifest entities.
+2. H-1: Added HMAC-SHA256 token verification to `access_control.py`:
+   - `InvalidTokenError` exception for forged/tampered/unsigned tokens
+   - `sign_token(payload, secret)` utility for creating valid tokens
+   - `_verify_signature(token, secret)` internal verification function
+   - `SecurityPrincipal.from_header` now accepts optional `token_secret` parameter
+   - When `AUTH_TOKEN_SECRET` env var is set, all non-empty tokens must be HMAC-signed
+   - When unset (dev mode), backwards-compatible unsigned token parsing
+3. Added `AuthConfig` frozen dataclass to `config.py` with `from_env()` classmethod
+4. Updated `query_engine.py` `_build_acl_filter` to load auth config and pass secret
+5. Updated `main.py` to catch `InvalidTokenError` and return HTTP 401
+6. 15 new tests: 3 manifest preservation, 3 sign_token, 8 HMAC verification, 1 API 401
+
+### Architecture Decision: HMAC vs JWT
+Chose HMAC-SHA256 over JWT for token verification because:
+- Zero additional dependencies (stdlib hashlib + hmac)
+- Simpler token format matching existing comma-separated claims
+- Constant-time comparison via hmac.compare_digest
+- Production deployments set AUTH_TOKEN_SECRET; dev environments skip verification
+
+---
+
 ## Completed: DLQ Sink Failure Alert Rule (Audit 4.1)
 
 Branch: `feat/dlq-sink-failure-alert`
