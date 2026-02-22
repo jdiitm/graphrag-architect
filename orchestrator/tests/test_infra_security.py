@@ -9,6 +9,7 @@ import pytest
 INFRA_DIR = Path(__file__).resolve().parents[2] / "infrastructure"
 NETWORK_POLICIES_PATH = INFRA_DIR / "k8s" / "network-policies.yaml"
 KAFKA_STATEFULSET_PATH = INFRA_DIR / "k8s" / "kafka-statefulset.yaml"
+SECRETS_PATH = INFRA_DIR / "k8s" / "secrets.yaml"
 DOCKER_COMPOSE_PATH = INFRA_DIR / "docker-compose.yml"
 
 
@@ -498,4 +499,113 @@ class TestDockerComposeNoApocFileAccess:
         auth_vars = [e for e in neo4j_env if "NEO4J_AUTH" in str(e)]
         assert len(auth_vars) == 1, (
             "Neo4j must retain its NEO4J_AUTH environment variable"
+        )
+
+
+class TestKafkaListenerSecurityProtocolMap:
+
+    @pytest.fixture(name="kafka_statefulset")
+    def _kafka_statefulset(self) -> dict:
+        docs = list(yaml.safe_load_all(
+            KAFKA_STATEFULSET_PATH.read_text(encoding="utf-8")
+        ))
+        for doc in docs:
+            if doc and doc.get("kind") == "StatefulSet":
+                return doc
+        pytest.fail("No StatefulSet found in kafka-statefulset.yaml")
+
+    def _get_kafka_env(self, statefulset: dict) -> list[dict]:
+        containers = statefulset["spec"]["template"]["spec"]["containers"]
+        for container in containers:
+            if container["name"] == "kafka":
+                return container.get("env", [])
+        pytest.fail("No kafka container found")
+
+    def test_listener_security_protocol_map_present(
+        self, kafka_statefulset: dict
+    ) -> None:
+        env_vars = self._get_kafka_env(kafka_statefulset)
+        names = [e["name"] for e in env_vars]
+        assert "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP" in names, (
+            "Kafka StatefulSet must define "
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP. Without it, Kafka "
+            "3.9.0 cannot resolve protocol for the custom CONTROLLER "
+            "listener name and may fail to start."
+        )
+
+    def test_listener_security_protocol_map_includes_controller(
+        self, kafka_statefulset: dict
+    ) -> None:
+        env_vars = self._get_kafka_env(kafka_statefulset)
+        protocol_map = None
+        for var in env_vars:
+            if var["name"] == "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP":
+                protocol_map = var.get("value", "")
+                break
+        assert protocol_map is not None, (
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP not found"
+        )
+        assert "CONTROLLER:PLAINTEXT" in protocol_map, (
+            "Protocol map must include CONTROLLER:PLAINTEXT "
+            f"but got: {protocol_map}"
+        )
+        assert "PLAINTEXT:PLAINTEXT" in protocol_map, (
+            "Protocol map must include PLAINTEXT:PLAINTEXT "
+            f"but got: {protocol_map}"
+        )
+
+    def test_listener_security_protocol_map_matches_docker_compose(
+        self, kafka_statefulset: dict, compose_config: dict
+    ) -> None:
+        k8s_env = self._get_kafka_env(kafka_statefulset)
+        k8s_value = None
+        for var in k8s_env:
+            if var["name"] == "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP":
+                k8s_value = var.get("value", "")
+                break
+        assert k8s_value is not None, (
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP not in K8s manifest"
+        )
+
+        compose_kafka_env = compose_config["services"]["kafka"].get(
+            "environment", []
+        )
+        compose_value = None
+        for entry in compose_kafka_env:
+            if isinstance(entry, str) and entry.startswith(
+                "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP="
+            ):
+                compose_value = entry.split("=", 1)[1]
+                break
+        assert compose_value is not None, (
+            "docker-compose.yml must define "
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP for kafka"
+        )
+        assert k8s_value == compose_value, (
+            f"K8s protocol map ({k8s_value}) must match "
+            f"docker-compose ({compose_value})"
+        )
+
+
+class TestSecretsTemplate:
+
+    @pytest.fixture(name="secrets")
+    def _secrets(self) -> dict:
+        content = SECRETS_PATH.read_text(encoding="utf-8")
+        return yaml.safe_load(content)
+
+    def test_auth_token_secret_present(self, secrets: dict) -> None:
+        string_data = secrets.get("stringData", {})
+        assert "AUTH_TOKEN_SECRET" in string_data, (
+            "secrets.yaml must include AUTH_TOKEN_SECRET placeholder. "
+            "Without it, fresh deployments with AUTH_REQUIRE_TOKENS=true "
+            "will return 503 until an operator manually adds the secret."
+        )
+
+    def test_auth_token_secret_is_placeholder(self, secrets: dict) -> None:
+        string_data = secrets.get("stringData", {})
+        value = string_data.get("AUTH_TOKEN_SECRET", "")
+        assert value == "REPLACE_ME", (
+            "AUTH_TOKEN_SECRET should be a placeholder value 'REPLACE_ME', "
+            f"got: {value}"
         )

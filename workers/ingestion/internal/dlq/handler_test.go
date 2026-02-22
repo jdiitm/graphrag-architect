@@ -308,7 +308,7 @@ func TestDLQHandlerClosesDoneOnSuccess(t *testing.T) {
 	<-done
 }
 
-func TestDLQHandlerClosesDoneAfterRetriesExhausted(t *testing.T) {
+func TestDLQHandlerDoneNotClosedWhenSinkFailsNoFallback(t *testing.T) {
 	source := make(chan domain.Result, 1)
 	sink := &spySink{sendErr: errors.New("permanent failure")}
 	handler := dlq.NewHandler(source, sink,
@@ -316,10 +316,10 @@ func TestDLQHandlerClosesDoneAfterRetriesExhausted(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
+	handlerDone := make(chan struct{})
 	go func() {
 		handler.Run(ctx)
-		close(done)
+		close(handlerDone)
 	}()
 
 	resultDone := make(chan struct{})
@@ -330,14 +330,52 @@ func TestDLQHandlerClosesDoneAfterRetriesExhausted(t *testing.T) {
 		Done:     resultDone,
 	}
 
+	time.Sleep(200 * time.Millisecond)
+
 	select {
 	case <-resultDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Done channel not closed after retries exhausted")
+		t.Fatal("Done channel must NOT be closed when sink fails and no fallback exists — closing it allows silent message loss via premature offset commit")
+	default:
 	}
 
 	cancel()
-	<-done
+	<-handlerDone
+}
+
+func TestDLQHandlerDoneNotClosedWhenFallbackFails(t *testing.T) {
+	source := make(chan domain.Result, 1)
+	sink := &spySink{sendErr: errors.New("primary failure")}
+	fallback := &spySink{sendErr: errors.New("fallback failure")}
+	handler := dlq.NewHandler(source, sink,
+		dlq.WithConfig(dlq.Config{MaxSinkRetries: 0, RetryDelay: 0}),
+		dlq.WithFallback(fallback),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	handlerDone := make(chan struct{})
+	go func() {
+		handler.Run(ctx)
+		close(handlerDone)
+	}()
+
+	resultDone := make(chan struct{})
+	source <- domain.Result{
+		Job:      domain.Job{Key: []byte("double-fault")},
+		Err:      errors.New("processing failed"),
+		Attempts: 3,
+		Done:     resultDone,
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	select {
+	case <-resultDone:
+		t.Fatal("Done channel must NOT be closed when both sink and fallback fail — closing it causes silent message loss")
+	default:
+	}
+
+	cancel()
+	<-handlerDone
 }
 
 func TestDLQHandlerFallbackOnPermanentFailure(t *testing.T) {
