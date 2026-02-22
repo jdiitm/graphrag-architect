@@ -144,24 +144,25 @@ workers/ingestion/
 ```
 orchestrator/
   app/
-    config.py                # ExtractionConfig (frozen dataclass)
     access_control.py        # SecurityPrincipal, CypherPermissionFilter
     circuit_breaker.py       # Three-state async circuit breaker
-    config.py                # ExtractionConfig, Neo4jConfig
+    config.py                # ExtractionConfig, Neo4jConfig (frozen dataclasses)
+    cypher_validator.py      # Read-only Cypher query validation
     extraction_models.py     # Pydantic models: 4 nodes, 4 edges
     graph_builder.py         # LangGraph ingestion DAG (6 nodes)
+    ingest_models.py         # IngestRequest/Response Pydantic models
     llm_extraction.py        # ServiceExtractor (Gemini, structured output)
-    main.py                  # FastAPI endpoints (/health, /ingest, /query)
+    main.py                  # FastAPI endpoints (/health, /metrics, /ingest, /query)
     manifest_parser.py       # K8s + Kafka YAML parsing
     neo4j_client.py          # Cypher MERGE operations
-    observability.py         # OpenTelemetry TracerProvider + metrics
+    observability.py         # OpenTelemetry tracing + Prometheus metrics export
     query_classifier.py      # Keyword-based query complexity classifier
     query_engine.py          # LangGraph query DAG (6 nodes)
     query_models.py          # QueryRequest/Response/State models
     schema_init.cypher       # Neo4j constraints and indexes
     schema_validation.py     # Topology validation + correction loop
     workspace_loader.py      # Filesystem workspace scanner
-  tests/                     # 14 test files
+  tests/                     # 15 test files
   requirements.txt
 ```
 
