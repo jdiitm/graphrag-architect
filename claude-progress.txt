@@ -1,3 +1,30 @@
+## 2026-02-22: FR-7 Access Control — Zanzibar-Inspired Permission Filtering — Complete
+
+### Completed
+- Created orchestrator/app/access_control.py:
+  - SecurityPrincipal: frozen dataclass, parsed from Authorization header (Bearer team=X,namespace=Y,role=Z)
+  - PermissionMetadata: team_owner + namespace_acl for graph nodes
+  - CypherPermissionFilter: generates node/edge WHERE clauses, injects into arbitrary Cypher
+    - Admin bypass (no filter), team-scoped, namespace-scoped, anonymous (public-only)
+    - Edge traversal authorization: target node filtered by same ACL rules
+    - inject_into_cypher: regex-based WHERE/AND insertion preserving existing clauses
+- Updated extraction_models.py:
+  - ServiceNode: added team_owner (Optional[str]) and namespace_acl (List[str])
+  - K8sDeploymentNode: added team_owner (Optional[str]) and namespace_acl (List[str])
+- Updated neo4j_client.py:
+  - _service_cypher: persists team_owner, namespace_acl to graph
+  - _k8s_deployment_cypher: persists team_owner, namespace_acl to graph
+
+### TDD: 19 new tests
+- test_access_control.py: SecurityPrincipal (6), PermissionMetadata (2), CypherPermissionFilter (9), node metadata (2)
+
+### Quality Gates
+- Pylint: 10/10
+- Python tests: 199/199 passing (19 new + 180 existing)
+- Go tests: 37/37 passing (no regressions)
+
+---
+
 ## 2026-02-22: FR-8 Observability (Go) — OpenTelemetry Spans on Ingestion Pipeline — Complete
 
 ### Completed
