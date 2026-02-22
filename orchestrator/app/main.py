@@ -2,9 +2,9 @@ import base64
 import binascii
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -12,6 +12,7 @@ from starlette.responses import Response
 
 from orchestrator.app.graph_builder import ingestion_graph
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
+from orchestrator.app.neo4j_pool import close_driver, init_driver
 from orchestrator.app.observability import configure_metrics, configure_telemetry
 from orchestrator.app.query_engine import query_graph
 from orchestrator.app.query_models import QueryRequest, QueryResponse
@@ -23,7 +24,11 @@ logger = logging.getLogger(__name__)
 async def lifespan(_app: FastAPI):
     configure_telemetry()
     configure_metrics()
-    yield
+    init_driver()
+    try:
+        yield
+    finally:
+        await close_driver()
 
 
 app = FastAPI(title="GraphRAG Orchestrator", version="1.0.0", lifespan=lifespan)
@@ -86,7 +91,10 @@ async def ingest(request: IngestRequest) -> IngestResponse:
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query(request: QueryRequest) -> QueryResponse:
+async def query(
+    request: QueryRequest,
+    authorization: Optional[str] = Header(default=None),
+) -> QueryResponse:
     initial_state: Dict[str, Any] = {
         "query": request.query,
         "max_results": request.max_results,
@@ -98,6 +106,7 @@ async def query(request: QueryRequest) -> QueryResponse:
         "iteration_count": 0,
         "answer": "",
         "sources": [],
+        "authorization": authorization or "",
     }
     try:
         result = await query_graph.ainvoke(initial_state)

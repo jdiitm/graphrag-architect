@@ -1,3 +1,33 @@
+## Completed: Neo4j Driver Pool + RBAC Integration (HIGH-01 + HIGH-02)
+
+Branch: `feat/neo4j-pool-and-rbac-integration`
+Quality Gates: Pylint 10/10, Python 283/283, Go 55/55
+
+### Audit Findings Addressed
+
+1. **HIGH-01** — RBAC module implemented but not integrated into API endpoints
+   - Added `authorization` field to `QueryState` TypedDict
+   - `/query` endpoint now extracts `Authorization` HTTP header via FastAPI `Header()`
+   - All four retrieval functions (vector, single_hop, cypher, hybrid) apply
+     `CypherPermissionFilter.inject_into_cypher()` with merged ACL params
+   - Admin principals bypass all ACL filtering
+   - Anonymous callers (no header) receive public-only filter
+   - 7 new RBAC integration tests
+
+2. **HIGH-02** — Neo4j driver created and destroyed per-request in query engine
+   - New module `neo4j_pool.py` with `init_driver()`, `close_driver()`, `get_driver()`
+   - Driver initialized once during FastAPI lifespan startup, closed on shutdown
+   - `query_engine.py` and `graph_builder.py` both use pooled singleton
+   - Eliminates TCP+Bolt handshake cost per query under load
+   - 7 new pool lifecycle tests
+
+### Architecture Decision: Mutable Container Pattern
+Used `_state: dict[str, Optional[AsyncDriver]]` for module-level singleton
+(matching existing `_STATE` pattern in `observability.py`) to avoid
+`global` statement which would require inline pylint suppression.
+
+---
+
 ## Completed: Prometheus Metrics Export (HIGH-1 + MINOR-1)
 
 Branch: `feat/prometheus-metrics-export`

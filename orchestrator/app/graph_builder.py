@@ -2,14 +2,14 @@ import time
 from typing import Any, Dict, List, TypedDict
 
 from langgraph.graph import END, START, StateGraph
-from neo4j import AsyncGraphDatabase
 from neo4j.exceptions import Neo4jError
 
-from orchestrator.app.config import ExtractionConfig, Neo4jConfig
+from orchestrator.app.config import ExtractionConfig
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.manifest_parser import parse_all_manifests
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitOpenError
 from orchestrator.app.neo4j_client import GraphRepository
+from orchestrator.app.neo4j_pool import get_driver
 from orchestrator.app.observability import (
     INGESTION_DURATION,
     LLM_EXTRACTION_DURATION,
@@ -112,23 +112,17 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.commit_neo4j"):
         start = time.monotonic()
-        config = Neo4jConfig.from_env()
-        driver = None
         try:
-            driver = AsyncGraphDatabase.driver(
-                config.uri, auth=(config.username, config.password)
-            )
+            driver = get_driver()
             repo = GraphRepository(driver, circuit_breaker=_NEO4J_CIRCUIT_BREAKER)
             await repo.commit_topology(state.get("extracted_nodes", []))
             return {"commit_status": "success"}
-        except (Neo4jError, OSError, CircuitOpenError):
+        except (Neo4jError, OSError, CircuitOpenError, RuntimeError):
             return {"commit_status": "failed"}
         finally:
             NEO4J_TRANSACTION_DURATION.record(
                 (time.monotonic() - start) * 1000, {"node": "commit_neo4j"}
             )
-            if driver is not None:
-                await driver.close()
 
 builder = StateGraph(IngestionState)
 

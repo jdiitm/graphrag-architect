@@ -35,3 +35,4 @@ class QueryState(TypedDict):
     iteration_count: int
     answer: str
     sources: List[Dict[str, Any]]
+    authorization: str

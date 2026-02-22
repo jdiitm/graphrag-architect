@@ -606,19 +606,11 @@ class TestCypherValidation:
 
 
 class TestNeo4jDriverTimeout:
-    @pytest.mark.asyncio
-    async def test_driver_configured_with_timeout(self, base_query_state):
+    def test_pool_configured_with_timeout(self):
+        from orchestrator.app import neo4j_pool
         from orchestrator.app.config import Neo4jConfig
-        from orchestrator.app.query_engine import vector_retrieve
 
-        mock_session = AsyncMock()
-        mock_session.execute_read = AsyncMock(return_value=[])
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
-        mock_driver = MagicMock()
-        mock_driver.session.return_value = mock_session
-        mock_driver.close = AsyncMock()
-
+        neo4j_pool._state["driver"] = None
         fake_config = Neo4jConfig(
             uri="bolt://test:7687",
             username="neo4j",
@@ -626,16 +618,15 @@ class TestNeo4jDriverTimeout:
             query_timeout=42.0,
         )
 
-        state = _make_state(base_query_state, query="auth")
-
         with patch(
-            "orchestrator.app.query_engine.Neo4jConfig.from_env",
+            "orchestrator.app.neo4j_pool.Neo4jConfig.from_env",
             return_value=fake_config,
         ), patch(
-            "orchestrator.app.query_engine.AsyncGraphDatabase.driver",
-            return_value=mock_driver,
+            "orchestrator.app.neo4j_pool.AsyncGraphDatabase.driver",
+            return_value=MagicMock(),
         ) as mock_driver_ctor:
-            await vector_retrieve(state)
+            neo4j_pool.init_driver()
 
         call_kwargs = mock_driver_ctor.call_args.kwargs
         assert call_kwargs["max_transaction_retry_time"] == 42.0
+        neo4j_pool._state["driver"] = None
