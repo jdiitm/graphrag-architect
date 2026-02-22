@@ -13,7 +13,7 @@ from opentelemetry.sdk.trace.export import (
 )
 
 _SERVICE_NAME = "graphrag-orchestrator"
-_STATE: dict = {}
+_STATE: dict[str, trace.Tracer] = {}
 
 
 def configure_telemetry(

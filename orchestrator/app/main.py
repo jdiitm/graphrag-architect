@@ -1,6 +1,7 @@
 import base64
 import binascii
 import logging
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List
 
 from fastapi import FastAPI, HTTPException
@@ -14,9 +15,14 @@ from orchestrator.app.query_models import QueryRequest, QueryResponse
 
 logger = logging.getLogger(__name__)
 
-configure_telemetry()
 
-app = FastAPI(title="GraphRAG Orchestrator", version="1.0.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    configure_telemetry()
+    yield
+
+
+app = FastAPI(title="GraphRAG Orchestrator", version="1.0.0", lifespan=lifespan)
 FastAPIInstrumentor.instrument_app(app)
 
 
