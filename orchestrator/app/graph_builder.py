@@ -8,6 +8,7 @@ from neo4j.exceptions import Neo4jError
 from orchestrator.app.config import ExtractionConfig, Neo4jConfig
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.manifest_parser import parse_all_manifests
+from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitOpenError
 from orchestrator.app.neo4j_client import GraphRepository
 from orchestrator.app.observability import (
     INGESTION_DURATION,
@@ -20,6 +21,8 @@ from orchestrator.app.workspace_loader import load_directory
 
 
 MAX_VALIDATION_RETRIES = 3
+
+_NEO4J_CIRCUIT_BREAKER = CircuitBreaker(CircuitBreakerConfig())
 
 
 class IngestionState(TypedDict):
@@ -112,10 +115,10 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
             config.uri, auth=(config.username, config.password)
         )
         try:
-            repo = GraphRepository(driver)
+            repo = GraphRepository(driver, circuit_breaker=_NEO4J_CIRCUIT_BREAKER)
             await repo.commit_topology(state.get("extracted_nodes", []))
             return {"commit_status": "success"}
-        except (Neo4jError, OSError):
+        except (Neo4jError, OSError, CircuitOpenError):
             return {"commit_status": "failed"}
         finally:
             NEO4J_TRANSACTION_DURATION.record(
