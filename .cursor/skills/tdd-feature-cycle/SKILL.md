@@ -10,16 +10,17 @@ Autonomous workflow: discover the next missing feature from the PRD, implement i
 ## FSM Position
 
 ```
-AUDIT → DOC_SYNC → [RED] → **TDD** → REVIEW → (FIX loop) → AUDIT → ...
-                   [YELLOW/GREEN] → wait → AUDIT
+AUDIT → DOC_SYNC → [RED + no PR] → **TDD** → REVIEW ─┬─ [merged]  → AUDIT → ...
+                   [open PR]     → REVIEW ─────────────┤  [changes] → FIX → REVIEW
+                   [GREEN]       → idle                 └────────────────────────┘
 ```
 
-You are in the **TDD** state. You were triggered because the last audit verdict was RED.
+You are in the **TDD** state. You were triggered because doc-sync routed here (audit verdict RED, no open PR).
 Your only exit: HALT and emit `→ REVIEW`.
 
 ## Isolation Protocol
 
-This skill MUST run in a **fresh conversation** with no prior context from `@pr-review`, `@pr-fix`, `@cron-audit`, or `@cron-doc-sync`.
+This skill MUST run in a **fresh conversation** with no prior context from `@pr-review`, `@pr-fix`, `@system-audit`, or `@doc-sync`.
 You are Engineer 1. You have never seen the review feedback, fix commits, or audit reports from any other skill.
 
 If you have any memory of reviewing, fixing, or auditing code in this session, STOP — you are contaminated.
@@ -42,7 +43,7 @@ cat audit-report.md  # read the Verdict section
 
 **If not on main:** HALT. Tell the user: "Not on main branch. Resolve the current branch first."
 **If open PRs exist:** HALT. Tell the user: "Open PR detected. Complete the review/fix cycle first via `@pr-review`."
-**If audit-report.md is missing or verdict is not RED:** HALT. Tell the user: "Audit verdict is not RED. No high-priority work to do. Run `@cron-audit` to re-assess."
+**If audit-report.md is missing or verdict is not RED:** HALT. Tell the user: "Audit verdict is not RED. No high-priority work to do. Run `@system-audit` to re-assess."
 
 ## Integrity Invariants (Non-Negotiable)
 
@@ -180,7 +181,13 @@ EOF
 )"
 ```
 
-4. **HALT. Your job is done. Do NOT continue.**
+4. Switch back to main for clean handoff:
+
+```bash
+git checkout main
+```
+
+5. **HALT. Your job is done. Do NOT continue.**
 
 Do NOT merge your own PR. Do NOT review your own PR. Do NOT trigger any other skill.
 

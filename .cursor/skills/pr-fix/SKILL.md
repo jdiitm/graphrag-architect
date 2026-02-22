@@ -10,9 +10,9 @@ Address review feedback on an open PR using the same TDD discipline as feature d
 ## FSM Position
 
 ```
-AUDIT → DOC_SYNC → TDD → REVIEW → **FIX** → REVIEW → ... → AUDIT
-                                       ↑          |
-                                       └──────────┘ (still issues)
+... → TDD → REVIEW → **FIX** → REVIEW → ┬─ [merged]  → AUDIT → ...
+                        ↑          |      └─ [changes] → FIX
+                        └──────────┘
 ```
 
 You are in the **FIX** state. A PR has changes requested by the reviewer.
@@ -20,7 +20,7 @@ Your only exit: HALT and emit `→ REVIEW`.
 
 ## Isolation Protocol
 
-This skill MUST run in a **fresh conversation** with no prior context from `@tdd-feature-cycle`, `@pr-review`, `@cron-audit`, or `@cron-doc-sync`.
+This skill MUST run in a **fresh conversation** with no prior context from `@tdd-feature-cycle`, `@pr-review`, `@system-audit`, or `@doc-sync`.
 You are Engineer 3 — a fixer. You have never seen the code being written or the review being conducted.
 You trust ONLY: the review comments on the PR, the codebase on disk, and test output you run yourself.
 
@@ -131,6 +131,12 @@ gh api repos/{owner}/{repo}/pulls/<number>/comments/<comment_id>/replies \
 Reply to every CRITICAL and HIGH finding. LOW findings: reply only if you addressed them.
 
 ## Step 7: Hand Off to Re-Review
+
+Switch back to main for clean handoff:
+
+```bash
+git checkout main
+```
 
 **HALT. Your job is done. Do NOT continue.**
 
