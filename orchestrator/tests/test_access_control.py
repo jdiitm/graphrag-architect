@@ -2,7 +2,6 @@ import pytest
 
 from orchestrator.app.access_control import (
     CypherPermissionFilter,
-    PermissionMetadata,
     SecurityPrincipal,
 )
 
@@ -45,20 +44,6 @@ class TestSecurityPrincipal:
         assert viewer.is_admin is False
 
 
-class TestPermissionMetadata:
-    def test_create_with_all_fields(self):
-        meta = PermissionMetadata(
-            team_owner="platform",
-            namespace_acl=["production", "staging"],
-        )
-        assert meta.team_owner == "platform"
-        assert meta.namespace_acl == ["production", "staging"]
-
-    def test_default_namespace_acl(self):
-        meta = PermissionMetadata(team_owner="data-team")
-        assert meta.namespace_acl == []
-
-
 class TestCypherPermissionFilter:
     def test_admin_gets_no_filter(self):
         principal = SecurityPrincipal(team="platform", namespace="*", role="admin")
@@ -73,8 +58,10 @@ class TestCypherPermissionFilter:
         )
         filt = CypherPermissionFilter(principal)
         clause, params = filt.node_filter("n")
-        assert "$acl_team" in clause or "$acl_namespace" in clause
-        assert "platform" in params.values()
+        assert "$acl_team" in clause
+        assert "$acl_namespace" in clause
+        assert params["acl_team"] == "platform"
+        assert params["acl_namespace"] == "production"
 
     def test_namespace_filter_restricts_nodes(self):
         principal = SecurityPrincipal(
@@ -82,28 +69,54 @@ class TestCypherPermissionFilter:
         )
         filt = CypherPermissionFilter(principal)
         clause, params = filt.node_filter("n")
-        assert "staging" in str(params.values())
+        assert params["acl_namespace"] == "staging"
+        assert params["acl_team"] == "data-team"
 
     def test_anonymous_gets_public_only(self):
         principal = SecurityPrincipal(team="*", namespace="*", role="anonymous")
         filt = CypherPermissionFilter(principal)
         clause, params = filt.node_filter("n")
         assert clause != ""
-        assert "public" in str(params.values()).lower() or "$acl_team" in clause
+        assert params["acl_team"] == "public"
+
+    def test_wildcard_namespace_only_team_filtered(self):
+        principal = SecurityPrincipal(
+            team="platform", namespace="*", role="viewer"
+        )
+        filt = CypherPermissionFilter(principal)
+        clause, params = filt.node_filter("n")
+        assert "$acl_team" in clause
+        assert "$acl_namespace" not in clause
+        assert params["acl_team"] == "platform"
+        assert "acl_namespace" not in params
+
+    def test_wildcard_team_only_namespace_filtered(self):
+        principal = SecurityPrincipal(
+            team="*", namespace="staging", role="viewer"
+        )
+        filt = CypherPermissionFilter(principal)
+        clause, params = filt.node_filter("n")
+        assert "$acl_namespace" in clause
+        assert "$acl_team" not in clause
+        assert params["acl_namespace"] == "staging"
+        assert "acl_team" not in params
 
     def test_edge_filter_restricts_traversal(self):
         principal = SecurityPrincipal(
             team="platform", namespace="production", role="viewer"
         )
         filt = CypherPermissionFilter(principal)
-        clause, params = filt.edge_filter("n", "m")
+        clause, params = filt.edge_filter("m")
         assert clause != ""
-        assert "$acl_team" in clause or "$acl_namespace" in clause
+        assert "$acl_team" in clause
+        assert "$acl_namespace" in clause
+        assert params["acl_team"] == "platform"
+        assert params["acl_namespace"] == "production"
 
     def test_edge_filter_admin_no_restriction(self):
         principal = SecurityPrincipal(team="platform", namespace="*", role="admin")
         filt = CypherPermissionFilter(principal)
-        clause, params = filt.edge_filter("n", "m")
+        clause, params = filt.edge_filter("m")
         assert clause == ""
         assert params == {}
 
@@ -114,8 +127,11 @@ class TestCypherPermissionFilter:
         filt = CypherPermissionFilter(principal)
         original = "MATCH (n:Service) RETURN n"
         filtered, params = filt.inject_into_cypher(original)
-        assert "WHERE" in filtered or "AND" in filtered
-        assert params
+        assert "WHERE" in filtered
+        assert "$acl_team" in filtered
+        assert "$acl_namespace" in filtered
+        assert params["acl_team"] == "platform"
+        assert params["acl_namespace"] == "production"
 
     def test_inject_preserves_existing_where(self):
         principal = SecurityPrincipal(
@@ -126,6 +142,41 @@ class TestCypherPermissionFilter:
         filtered, params = filt.inject_into_cypher(original)
         assert "n.language = 'Go'" in filtered
         assert params
+
+    def test_inject_into_cypher_no_where_no_return(self):
+        principal = SecurityPrincipal(
+            team="platform", namespace="production", role="viewer"
+        )
+        filt = CypherPermissionFilter(principal)
+        original = "MATCH (n:Service)"
+        filtered, params = filt.inject_into_cypher(original)
+        assert filtered.startswith("MATCH (n:Service) WHERE")
+        assert "$acl_team" in filtered
+        assert "$acl_namespace" in filtered
+        assert params["acl_team"] == "platform"
+        assert params["acl_namespace"] == "production"
+
+    def test_inject_parenthesizes_existing_where_conditions(self):
+        principal = SecurityPrincipal(
+            team="platform", namespace="production", role="viewer"
+        )
+        filt = CypherPermissionFilter(principal)
+        original = "MATCH (n:Service) WHERE n.active = true OR n.name = 'auth' RETURN n"
+        filtered, params = filt.inject_into_cypher(original)
+        assert "(n.active = true OR n.name = 'auth')" in filtered
+        assert params["acl_team"] == "platform"
+
+    def test_inject_into_cypher_custom_alias(self):
+        principal = SecurityPrincipal(
+            team="platform", namespace="production", role="viewer"
+        )
+        filt = CypherPermissionFilter(principal)
+        original = "MATCH (s:Service) RETURN s"
+        filtered, params = filt.inject_into_cypher(original, alias="s")
+        assert "s.team_owner" in filtered
+        assert "s.namespace_acl" in filtered
+        assert "n.team_owner" not in filtered
+        assert params["acl_team"] == "platform"
 
     def test_inject_admin_returns_original(self):
         principal = SecurityPrincipal(team="ops", namespace="*", role="admin")
@@ -170,3 +221,36 @@ class TestNodeMetadataOnIngestion:
         cypher, params = _k8s_deployment_cypher(node)
         assert "team_owner" in cypher
         assert params["team_owner"] == "platform"
+
+    def test_database_cypher_includes_permission_fields(self):
+        from orchestrator.app.neo4j_client import _database_cypher
+        from orchestrator.app.extraction_models import DatabaseNode
+
+        node = DatabaseNode(
+            id="orders-db",
+            type="PostgreSQL",
+            team_owner="data-team",
+            namespace_acl=["production", "staging"],
+        )
+        cypher, params = _database_cypher(node)
+        assert "team_owner" in cypher
+        assert "namespace_acl" in cypher
+        assert params["team_owner"] == "data-team"
+        assert params["namespace_acl"] == ["production", "staging"]
+
+    def test_kafka_topic_cypher_includes_permission_fields(self):
+        from orchestrator.app.neo4j_client import _kafka_topic_cypher
+        from orchestrator.app.extraction_models import KafkaTopicNode
+
+        node = KafkaTopicNode(
+            name="user-events",
+            partitions=12,
+            retention_ms=604800000,
+            team_owner="platform",
+            namespace_acl=["production"],
+        )
+        cypher, params = _kafka_topic_cypher(node)
+        assert "team_owner" in cypher
+        assert "namespace_acl" in cypher
+        assert params["team_owner"] == "platform"
+        assert params["namespace_acl"] == ["production"]

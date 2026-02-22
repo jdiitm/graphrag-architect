@@ -15,11 +15,15 @@ class ServiceNode(BaseModel):
 class DatabaseNode(BaseModel):
     id: str
     type: str
+    team_owner: Optional[str] = None
+    namespace_acl: List[str] = Field(default_factory=list)
 
 class KafkaTopicNode(BaseModel):
     name: str
     partitions: int
     retention_ms: int
+    team_owner: Optional[str] = None
+    namespace_acl: List[str] = Field(default_factory=list)
 
 class K8sDeploymentNode(BaseModel):
     id: str

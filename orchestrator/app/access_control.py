@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -32,12 +32,6 @@ class SecurityPrincipal:
             namespace=fields.get("namespace", "*"),
             role=fields.get("role", "viewer"),
         )
-
-
-@dataclass(frozen=True)
-class PermissionMetadata:
-    team_owner: str
-    namespace_acl: List[str] = field(default_factory=list)
 
 
 class CypherPermissionFilter:
@@ -73,7 +67,7 @@ class CypherPermissionFilter:
         return " AND ".join(clauses), params
 
     def edge_filter(
-        self, source_alias: str, target_alias: str
+        self, target_alias: str
     ) -> Tuple[str, Dict[str, str]]:
         if self._principal.is_admin:
             return "", {}
@@ -82,12 +76,20 @@ class CypherPermissionFilter:
         return clause, params
 
     def inject_into_cypher(
-        self, cypher: str
+        self, cypher: str, alias: str = "n"
     ) -> Tuple[str, Dict[str, str]]:
+        """Inject ACL WHERE clauses into a Cypher query string.
+
+        Limitations: Uses regex-based keyword detection (``\\bWHERE\\b``,
+        ``\\bRETURN\\b``).  This will mis-identify keywords inside string
+        literals, CASE expressions, or nested sub-queries.  Queries with
+        those constructs should use ``node_filter`` directly and build
+        the Cypher manually.
+        """
         if self._principal.is_admin:
             return cypher, {}
 
-        node_clause, params = self.node_filter("n")
+        node_clause, params = self.node_filter(alias)
         if not node_clause:
             return cypher, {}
 
@@ -95,12 +97,22 @@ class CypherPermissionFilter:
         return_match = re.search(r"\bRETURN\b", cypher, re.IGNORECASE)
 
         if where_match:
-            insert_pos = where_match.end()
-            filtered = (
-                cypher[:insert_pos]
-                + " " + node_clause + " AND"
-                + cypher[insert_pos:]
-            )
+            where_end = where_match.end()
+            if return_match and return_match.start() > where_end:
+                existing_conds = cypher[where_end:return_match.start()].strip()
+                filtered = (
+                    cypher[:where_end]
+                    + " " + node_clause
+                    + " AND (" + existing_conds + ") "
+                    + cypher[return_match.start():]
+                )
+            else:
+                existing_conds = cypher[where_end:].strip()
+                filtered = (
+                    cypher[:where_end]
+                    + " " + node_clause
+                    + " AND (" + existing_conds + ")"
+                )
         elif return_match:
             insert_pos = return_match.start()
             filtered = (

@@ -34,14 +34,19 @@ def _service_cypher(entity: ServiceNode) -> CypherOp:
 
 
 def _database_cypher(entity: DatabaseNode) -> CypherOp:
-    query = "MERGE (n:Database {id: $id}) SET n.type = $type"
+    query = (
+        "MERGE (n:Database {id: $id}) "
+        "SET n.type = $type, "
+        "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
+    )
     return query, entity.model_dump()
 
 
 def _kafka_topic_cypher(entity: KafkaTopicNode) -> CypherOp:
     query = (
         "MERGE (n:KafkaTopic {name: $name}) "
-        "SET n.partitions = $partitions, n.retention_ms = $retention_ms"
+        "SET n.partitions = $partitions, n.retention_ms = $retention_ms, "
+        "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
     )
     return query, entity.model_dump()
 
