@@ -15,6 +15,10 @@ spec:
     metadata:
       labels:
         app: neo4j
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "7474"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: neo4j

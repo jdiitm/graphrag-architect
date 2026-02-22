@@ -46,6 +46,111 @@ class TestRejectsWriteKeywords:
             validate_cypher_readonly("match (n) detach delete n")
 
 
+class TestRejectsApocProcedureCalls:
+    def test_rejects_apoc_load_csv(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "CALL apoc.load.csv('file:///proc/self/environ') "
+                "YIELD lineNo, list RETURN list"
+            )
+
+    def test_rejects_apoc_import_csv(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "CALL apoc.import.csv([{fileName: 'f.csv'}], [], {})"
+            )
+
+    def test_rejects_apoc_load_json(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "CALL apoc.load.json('file:///etc/passwd') YIELD value RETURN value"
+            )
+
+    def test_rejects_apoc_text_function(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "CALL apoc.text.join(['a','b'], ',') YIELD value RETURN value"
+            )
+
+    def test_rejects_generic_call_procedure(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "CALL some.unknown.procedure() YIELD x RETURN x"
+            )
+
+    def test_rejects_call_procedure_case_insensitive(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "call APOC.LOAD.CSV('file:///tmp/secret') YIELD lineNo RETURN lineNo"
+            )
+
+
+class TestRejectsLoadCsv:
+    def test_rejects_load_csv(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "LOAD CSV FROM 'file:///etc/passwd' AS row RETURN row"
+            )
+
+    def test_rejects_load_csv_with_headers(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "LOAD CSV WITH HEADERS FROM 'file:///data.csv' AS row RETURN row"
+            )
+
+    def test_rejects_load_csv_case_insensitive(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "load csv from 'file:///etc/shadow' as row return row"
+            )
+
+
+class TestAllowlistProcedures:
+    def test_allows_db_index_fulltext_query_nodes(self):
+        result = validate_cypher_readonly(
+            "CALL db.index.fulltext.queryNodes('idx', 'auth') "
+            "YIELD node, score RETURN node"
+        )
+        assert "CALL db.index.fulltext.queryNodes" in result
+
+    def test_allows_db_index_fulltext_query_relationships(self):
+        result = validate_cypher_readonly(
+            "CALL db.index.fulltext.queryRelationships('idx', 'calls') "
+            "YIELD relationship, score RETURN relationship"
+        )
+        assert "CALL db.index.fulltext.queryRelationships" in result
+
+    def test_allows_db_labels(self):
+        result = validate_cypher_readonly(
+            "CALL db.labels() YIELD label RETURN label"
+        )
+        assert "CALL db.labels" in result
+
+    def test_allows_db_relationship_types(self):
+        result = validate_cypher_readonly(
+            "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
+        )
+        assert "CALL db.relationshipTypes" in result
+
+    def test_allows_db_property_keys(self):
+        result = validate_cypher_readonly(
+            "CALL db.propertyKeys() YIELD propertyKey RETURN propertyKey"
+        )
+        assert "CALL db.propertyKeys" in result
+
+    def test_allows_db_schema_visualization(self):
+        result = validate_cypher_readonly(
+            "CALL db.schema.visualization() YIELD nodes, relationships RETURN nodes"
+        )
+        assert "CALL db.schema.visualization" in result
+
+    def test_allows_dbms_components(self):
+        result = validate_cypher_readonly(
+            "CALL dbms.components() YIELD name, versions RETURN name"
+        )
+        assert "CALL dbms.components" in result
+
+
 class TestAllowsReadKeywords:
     def test_allows_match_return(self):
         result = validate_cypher_readonly("MATCH (n:Service) RETURN n")
