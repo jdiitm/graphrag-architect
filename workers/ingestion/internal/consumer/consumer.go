@@ -4,12 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/metrics"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
 )
 
 var ErrSourceClosed = errors.New("source closed")
+
+type TopicPartition struct {
+	Topic     string
+	Partition int32
+}
+
+type LagReporter interface {
+	HighWaterMarks() map[TopicPartition]int64
+}
 
 type JobSource interface {
 	Poll(ctx context.Context) ([]domain.Job, error)
@@ -18,17 +29,31 @@ type JobSource interface {
 }
 
 type Consumer struct {
-	source JobSource
-	jobs   chan<- domain.Job
-	acks   <-chan struct{}
+	source   JobSource
+	observer metrics.PipelineObserver
+	jobs     chan<- domain.Job
+	acks     <-chan struct{}
 }
 
-func New(source JobSource, jobs chan<- domain.Job, acks <-chan struct{}) *Consumer {
-	return &Consumer{
-		source: source,
-		jobs:   jobs,
-		acks:   acks,
+type ConsumerOption func(*Consumer)
+
+func WithObserver(obs metrics.PipelineObserver) ConsumerOption {
+	return func(c *Consumer) {
+		c.observer = obs
 	}
+}
+
+func New(source JobSource, jobs chan<- domain.Job, acks <-chan struct{}, opts ...ConsumerOption) *Consumer {
+	c := &Consumer{
+		source:   source,
+		observer: metrics.NoopObserver{},
+		jobs:     jobs,
+		acks:     acks,
+	}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
 
 func (c *Consumer) Run(ctx context.Context) error {
@@ -36,6 +61,8 @@ func (c *Consumer) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+
+		batchStart := time.Now()
 
 		batch, err := c.source.Poll(ctx)
 		if errors.Is(err, ErrSourceClosed) {
@@ -73,5 +100,34 @@ func (c *Consumer) Run(ctx context.Context) error {
 		}
 		commitSpan.End()
 		pollSpan.End()
+
+		c.observer.RecordBatchDuration(time.Since(batchStart).Seconds())
+		c.reportLag(batch)
+	}
+}
+
+func (c *Consumer) reportLag(batch []domain.Job) {
+	reporter, ok := c.source.(LagReporter)
+	if !ok {
+		return
+	}
+	watermarks := reporter.HighWaterMarks()
+	maxOffset := make(map[TopicPartition]int64)
+	for _, job := range batch {
+		tp := TopicPartition{Topic: job.Topic, Partition: job.Partition}
+		if job.Offset > maxOffset[tp] {
+			maxOffset[tp] = job.Offset
+		}
+	}
+	for tp, hwm := range watermarks {
+		offset, exists := maxOffset[tp]
+		if !exists {
+			continue
+		}
+		lag := hwm - offset
+		if lag < 0 {
+			lag = 0
+		}
+		c.observer.RecordConsumerLag(tp.Topic, tp.Partition, lag)
 	}
 }
