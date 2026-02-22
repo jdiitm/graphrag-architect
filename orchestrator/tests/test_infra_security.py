@@ -98,6 +98,89 @@ class TestNetworkPolicyNamespaceRestriction:
                         )
 
 
+class TestDeploymentSecurityContext:
+
+    @pytest.fixture(name="orchestrator_deployment")
+    def _orchestrator_deployment(self) -> dict:
+        path = INFRA_DIR / "k8s" / "orchestrator-deployment.yaml"
+        docs = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+        for doc in docs:
+            if doc and doc.get("kind") == "Deployment":
+                return doc
+        pytest.fail("No Deployment found in orchestrator-deployment.yaml")
+
+    @pytest.fixture(name="ingestion_worker_deployment")
+    def _ingestion_worker_deployment(self) -> dict:
+        path = INFRA_DIR / "k8s" / "ingestion-worker-deployment.yaml"
+        docs = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
+        for doc in docs:
+            if doc and doc.get("kind") == "Deployment":
+                return doc
+        pytest.fail("No Deployment found in ingestion-worker-deployment.yaml")
+
+    def _get_container_security_context(self, deployment: dict) -> dict:
+        containers = (
+            deployment["spec"]["template"]["spec"]["containers"]
+        )
+        assert len(containers) > 0
+        return containers[0].get("securityContext", {})
+
+    def test_orchestrator_runs_as_non_root(
+        self, orchestrator_deployment: dict
+    ) -> None:
+        ctx = self._get_container_security_context(orchestrator_deployment)
+        assert ctx.get("runAsNonRoot") is True, (
+            "Orchestrator container must set runAsNonRoot: true"
+        )
+
+    def test_orchestrator_read_only_root_filesystem(
+        self, orchestrator_deployment: dict
+    ) -> None:
+        ctx = self._get_container_security_context(orchestrator_deployment)
+        assert ctx.get("readOnlyRootFilesystem") is True, (
+            "Orchestrator container must set readOnlyRootFilesystem: true"
+        )
+
+    def test_orchestrator_no_privilege_escalation(
+        self, orchestrator_deployment: dict
+    ) -> None:
+        ctx = self._get_container_security_context(orchestrator_deployment)
+        assert ctx.get("allowPrivilegeEscalation") is False, (
+            "Orchestrator container must set allowPrivilegeEscalation: false"
+        )
+
+    def test_ingestion_worker_runs_as_non_root(
+        self, ingestion_worker_deployment: dict
+    ) -> None:
+        ctx = self._get_container_security_context(
+            ingestion_worker_deployment
+        )
+        assert ctx.get("runAsNonRoot") is True, (
+            "Ingestion worker container must set runAsNonRoot: true"
+        )
+
+    def test_ingestion_worker_read_only_root_filesystem(
+        self, ingestion_worker_deployment: dict
+    ) -> None:
+        ctx = self._get_container_security_context(
+            ingestion_worker_deployment
+        )
+        assert ctx.get("readOnlyRootFilesystem") is True, (
+            "Ingestion worker container must set readOnlyRootFilesystem: true"
+        )
+
+    def test_ingestion_worker_no_privilege_escalation(
+        self, ingestion_worker_deployment: dict
+    ) -> None:
+        ctx = self._get_container_security_context(
+            ingestion_worker_deployment
+        )
+        assert ctx.get("allowPrivilegeEscalation") is False, (
+            "Ingestion worker container must set "
+            "allowPrivilegeEscalation: false"
+        )
+
+
 class TestDockerComposeNoApocFileAccess:
 
     def test_neo4j_service_exists(self, compose_config: dict) -> None:

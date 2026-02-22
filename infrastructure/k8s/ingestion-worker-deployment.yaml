@@ -22,6 +22,10 @@ spec:
       containers:
         - name: ingestion-worker
           image: graphrag-architect/ingestion-worker:latest
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: 9090
               name: metrics

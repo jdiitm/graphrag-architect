@@ -1,8 +1,10 @@
+import logging
 import time
 from typing import Any, Dict, List, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from neo4j.exceptions import Neo4jError
+from opentelemetry.trace import StatusCode
 
 from orchestrator.app.config import ExtractionConfig
 from orchestrator.app.extraction_models import K8sDeploymentNode, KafkaTopicNode
@@ -20,6 +22,7 @@ from orchestrator.app.observability import (
 from orchestrator.app.schema_validation import validate_topology
 from orchestrator.app.workspace_loader import load_directory
 
+logger = logging.getLogger(__name__)
 
 MAX_VALIDATION_RETRIES = 3
 
@@ -123,14 +126,17 @@ async def fix_extraction_errors(state: IngestionState) -> dict:
 
 async def commit_to_neo4j(state: IngestionState) -> dict:
     tracer = get_tracer()
-    with tracer.start_as_current_span("ingestion.commit_neo4j"):
+    with tracer.start_as_current_span("ingestion.commit_neo4j") as span:
         start = time.monotonic()
         try:
             driver = get_driver()
             repo = GraphRepository(driver, circuit_breaker=_NEO4J_CIRCUIT_BREAKER)
             await repo.commit_topology(state.get("extracted_nodes", []))
             return {"commit_status": "success"}
-        except (Neo4jError, OSError, CircuitOpenError, RuntimeError):
+        except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:
+            span.set_status(StatusCode.ERROR, str(exc))
+            span.record_exception(exc)
+            logger.error("Neo4j commit failed: %s", exc)
             return {"commit_status": "failed"}
         finally:
             NEO4J_TRANSACTION_DURATION.record(
