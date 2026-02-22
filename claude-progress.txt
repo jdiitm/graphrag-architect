@@ -1,3 +1,33 @@
+## 2026-02-22: FR-8 Observability (Go) — OpenTelemetry Spans on Ingestion Pipeline — Complete
+
+### Completed
+- Created workers/ingestion/internal/telemetry/telemetry.go:
+  - Init() with configurable SpanExporter (OTLP gRPC for production, injectable for tests)
+  - Tracer() accessor
+  - StartPollSpan (batch.size attribute)
+  - StartProcessSpan (job.topic, job.partition, job.offset attributes)
+  - StartForwardSpan (http.target, job.file_path attributes)
+  - StartDLQSpan (dlq.attempts, dlq.error, dlq.topic attributes)
+  - StartCommitSpan for offset commits
+- Instrumented consumer/consumer.go: kafka.poll and kafka.commit spans wrapping batch lifecycle
+- Instrumented dispatcher/dispatcher.go: job.process spans on each worker, dlq.route spans on failure
+- Instrumented processor/forwarding.go: http.forward span on each HTTP POST to orchestrator
+
+### TDD: 9 new Go tests
+- telemetry_test.go: Init (2), Tracer (1), exporter capture (1)
+- spans_test.go: poll (1), process (1), forward (1), DLQ (1), commit (1)
+
+### Quality Gates
+- Pylint: 10/10
+- Python tests: 180/180 passing (no regressions)
+- Go tests: 35/35 passing (9 new + 26 existing)
+
+### FR-8 Status: Complete (Python + Go)
+- Python: TracerProvider, FastAPI auto-instrumentation, manual spans on all 12 DAG nodes, 4 metric histograms
+- Go: TracerProvider, manual spans on kafka.poll, job.process, http.forward, dlq.route, kafka.commit
+
+---
+
 ## 2026-02-22: FR-8 Observability (Python) — TracerProvider, Spans, Metrics — Complete
 
 ### Completed

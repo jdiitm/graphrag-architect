@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
 )
 
 var ErrSourceClosed = errors.New("source closed")
@@ -44,24 +45,33 @@ func (c *Consumer) Run(ctx context.Context) error {
 			return err
 		}
 
+		pollCtx, pollSpan := telemetry.StartPollSpan(ctx, len(batch))
+
 		for _, job := range batch {
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-pollCtx.Done():
+				pollSpan.End()
+				return pollCtx.Err()
 			case c.jobs <- job:
 			}
 		}
 
 		for i := 0; i < len(batch); i++ {
 			select {
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-pollCtx.Done():
+				pollSpan.End()
+				return pollCtx.Err()
 			case <-c.acks:
 			}
 		}
 
-		if err := c.source.Commit(ctx); err != nil {
+		commitCtx, commitSpan := telemetry.StartCommitSpan(pollCtx)
+		if err := c.source.Commit(commitCtx); err != nil {
+			commitSpan.End()
+			pollSpan.End()
 			return fmt.Errorf("offset commit: %w", err)
 		}
+		commitSpan.End()
+		pollSpan.End()
 	}
 }

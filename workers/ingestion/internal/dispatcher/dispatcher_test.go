@@ -3,13 +3,18 @@ package dispatcher_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	otelTrace "go.opentelemetry.io/otel/trace"
+
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dispatcher"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
 )
 
 var errProcessing = errors.New("processing failed")
@@ -229,6 +234,62 @@ func TestDispatcherGracefulShutdown(t *testing.T) {
 
 	if proc.CallCount() != 1 {
 		t.Fatalf("expected in-flight job to complete, got %d calls", proc.CallCount())
+	}
+}
+
+func TestDispatcherExtractsTraceContextFromJobHeaders(t *testing.T) {
+	exp := tracetest.NewInMemoryExporter()
+	tp, err := telemetry.Init(telemetry.WithExporter(exp))
+	if err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	defer func() { _ = tp.Shutdown(context.Background()) }()
+
+	_, parentSpan := tp.Tracer("test-producer").Start(context.Background(), "kafka.produce")
+	parentSC := parentSpan.SpanContext()
+	traceparent := fmt.Sprintf("00-%s-%s-01", parentSC.TraceID(), parentSC.SpanID())
+	parentSpan.End()
+
+	proc := &spyProcessor{}
+	cfg := dispatcher.Config{NumWorkers: 1, MaxRetries: 1, JobBuffer: 1, DLQBuffer: 1}
+	d := dispatcher.New(cfg, proc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	job := makeJob("trace-key")
+	job.Headers = map[string]string{
+		"file_path":   "test.go",
+		"source_type": "source_code",
+		"traceparent": traceparent,
+	}
+	d.Jobs() <- job
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+
+	spans := exp.GetSpans()
+	var processSpan *tracetest.SpanStub
+	for i := range spans {
+		if spans[i].Name == "job.process" {
+			processSpan = &spans[i]
+			break
+		}
+	}
+	if processSpan == nil {
+		t.Fatal("expected job.process span")
+	}
+	if processSpan.SpanContext.TraceID() != parentSC.TraceID() {
+		t.Errorf("process span trace ID = %s, want %s (should inherit from traceparent)",
+			processSpan.SpanContext.TraceID(), parentSC.TraceID())
+	}
+	if processSpan.Parent.SpanID() == (otelTrace.SpanID{}) {
+		t.Error("process span should have a parent span ID from traceparent extraction")
 	}
 }
 

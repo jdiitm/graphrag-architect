@@ -6,6 +6,7 @@ import (
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/processor"
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
 )
 
 type Config struct {
@@ -64,10 +65,15 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			if !ok {
 				return
 			}
-			result := d.processWithRetry(ctx, job)
+			jobCtx := telemetry.ExtractTraceContext(ctx, job.Headers)
+			processCtx, processSpan := telemetry.StartProcessSpan(jobCtx, job)
+			result := d.processWithRetry(processCtx, job)
 			if result.Err != nil {
+				_, dlqSpan := telemetry.StartDLQSpan(processCtx, result)
 				d.dlq <- result
+				dlqSpan.End()
 			}
+			processSpan.End()
 			select {
 			case d.acks <- struct{}{}:
 			case <-ctx.Done():
