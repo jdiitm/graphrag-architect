@@ -6,6 +6,7 @@ from neo4j.exceptions import Neo4jError
 
 from orchestrator.app.config import ExtractionConfig, Neo4jConfig
 from orchestrator.app.llm_extraction import ServiceExtractor
+from orchestrator.app.manifest_parser import parse_all_manifests
 from orchestrator.app.neo4j_client import GraphRepository
 from orchestrator.app.schema_validation import validate_topology
 from orchestrator.app.workspace_loader import load_directory
@@ -35,7 +36,9 @@ async def parse_go_and_python_services(state: IngestionState) -> dict:
     return {"extracted_nodes": list(result.services) + list(result.calls)}
 
 def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
-    return {"extracted_nodes": []}
+    existing = list(state.get("extracted_nodes", []))
+    manifest_entities = parse_all_manifests(state.get("raw_files", []))
+    return {"extracted_nodes": existing + manifest_entities}
 
 def validate_extracted_schema(state: IngestionState) -> dict:
     errors = validate_topology(state.get("extracted_nodes", []))
