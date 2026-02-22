@@ -1,3 +1,31 @@
+## Completed: DLQ Sink Failure Alert Rule (Audit 4.1)
+
+Branch: `feat/dlq-sink-failure-alert`
+Quality Gates: Pylint 10/10, Python 308/308, Go 56/56
+
+### Audit Finding Addressed
+4.1 — No alerting rule for `ingestion_dlq_sink_error_total` in `infrastructure/k8s/alerting.yaml`.
+The Go DLQ handler records a Prometheus counter on sink.Send() failures, but no
+PrometheusRule fired an alert. In a double-fault scenario (processing fails, then
+DLQ publish also fails), messages were silently lost with no automated notification.
+
+### Changes
+- Added `DLQSinkFailure` PrometheusRule to `infrastructure/k8s/alerting.yaml`
+  targeting `rate(ingestion_dlq_sink_error_total[5m]) > 0` with severity=critical
+  and channel=pagerduty, fires after 1m sustained
+- Added `orchestrator/tests/test_alerting_rules.py` with 9 tests:
+  7 tests for DLQSinkFailure alert properties (existence, metric, severity,
+  channel, for-duration, summary annotation, description annotation)
+  2 tests for DLQ metric coverage (both `ingestion_dlq_routed_total` and
+  `ingestion_dlq_sink_error_total` have corresponding alerting rules)
+
+### Architecture Decision: Infrastructure Validation Tests
+Added Python tests that parse alerting.yaml and validate alert rule completeness.
+This prevents future observability gaps from regressing — any new DLQ-related
+metric must have a corresponding alert rule to pass the test suite.
+
+---
+
 ## Completed: Cypher Allowlist + Prometheus Scraping (Audit 3.1 + 3.2)
 
 Branch: `feat/cypher-allowlist-and-prometheus-scraping`
