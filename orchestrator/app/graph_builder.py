@@ -7,6 +7,7 @@ from neo4j.exceptions import Neo4jError
 from opentelemetry.trace import StatusCode
 
 from orchestrator.app.ast_extraction import GoASTExtractor, PythonASTExtractor
+from orchestrator.app.checkpointing import ExtractionCheckpoint, FileStatus
 from orchestrator.app.config import ExtractionConfig
 from orchestrator.app.extraction_models import (
     CallsEdge,
@@ -46,6 +47,7 @@ class IngestionState(TypedDict):
     extraction_errors: List[str]
     validation_retries: int
     commit_status: str
+    extraction_checkpoint: Dict[str, str]
 
 
 def load_workspace_files(state: IngestionState) -> dict:
@@ -73,10 +75,17 @@ def parse_source_ast(state: IngestionState) -> dict:
     with tracer.start_as_current_span("ingestion.parse_source_ast"):
         start = time.monotonic()
         raw_files = state.get("raw_files", [])
+        checkpoint = _load_or_create_checkpoint(state, raw_files)
+        pending = checkpoint.filter_files(raw_files, FileStatus.PENDING)
         go_extractor = GoASTExtractor()
         py_extractor = PythonASTExtractor()
-        go_result = go_extractor.extract_all(raw_files)
-        py_result = py_extractor.extract_all(raw_files)
+        go_result = go_extractor.extract_all(pending)
+        py_result = py_extractor.extract_all(pending)
+        extracted_paths = (
+            [f["path"] for f in pending if f["path"].endswith(".go")]
+            + [f["path"] for f in pending if f["path"].endswith(".py")]
+        )
+        checkpoint.mark(extracted_paths, FileStatus.EXTRACTED)
         nodes: List[Any] = []
         for ast_svc in go_result.services + py_result.services:
             nodes.append(ServiceNode(
@@ -97,7 +106,19 @@ def parse_source_ast(state: IngestionState) -> dict:
         INGESTION_DURATION.record(
             (time.monotonic() - start) * 1000, {"node": "parse_source_ast"}
         )
-        return {"extracted_nodes": nodes}
+        return {
+            "extracted_nodes": nodes,
+            "extraction_checkpoint": checkpoint.to_dict(),
+        }
+
+
+def _load_or_create_checkpoint(
+    state: IngestionState, raw_files: List[Dict[str, str]],
+) -> ExtractionCheckpoint:
+    existing = state.get("extraction_checkpoint")
+    if existing:
+        return ExtractionCheckpoint.from_dict(existing)
+    return ExtractionCheckpoint.from_files(raw_files)
 
 
 async def enrich_with_llm(state: IngestionState) -> dict:
@@ -159,8 +180,14 @@ async def fix_extraction_errors(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.fix_errors"):
         start = time.monotonic()
+        raw_files = state.get("raw_files", [])
+        checkpoint = _load_or_create_checkpoint(state, raw_files)
+        checkpoint.retry_failed()
+        failed_files = checkpoint.filter_files(raw_files, FileStatus.PENDING)
         extractor = _build_extractor()
-        result = await extractor.extract_all(state.get("raw_files", []))
+        result = await extractor.extract_all(failed_files)
+        retry_paths = [f["path"] for f in failed_files]
+        checkpoint.mark(retry_paths, FileStatus.EXTRACTED)
         retries = state.get("validation_retries", 0)
         manifest_entities = _extract_manifest_entities(
             state.get("extracted_nodes", [])
@@ -174,6 +201,7 @@ async def fix_extraction_errors(state: IngestionState) -> dict:
             ),
             "extraction_errors": [],
             "validation_retries": retries + 1,
+            "extraction_checkpoint": checkpoint.to_dict(),
         }
 
 async def commit_to_neo4j(state: IngestionState) -> dict:
