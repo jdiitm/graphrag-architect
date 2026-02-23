@@ -6,8 +6,14 @@ from langgraph.graph import END, START, StateGraph
 from neo4j.exceptions import Neo4jError
 from opentelemetry.trace import StatusCode
 
+from orchestrator.app.ast_extraction import GoASTExtractor, PythonASTExtractor
 from orchestrator.app.config import ExtractionConfig
-from orchestrator.app.extraction_models import K8sDeploymentNode, KafkaTopicNode
+from orchestrator.app.extraction_models import (
+    CallsEdge,
+    K8sDeploymentNode,
+    KafkaTopicNode,
+    ServiceNode,
+)
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.manifest_parser import parse_all_manifests
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitOpenError
@@ -62,15 +68,61 @@ def load_workspace_files(state: IngestionState) -> dict:
         return {"raw_files": files}
 
 
-async def parse_go_and_python_services(state: IngestionState) -> dict:
+def parse_source_ast(state: IngestionState) -> dict:
     tracer = get_tracer()
-    with tracer.start_as_current_span("ingestion.parse_services"):
+    with tracer.start_as_current_span("ingestion.parse_source_ast"):
         start = time.monotonic()
-        extractor = _build_extractor()
-        result = await extractor.extract_all(state["raw_files"])
+        raw_files = state.get("raw_files", [])
+        go_extractor = GoASTExtractor()
+        py_extractor = PythonASTExtractor()
+        go_result = go_extractor.extract_all(raw_files)
+        py_result = py_extractor.extract_all(raw_files)
+        nodes: List[Any] = []
+        for ast_svc in go_result.services + py_result.services:
+            nodes.append(ServiceNode(
+                id=ast_svc.service_id,
+                name=ast_svc.name,
+                language=ast_svc.language,
+                framework=ast_svc.framework,
+                opentelemetry_enabled=False,
+                confidence=1.0,
+            ))
+        for ast_call in go_result.calls + py_result.calls:
+            nodes.append(CallsEdge(
+                source_service_id=ast_call.source_service_id,
+                target_service_id=ast_call.target_hint,
+                protocol=ast_call.protocol,
+                confidence=1.0,
+            ))
+        INGESTION_DURATION.record(
+            (time.monotonic() - start) * 1000, {"node": "parse_source_ast"}
+        )
+        return {"extracted_nodes": nodes}
+
+
+async def enrich_with_llm(state: IngestionState) -> dict:
+    tracer = get_tracer()
+    with tracer.start_as_current_span("ingestion.enrich_with_llm"):
+        start = time.monotonic()
+        existing = list(state.get("extracted_nodes", []))
+        try:
+            extractor = _build_extractor()
+            result = await extractor.extract_all(state["raw_files"])
+            for svc in result.services:
+                svc.confidence = 0.7
+                if not any(
+                    isinstance(n, ServiceNode) and n.id == svc.id
+                    for n in existing
+                ):
+                    existing.append(svc)
+            for call in result.calls:
+                call.confidence = 0.7
+                existing.append(call)
+        except Exception:
+            logger.warning("LLM enrichment unavailable, using AST results only")
         elapsed_ms = (time.monotonic() - start) * 1000
-        LLM_EXTRACTION_DURATION.record(elapsed_ms, {"node": "parse_services"})
-        return {"extracted_nodes": list(result.services) + list(result.calls)}
+        LLM_EXTRACTION_DURATION.record(elapsed_ms, {"node": "enrich_with_llm"})
+        return {"extracted_nodes": existing}
 
 def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
     tracer = get_tracer()
@@ -146,15 +198,17 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
 builder = StateGraph(IngestionState)
 
 builder.add_node("load_workspace", load_workspace_files)
-builder.add_node("parse_services", parse_go_and_python_services)
+builder.add_node("parse_source_ast", parse_source_ast)
+builder.add_node("enrich_with_llm", enrich_with_llm)
 builder.add_node("parse_manifests", parse_k8s_and_kafka_manifests)
 builder.add_node("validate_schema", validate_extracted_schema)
 builder.add_node("fix_errors", fix_extraction_errors)
 builder.add_node("commit_graph", commit_to_neo4j)
 
 builder.add_edge(START, "load_workspace")
-builder.add_edge("load_workspace", "parse_services")
-builder.add_edge("parse_services", "parse_manifests")
+builder.add_edge("load_workspace", "parse_source_ast")
+builder.add_edge("parse_source_ast", "enrich_with_llm")
+builder.add_edge("enrich_with_llm", "parse_manifests")
 builder.add_edge("parse_manifests", "validate_schema")
 
 builder.add_conditional_edges(
