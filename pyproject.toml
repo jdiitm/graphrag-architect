@@ -13,5 +13,8 @@ disable = [
     "W0718",  # broad-exception-caught: OTel span processors must never crash the app on export
 ]
 
+[tool.pylint.basic]
+method-rgx = "[a-z_][a-z0-9_]{2,}$|visit_[A-Z][a-zA-Z]*$"
+
 [tool.pylint.format]
 max-line-length = 100

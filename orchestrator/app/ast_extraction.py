@@ -29,12 +29,6 @@ _GRPC_SERVER_PATTERNS = frozenset({
     "NewServer",
 })
 
-_GRPC_CLIENT_PATTERNS = frozenset({
-    "Dial",
-    "DialContext",
-    "NewClient",
-})
-
 _KAFKA_CONSUMER_FUNCS = frozenset({
     "ConsumeTopics",
 })
@@ -296,10 +290,7 @@ _PY_HTTP_MODULES = frozenset({"httpx", "requests", "aiohttp"})
 
 _PY_HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
 
-_PY_KAFKA_PRODUCER_CLASSES = frozenset({
-    "AIOKafkaProducer",
-    "KafkaProducer",
-})
+_PY_KAFKA_MODULES = frozenset({"aiokafka", "kafka", "confluent_kafka"})
 
 _PY_KAFKA_CONSUMER_CLASSES = frozenset({
     "AIOKafkaConsumer",
@@ -315,25 +306,34 @@ class _PythonVisitor(ast.NodeVisitor):
         self._imports: Dict[str, str] = {}
         self._from_imports: Dict[str, str] = {}
 
-    def visit_Import(self, node: ast.Import) -> None:  # pylint: disable=invalid-name
+    @property
+    def has_kafka_imports(self) -> bool:
+        for module_path in self._imports.values():
+            if module_path.split(".")[0] in _PY_KAFKA_MODULES:
+                return True
+        for fqn in self._from_imports.values():
+            if fqn.split(".")[0] in _PY_KAFKA_MODULES:
+                return True
+        return False
+
+    def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             name = alias.asname or alias.name.split(".")[-1]
             self._imports[name] = alias.name
         self.generic_visit(node)
 
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # pylint: disable=invalid-name
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         module = node.module or ""
         for alias in node.names:
             local = alias.asname or alias.name
             self._from_imports[local] = f"{module}.{alias.name}"
         self.generic_visit(node)
 
-    def visit_Call(self, node: ast.Call) -> None:  # pylint: disable=invalid-name
+    def visit_Call(self, node: ast.Call) -> None:
         func_name = self._resolve_call_name(node)
         self._check_framework(func_name)
         self._check_grpc_server(func_name)
         self._check_http_call(func_name, node)
-        self._check_kafka_producer(func_name, node)
         self._check_kafka_consumer(func_name, node)
         self.generic_visit(node)
 
@@ -385,12 +385,6 @@ class _PythonVisitor(ast.NodeVisitor):
             protocol="http",
         ))
 
-    def _check_kafka_producer(self, func_name: str, node: ast.Call) -> None:
-        short = func_name.split(".")[-1]
-        if short not in _PY_KAFKA_PRODUCER_CLASSES:
-            return
-        self._extract_kafka_send_topics(node)
-
     def _check_kafka_consumer(self, func_name: str, node: ast.Call) -> None:
         short = func_name.split(".")[-1]
         if short not in _PY_KAFKA_CONSUMER_CLASSES:
@@ -399,9 +393,6 @@ class _PythonVisitor(ast.NodeVisitor):
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                 if arg.value not in self.result.topics_consumed:
                     self.result.topics_consumed.append(arg.value)
-
-    def _extract_kafka_send_topics(self, _node: ast.Call) -> None:
-        pass
 
     @staticmethod
     def _extract_first_string_arg(node: ast.Call) -> str:
@@ -423,7 +414,7 @@ class _KafkaSendVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         self.topics: List[str] = []
 
-    def visit_Call(self, node: ast.Call) -> None:  # pylint: disable=invalid-name
+    def visit_Call(self, node: ast.Call) -> None:
         func_name = ""
         if isinstance(node.func, ast.Attribute):
             func_name = node.func.attr
@@ -449,11 +440,12 @@ class PythonASTExtractor:
         visitor = _PythonVisitor(file_path)
         visitor.visit(tree)
 
-        send_visitor = _KafkaSendVisitor()
-        send_visitor.visit(tree)
-        for topic in send_visitor.topics:
-            if topic not in visitor.result.topics_produced:
-                visitor.result.topics_produced.append(topic)
+        if visitor.has_kafka_imports:
+            send_visitor = _KafkaSendVisitor()
+            send_visitor.visit(tree)
+            for topic in send_visitor.topics:
+                if topic not in visitor.result.topics_produced:
+                    visitor.result.topics_produced.append(topic)
 
         return visitor.result
 

@@ -1,5 +1,3 @@
-import pytest
-
 from orchestrator.app.ast_extraction import PythonASTExtractor
 
 
@@ -58,6 +56,22 @@ from aiokafka import AIOKafkaProducer
 async def produce():
     producer = AIOKafkaProducer(bootstrap_servers="kafka:9092")
     await producer.send("user-events", b"data")
+'''
+
+PYTHON_WEBSOCKET_SEND = '''
+import websocket
+
+def send_message():
+    ws = websocket.WebSocket()
+    ws.send("user-events")
+'''
+
+PYTHON_SOCKET_SEND = '''
+import socket
+
+def send_data():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.send("telemetry")
 '''
 
 PYTHON_NO_SERVICE = '''
@@ -134,6 +148,16 @@ class TestPythonASTKafkaDetection:
         extractor = PythonASTExtractor()
         result = extractor.extract("producer.py", PYTHON_KAFKA_PRODUCER)
         assert "user-events" in result.topics_produced
+
+    def test_websocket_send_not_detected_as_kafka(self):
+        extractor = PythonASTExtractor()
+        result = extractor.extract("ws_client.py", PYTHON_WEBSOCKET_SEND)
+        assert len(result.topics_produced) == 0
+
+    def test_socket_send_not_detected_as_kafka(self):
+        extractor = PythonASTExtractor()
+        result = extractor.extract("net_client.py", PYTHON_SOCKET_SEND)
+        assert len(result.topics_produced) == 0
 
 
 class TestPythonASTBatchExtraction:
