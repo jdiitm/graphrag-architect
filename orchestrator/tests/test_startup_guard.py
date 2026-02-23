@@ -1,3 +1,4 @@
+import os
 from unittest.mock import patch
 
 import pytest
@@ -12,7 +13,6 @@ class TestAuthConfigDeploymentMode:
         clear=False,
     )
     def test_production_mode_without_secret_raises_system_exit(self):
-        import os
         os.environ.pop("AUTH_TOKEN_SECRET", None)
         with pytest.raises(SystemExit):
             AuthConfig.from_env()
@@ -33,7 +33,6 @@ class TestAuthConfigDeploymentMode:
         clear=False,
     )
     def test_dev_mode_without_secret_succeeds(self):
-        import os
         os.environ.pop("AUTH_TOKEN_SECRET", None)
         config = AuthConfig.from_env()
         assert config.token_secret == ""
@@ -41,7 +40,6 @@ class TestAuthConfigDeploymentMode:
 
     @patch.dict("os.environ", {}, clear=False)
     def test_default_mode_is_dev(self):
-        import os
         os.environ.pop("DEPLOYMENT_MODE", None)
         os.environ.pop("AUTH_TOKEN_SECRET", None)
         config = AuthConfig.from_env()
@@ -53,7 +51,6 @@ class TestAuthConfigDeploymentMode:
         clear=False,
     )
     def test_production_mode_sets_require_tokens_implicitly(self):
-        import os
         os.environ.pop("AUTH_REQUIRE_TOKENS", None)
         config = AuthConfig.from_env()
         assert config.require_tokens is True
@@ -64,10 +61,15 @@ class TestAuthConfigDeploymentMode:
         clear=False,
     )
     def test_dev_mode_respects_explicit_require_tokens(self):
-        import os
         os.environ.pop("AUTH_TOKEN_SECRET", None)
         config = AuthConfig.from_env()
         assert config.require_tokens is True
+
+    @pytest.mark.parametrize("bad_mode", ["prod", "staging", "test", "prd", "live"])
+    def test_unknown_deployment_mode_raises_system_exit(self, bad_mode):
+        with patch.dict("os.environ", {"DEPLOYMENT_MODE": bad_mode}, clear=False):
+            with pytest.raises(SystemExit, match="not recognized"):
+                AuthConfig.from_env()
 
 
 class TestLifespanStartupGuard:
@@ -77,7 +79,6 @@ class TestLifespanStartupGuard:
         clear=False,
     )
     def test_lifespan_crashes_before_accepting_connections_in_production(self):
-        import os
         os.environ.pop("AUTH_TOKEN_SECRET", None)
         os.environ.pop("NEO4J_PASSWORD", None)
         from orchestrator.app.main import _validate_startup_security
@@ -90,7 +91,6 @@ class TestLifespanStartupGuard:
         clear=False,
     )
     def test_lifespan_does_not_crash_in_dev_mode(self):
-        import os
         os.environ.pop("AUTH_TOKEN_SECRET", None)
         from orchestrator.app.main import _validate_startup_security
         _validate_startup_security()
