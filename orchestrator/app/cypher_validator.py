@@ -19,6 +19,8 @@ _DESTRUCTIVE_CALL = re.compile(
     r"\bCALL\s*\{", re.IGNORECASE,
 )
 
+_MULTI_STATEMENT = re.compile(r";\s*\S")
+
 ALLOWED_PROCEDURES: FrozenSet[str] = frozenset({
     "db.index.fulltext.queryNodes",
     "db.index.fulltext.queryRelationships",
@@ -39,6 +41,10 @@ class CypherValidationError(ValueError):
 
 def validate_cypher_readonly(cypher: str) -> str:
     stripped = cypher.strip()
+    if _MULTI_STATEMENT.search(stripped):
+        raise CypherValidationError(
+            f"Cypher contains multiple statements: {stripped[:80]}"
+        )
     if _WRITE_KEYWORDS.search(stripped):
         raise CypherValidationError(
             f"Cypher contains write operation: {stripped[:80]}"
