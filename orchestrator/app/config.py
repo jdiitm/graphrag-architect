@@ -3,6 +3,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+_AUTH_SECRET_MIN_LENGTH = 16
+
+
+class InsecureConfigurationError(Exception):
+    pass
+
 
 @dataclass(frozen=True)
 class AuthConfig:
@@ -17,6 +23,20 @@ class AuthConfig:
             token_ttl_seconds=int(os.environ.get("AUTH_TOKEN_TTL", "3600")),
             require_tokens=os.environ.get("AUTH_REQUIRE_TOKENS", "").lower() == "true",
         )
+
+    def assert_secure(self) -> None:
+        if not self.require_tokens:
+            return
+        stripped = self.token_secret.strip()
+        if not stripped:
+            raise InsecureConfigurationError(
+                "AUTH_TOKEN_SECRET must be set when AUTH_REQUIRE_TOKENS is true."
+            )
+        if len(stripped) < _AUTH_SECRET_MIN_LENGTH:
+            raise InsecureConfigurationError(
+                f"AUTH_TOKEN_SECRET does not meet minimum length of "
+                f"{_AUTH_SECRET_MIN_LENGTH} characters."
+            )
 
 
 @dataclass(frozen=True)

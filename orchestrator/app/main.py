@@ -15,7 +15,7 @@ from orchestrator.app.access_control import (
     InvalidTokenError,
     SecurityPrincipal,
 )
-from orchestrator.app.config import AuthConfig
+from orchestrator.app.config import AuthConfig, InsecureConfigurationError
 from orchestrator.app.graph_builder import ingestion_graph
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
 from orchestrator.app.neo4j_pool import close_driver, init_driver
@@ -31,26 +31,24 @@ async def lifespan(_app: FastAPI):
     configure_telemetry()
     configure_metrics()
     init_driver()
-    _warn_insecure_auth()
+    _enforce_secure_config()
     try:
         yield
     finally:
         await close_driver()
 
 
-def _warn_insecure_auth() -> None:
+def _enforce_secure_config() -> None:
     auth = AuthConfig.from_env()
+    try:
+        auth.assert_secure()
+    except InsecureConfigurationError as exc:
+        raise RuntimeError(str(exc)) from exc
     if not auth.token_secret:
-        if auth.require_tokens:
-            logger.error(
-                "AUTH_REQUIRE_TOKENS is true but AUTH_TOKEN_SECRET is not set. "
-                "All authenticated endpoints will reject requests."
-            )
-        else:
-            logger.warning(
-                "AUTH_TOKEN_SECRET is not set. Token verification is disabled. "
-                "Set AUTH_TOKEN_SECRET for production deployments."
-            )
+        logger.critical(
+            "AUTH_TOKEN_SECRET is not set. Token verification is disabled. "
+            "Set AUTH_TOKEN_SECRET for production deployments."
+        )
 
 
 app = FastAPI(title="GraphRAG Orchestrator", version="1.0.0", lifespan=lifespan)
