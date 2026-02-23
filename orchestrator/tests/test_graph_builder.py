@@ -213,3 +213,53 @@ class TestCommitToNeo4jErrorLogging:
         assert len(error_messages) == 0, (
             f"Expected no ERROR logs on success. Got: {error_messages}"
         )
+
+
+class TestYAMLCheckpointMarking:
+
+    def test_yaml_files_marked_extracted_after_manifest_parsing(self) -> None:
+        from orchestrator.app.graph_builder import parse_k8s_and_kafka_manifests
+
+        state = {
+            "raw_files": [
+                {"path": "deploy.yaml", "content": (
+                    "apiVersion: apps/v1\nkind: Deployment\n"
+                    "metadata:\n  name: auth-svc"
+                )},
+                {"path": "topics.yml", "content": (
+                    "apiVersion: kafka.strimzi.io/v1beta2\nkind: KafkaTopic\n"
+                    "metadata:\n  name: events\nspec:\n  partitions: 3"
+                )},
+                {"path": "main.go", "content": "package main"},
+            ],
+            "extracted_nodes": [],
+            "extraction_checkpoint": {
+                "deploy.yaml": "pending",
+                "topics.yml": "pending",
+                "main.go": "extracted",
+            },
+        }
+
+        result = parse_k8s_and_kafka_manifests(state)
+        cp = result["extraction_checkpoint"]
+        assert cp["deploy.yaml"] == "extracted"
+        assert cp["topics.yml"] == "extracted"
+        assert cp["main.go"] == "extracted"
+
+    def test_yaml_not_re_pending_on_retry_cycle(self) -> None:
+        from orchestrator.app.graph_builder import parse_k8s_and_kafka_manifests
+
+        state = {
+            "raw_files": [
+                {"path": "deploy.yaml", "content": "kind: Deployment\nmetadata:\n  name: x"},
+                {"path": "app.py", "content": "print('hi')"},
+            ],
+            "extracted_nodes": [],
+            "extraction_checkpoint": {
+                "deploy.yaml": "pending",
+                "app.py": "pending",
+            },
+        }
+
+        result = parse_k8s_and_kafka_manifests(state)
+        assert result["extraction_checkpoint"]["deploy.yaml"] == "extracted"

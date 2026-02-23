@@ -32,6 +32,8 @@ def base_ingestion_state():
         "extraction_errors": [],
         "validation_retries": 0,
         "commit_status": "",
+        "extraction_checkpoint": {},
+        "skipped_files": [],
     }
 
 

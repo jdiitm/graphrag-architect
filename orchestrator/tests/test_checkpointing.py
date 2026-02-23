@@ -1,5 +1,3 @@
-import pytest
-
 from orchestrator.app.checkpointing import (
     ExtractionCheckpoint,
     FileStatus,
