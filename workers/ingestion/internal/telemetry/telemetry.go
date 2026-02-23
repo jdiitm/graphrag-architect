@@ -115,6 +115,15 @@ func StartForwardSpan(ctx context.Context, job domain.Job) (context.Context, tra
 	)
 }
 
+func StartStagingSpan(ctx context.Context, job domain.Job, stagingPath string) (context.Context, trace.Span) {
+	return Tracer().Start(ctx, "staging.write_and_emit",
+		trace.WithAttributes(
+			attribute.String("staging.file_path", job.Headers["file_path"]),
+			attribute.String("staging.destination", stagingPath),
+		),
+	)
+}
+
 func StartDLQSpan(ctx context.Context, result domain.Result) (context.Context, trace.Span) {
 	errMsg := ""
 	if result.Err != nil {
