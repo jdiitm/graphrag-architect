@@ -1,5 +1,5 @@
+import asyncio
 import json
-import os
 
 import pytest
 
@@ -39,7 +39,7 @@ class TestExtractionWorker:
             callback_calls.append(raw_files)
             return {"status": "success", "entities_extracted": 1}
 
-        config = ExtractionWorkerConfig()
+        config = ExtractionWorkerConfig(staging_dir=str(tmp_path))
         worker = ExtractionWorker(config, mock_ingest)
 
         event = ExtractionEvent(
@@ -58,7 +58,7 @@ class TestExtractionWorker:
         async def mock_ingest(raw_files):
             return {"status": "success"}
 
-        config = ExtractionWorkerConfig()
+        config = ExtractionWorkerConfig(staging_dir="/nonexistent/path")
         worker = ExtractionWorker(config, mock_ingest)
 
         event = ExtractionEvent(
@@ -83,7 +83,9 @@ class TestExtractionWorker:
             call_count += 1
             return {"status": "success"}
 
-        config = ExtractionWorkerConfig(max_concurrent=2)
+        config = ExtractionWorkerConfig(
+            max_concurrent=2, staging_dir=str(tmp_path),
+        )
         worker = ExtractionWorker(config, mock_ingest)
 
         events = [
@@ -115,8 +117,9 @@ class TestExtractionWorker:
             current -= 1
             return {"status": "success"}
 
-        import asyncio
-        config = ExtractionWorkerConfig(max_concurrent=2)
+        config = ExtractionWorkerConfig(
+            max_concurrent=2, staging_dir=str(tmp_path),
+        )
         worker = ExtractionWorker(config, mock_ingest)
 
         events = [
@@ -125,3 +128,26 @@ class TestExtractionWorker:
         ]
         await worker.run(events)
         assert max_concurrent <= 2
+
+    @pytest.mark.asyncio
+    async def test_path_traversal_rejected(self, tmp_path):
+        staging_dir = tmp_path / "staging"
+        staging_dir.mkdir()
+
+        secret = tmp_path / "secret.txt"
+        secret.write_text("top-secret-data", encoding="utf-8")
+
+        async def mock_ingest(raw_files):
+            return {"status": "success"}
+
+        config = ExtractionWorkerConfig(staging_dir=str(staging_dir))
+        worker = ExtractionWorker(config, mock_ingest)
+
+        traversal_path = str(staging_dir / ".." / "secret.txt")
+        event = ExtractionEvent(
+            staging_path=traversal_path,
+            headers={"file_path": "../secret.txt"},
+        )
+        result = await worker.process_event(event)
+        assert result["status"] == "failed"
+        assert "path traversal" in result["error"].lower()

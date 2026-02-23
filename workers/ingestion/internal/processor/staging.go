@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
@@ -47,15 +48,27 @@ func NewStageAndEmitProcessor(stagingDir string, emitter EventEmitter, opts ...S
 }
 
 func (s *StageAndEmitProcessor) Process(ctx context.Context, job domain.Job) error {
-	ctx, span := telemetry.StartForwardSpan(ctx, job)
-	defer span.End()
-
 	filePath, ok := job.Headers["file_path"]
 	if !ok {
 		return fmt.Errorf("missing required header: file_path")
 	}
 
-	stagingPath := filepath.Join(s.stagingDir, filePath)
+	stagingPath := filepath.Join(s.stagingDir, filepath.Clean(filePath))
+
+	ctx, span := telemetry.StartStagingSpan(ctx, job, stagingPath)
+	defer span.End()
+	absStagingDir, err := filepath.Abs(s.stagingDir)
+	if err != nil {
+		return fmt.Errorf("resolve staging directory: %w", err)
+	}
+	absStagingPath, err := filepath.Abs(stagingPath)
+	if err != nil {
+		return fmt.Errorf("resolve staging path: %w", err)
+	}
+	if !strings.HasPrefix(absStagingPath, absStagingDir+string(filepath.Separator)) {
+		return fmt.Errorf("path traversal detected: %s", filePath)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(stagingPath), 0o755); err != nil {
 		return fmt.Errorf("create staging directory: %w", err)
 	}

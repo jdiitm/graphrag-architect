@@ -114,6 +114,32 @@ func TestStageAndEmitProcessor_CustomTopic(t *testing.T) {
 	}
 }
 
+func TestStageAndEmitProcessor_PathTraversalRejected(t *testing.T) {
+	stagingDir := t.TempDir()
+	emitter := &mockEmitter{}
+	proc := processor.NewStageAndEmitProcessor(stagingDir, emitter)
+
+	traversalPaths := []string{
+		"../../etc/shadow",
+		"../../../etc/passwd",
+		"subdir/../../etc/crontab",
+	}
+	for _, malicious := range traversalPaths {
+		job := domain.Job{
+			Value:   []byte("malicious payload"),
+			Headers: map[string]string{"file_path": malicious},
+		}
+		err := proc.Process(context.Background(), job)
+		if err == nil {
+			t.Fatalf("expected error for path traversal %q, got nil", malicious)
+		}
+	}
+
+	if len(emitter.emitted) != 0 {
+		t.Errorf("expected 0 emitted events after traversal attempts, got %d", len(emitter.emitted))
+	}
+}
+
 func TestStageAndEmitProcessor_ImplementsDocumentProcessor(t *testing.T) {
 	stagingDir := t.TempDir()
 	emitter := &mockEmitter{}

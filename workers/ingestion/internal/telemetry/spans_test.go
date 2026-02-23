@@ -95,6 +95,25 @@ func TestStartForwardSpan(t *testing.T) {
 	assertAttr(t, spans[0].Attributes, "job.file_path", "file-y.go")
 }
 
+func TestStartStagingSpan(t *testing.T) {
+	exp := setupTestTracer(t)
+
+	job := sampleJob("s")
+	ctx, span := telemetry.StartStagingSpan(context.Background(), job, "/tmp/staging/file-s.go")
+	_ = ctx
+	span.End()
+
+	spans := exp.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	if spans[0].Name != "staging.write_and_emit" {
+		t.Errorf("name = %q, want %q", spans[0].Name, "staging.write_and_emit")
+	}
+	assertAttr(t, spans[0].Attributes, "staging.file_path", "file-s.go")
+	assertAttr(t, spans[0].Attributes, "staging.destination", "/tmp/staging/file-s.go")
+}
+
 func TestStartDLQSpan(t *testing.T) {
 	exp := setupTestTracer(t)
 

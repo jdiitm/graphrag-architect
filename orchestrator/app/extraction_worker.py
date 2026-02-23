@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
@@ -29,6 +30,7 @@ class ExtractionWorkerConfig:
     topic: str = "extraction-pending"
     consumer_group: str = "extraction-workers"
     max_concurrent: int = 5
+    staging_dir: str = "/tmp/graphrag-staging"
 
 
 IngestCallback = Callable[[List[Dict[str, str]]], Coroutine[Any, Any, Dict[str, Any]]]
@@ -46,6 +48,12 @@ class ExtractionWorker:
 
     async def process_event(self, event: ExtractionEvent) -> Dict[str, Any]:
         async with self._semaphore:
+            if not self._is_safe_staging_path(event.staging_path):
+                return {
+                    "status": "failed",
+                    "error": "path traversal detected",
+                }
+
             content = self._read_staged_file(event.staging_path)
             if content is None:
                 return {"status": "failed", "error": "staging file not found"}
@@ -55,6 +63,11 @@ class ExtractionWorker:
                 "content": content,
             }]
             return await self._ingest(raw_files)
+
+    def _is_safe_staging_path(self, path: str) -> bool:
+        staging_root = os.path.realpath(self._config.staging_dir)
+        resolved = os.path.realpath(path)
+        return resolved.startswith(staging_root + os.sep)
 
     @staticmethod
     def _read_staged_file(path: str) -> Optional[str]:
