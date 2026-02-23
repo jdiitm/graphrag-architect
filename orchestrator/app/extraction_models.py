@@ -11,6 +11,7 @@ class ServiceNode(BaseModel):
     opentelemetry_enabled: bool
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
+    confidence: float = 1.0
 
 class DatabaseNode(BaseModel):
     id: str
@@ -36,6 +37,7 @@ class CallsEdge(BaseModel):
     source_service_id: str
     target_service_id: str
     protocol: str
+    confidence: float = 1.0
 
 class ProducesEdge(BaseModel):
     service_id: str

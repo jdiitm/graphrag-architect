@@ -72,7 +72,7 @@ class TestIngestionSpans:
 
     @pytest.mark.asyncio
     async def test_parse_services_creates_span(self, telemetry):
-        from orchestrator.app.graph_builder import parse_go_and_python_services
+        from orchestrator.app.graph_builder import enrich_with_llm
 
         state = {
             "directory_path": "",
@@ -92,10 +92,10 @@ class TestIngestionSpans:
                 return_value=MagicMock(services=[], calls=[])
             )
             mock_cls.return_value = mock_extractor
-            await parse_go_and_python_services(state)
+            await enrich_with_llm(state)
 
         span_names = [s.name for s in telemetry.get_finished_spans()]
-        assert "ingestion.parse_services" in span_names
+        assert "ingestion.enrich_with_llm" in span_names
 
     def test_validate_schema_creates_span(self, telemetry):
         from orchestrator.app.graph_builder import validate_extracted_schema
@@ -442,7 +442,7 @@ class TestMetricsRecording:
 
     @pytest.mark.asyncio
     async def test_parse_services_records_llm_extraction_duration(self, telemetry):
-        from orchestrator.app.graph_builder import parse_go_and_python_services
+        from orchestrator.app.graph_builder import enrich_with_llm
 
         state = {
             "directory_path": "",
@@ -464,7 +464,7 @@ class TestMetricsRecording:
                 return_value=MagicMock(services=[], calls=[])
             )
             mock_cls.return_value = mock_extractor
-            await parse_go_and_python_services(state)
+            await enrich_with_llm(state)
             mock_metric.record.assert_called_once()
             elapsed_ms = mock_metric.record.call_args[0][0]
             assert elapsed_ms >= 0
