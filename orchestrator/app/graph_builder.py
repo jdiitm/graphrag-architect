@@ -84,7 +84,7 @@ def parse_source_ast(state: IngestionState) -> dict:
                 name=ast_svc.name,
                 language=ast_svc.language,
                 framework=ast_svc.framework,
-                opentelemetry_enabled=False,
+                opentelemetry_enabled=ast_svc.opentelemetry_enabled,
                 confidence=1.0,
             ))
         for ast_call in go_result.calls + py_result.calls:
@@ -110,14 +110,27 @@ async def enrich_with_llm(state: IngestionState) -> dict:
             result = await extractor.extract_all(state["raw_files"])
             for svc in result.services:
                 svc.confidence = 0.7
-                if not any(
-                    isinstance(n, ServiceNode) and n.id == svc.id
-                    for n in existing
-                ):
+                existing_svc = next(
+                    (n for n in existing
+                     if isinstance(n, ServiceNode) and n.id == svc.id),
+                    None,
+                )
+                if existing_svc is not None:
+                    if svc.opentelemetry_enabled:
+                        existing_svc.opentelemetry_enabled = True
+                else:
                     existing.append(svc)
+            existing_edge_keys = {
+                (e.source_service_id, e.target_service_id, e.protocol)
+                for e in existing if isinstance(e, CallsEdge)
+            }
             for call in result.calls:
                 call.confidence = 0.7
-                existing.append(call)
+                key = (call.source_service_id, call.target_service_id,
+                       call.protocol)
+                if key not in existing_edge_keys:
+                    existing.append(call)
+                    existing_edge_keys.add(key)
         except Exception:
             logger.warning("LLM enrichment unavailable, using AST results only")
         elapsed_ms = (time.monotonic() - start) * 1000
@@ -159,18 +172,39 @@ async def fix_extraction_errors(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.fix_errors"):
         start = time.monotonic()
+        existing = state.get("extracted_nodes", [])
+        ast_entities = [
+            n for n in existing
+            if getattr(n, "confidence", 0) == 1.0
+        ]
+        manifest_entities = _extract_manifest_entities(existing)
+        retries = state.get("validation_retries", 0)
+
         extractor = _build_extractor()
         result = await extractor.extract_all(state.get("raw_files", []))
-        retries = state.get("validation_retries", 0)
-        manifest_entities = _extract_manifest_entities(
-            state.get("extracted_nodes", [])
-        )
+
+        ast_service_ids = {
+            n.id for n in ast_entities if isinstance(n, ServiceNode)
+        }
+        ast_edge_keys = {
+            (e.source_service_id, e.target_service_id, e.protocol)
+            for e in ast_entities if isinstance(e, CallsEdge)
+        }
+        llm_services = [
+            s for s in result.services if s.id not in ast_service_ids
+        ]
+        llm_calls = [
+            c for c in result.calls
+            if (c.source_service_id, c.target_service_id, c.protocol)
+            not in ast_edge_keys
+        ]
+
         LLM_EXTRACTION_DURATION.record(
             (time.monotonic() - start) * 1000, {"node": "fix_errors"}
         )
         return {
             "extracted_nodes": (
-                list(result.services) + list(result.calls) + manifest_entities
+                ast_entities + llm_services + llm_calls + manifest_entities
             ),
             "extraction_errors": [],
             "validation_retries": retries + 1,

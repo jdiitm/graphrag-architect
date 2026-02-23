@@ -27,7 +27,8 @@ def _service_cypher(entity: ServiceNode) -> CypherOp:
         "MERGE (n:Service {id: $id}) "
         "SET n.name = $name, n.language = $language, "
         "n.framework = $framework, n.opentelemetry_enabled = $opentelemetry_enabled, "
-        "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
+        "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl, "
+        "n.confidence = $confidence"
     )
     return query, entity.model_dump()
 
@@ -63,7 +64,8 @@ def _calls_cypher(entity: CallsEdge) -> CypherOp:
     query = (
         "MATCH (a:Service {id: $source_service_id}), "
         "(b:Service {id: $target_service_id}) "
-        "MERGE (a)-[r:CALLS]->(b) SET r.protocol = $protocol"
+        "MERGE (a)-[r:CALLS]->(b) SET r.protocol = $protocol, "
+        "r.confidence = $confidence"
     )
     return query, entity.model_dump()
 

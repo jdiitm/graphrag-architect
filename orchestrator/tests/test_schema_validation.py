@@ -382,6 +382,7 @@ class TestFixExtractionErrorsNode:
             language="rust",
             framework="actix",
             opentelemetry_enabled=False,
+            confidence=0.7,
         )
         state = {
             "raw_files": [

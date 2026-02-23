@@ -59,6 +59,7 @@ class ASTServiceNode:
     name: str
     language: str
     framework: str = ""
+    opentelemetry_enabled: bool = False
     confidence: float = 1.0
 
 
@@ -84,7 +85,7 @@ class ASTExtractionResult:
                 name=s.name,
                 language=s.language,
                 framework=s.framework or "unknown",
-                opentelemetry_enabled=False,
+                opentelemetry_enabled=s.opentelemetry_enabled,
             )
             for s in self.services
         ]
@@ -192,12 +193,16 @@ class GoASTExtractor:
 
         is_server = self._detect_server(root, imports)
         framework = _detect_framework(imports, root)
+        otel_detected = any(
+            p.startswith("go.opentelemetry.io") for p in imports.values()
+        )
         if is_server:
             result.services.append(ASTServiceNode(
                 service_id=service_id,
                 name=package_name or service_id,
                 language="go",
                 framework=framework or "net/http",
+                opentelemetry_enabled=otel_detected,
             ))
 
         self._detect_http_calls(root, imports, service_id, result)
@@ -345,6 +350,16 @@ class _PythonVisitor(ast.NodeVisitor):
                 return True
         return False
 
+    @property
+    def has_otel_imports(self) -> bool:
+        for module_path in self._imports.values():
+            if module_path.split(".")[0] == "opentelemetry":
+                return True
+        for fqn in self._from_imports.values():
+            if fqn.split(".")[0] == "opentelemetry":
+                return True
+        return False
+
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             name = alias.asname or alias.name.split(".")[-1]
@@ -468,6 +483,10 @@ class PythonASTExtractor:
 
         visitor = _PythonVisitor(file_path)
         visitor.visit(tree)
+
+        if visitor.has_otel_imports:
+            for svc in visitor.result.services:
+                svc.opentelemetry_enabled = True
 
         if visitor.has_kafka_imports:
             send_visitor = _KafkaSendVisitor()
