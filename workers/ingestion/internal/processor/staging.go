@@ -57,6 +57,7 @@ func (s *StageAndEmitProcessor) Process(ctx context.Context, job domain.Job) err
 
 	ctx, span := telemetry.StartStagingSpan(ctx, job, stagingPath)
 	defer span.End()
+
 	absStagingDir, err := filepath.Abs(s.stagingDir)
 	if err != nil {
 		return fmt.Errorf("resolve staging directory: %w", err)

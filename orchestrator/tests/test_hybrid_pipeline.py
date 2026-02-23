@@ -293,7 +293,7 @@ class TestGracefulDegradation:
         }
 
         mock_extractor = AsyncMock()
-        mock_extractor.extract_all.side_effect = RuntimeError("LLM unavailable")
+        mock_extractor.extract_all.side_effect = OSError("LLM unavailable")
 
         with patch(
             "orchestrator.app.graph_builder._build_extractor",

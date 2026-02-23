@@ -7,7 +7,9 @@ import pytest
 from neo4j.exceptions import Neo4jError
 from opentelemetry.trace import StatusCode
 
+from orchestrator.app.checkpointing import ExtractionCheckpoint, FileStatus
 from orchestrator.app.circuit_breaker import CircuitOpenError
+from orchestrator.app.graph_builder import parse_source_ast
 
 
 _ENV_VARS = {
@@ -213,3 +215,24 @@ class TestCommitToNeo4jErrorLogging:
         assert len(error_messages) == 0, (
             f"Expected no ERROR logs on success. Got: {error_messages}"
         )
+
+
+class TestFileStatusFailedOnExtractionError:
+
+    def test_syntax_error_marks_file_failed(self) -> None:
+        state = {
+            "raw_files": [
+                {"path": "bad.py", "content": "def broken(:\n    pass"},
+                {"path": "good.py", "content": "x = 1"},
+            ],
+            "extracted_nodes": [],
+            "extraction_errors": [],
+            "validation_retries": 0,
+            "commit_status": "",
+            "extraction_checkpoint": {},
+            "directory_path": "",
+        }
+        result = parse_source_ast(state)
+        cp = ExtractionCheckpoint.from_dict(result["extraction_checkpoint"])
+        assert cp.status("bad.py") == FileStatus.FAILED
+        assert cp.status("good.py") == FileStatus.EXTRACTED

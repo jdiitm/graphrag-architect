@@ -476,10 +476,7 @@ class PythonASTExtractor:
         if not file_path.endswith(".py"):
             return ASTExtractionResult()
 
-        try:
-            tree = ast.parse(content)
-        except SyntaxError:
-            return ASTExtractionResult()
+        tree = ast.parse(content)
 
         visitor = _PythonVisitor(file_path)
         visitor.visit(tree)
