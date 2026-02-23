@@ -44,6 +44,19 @@ func (f *ForwardingProcessor) Process(ctx context.Context) error {
 }
 '''
 
+GO_MULTI_HTTP_CALLS = '''package gateway
+
+import (
+    "net/http"
+)
+
+func FanOut() {
+    http.Get("http://auth-svc/verify")
+    http.Post("http://billing-svc/charge", "application/json", nil)
+    http.Head("http://inventory-svc/status")
+}
+'''
+
 GO_KAFKA_CONSUMER = '''package main
 
 import (
@@ -139,6 +152,17 @@ class TestGoASTExtractorCallDetection:
         calls_with_http = [c for c in result.calls if c.protocol == "http"]
         assert len(calls_with_http) >= 1
 
+    def test_captures_all_http_calls_not_just_first(self):
+        extractor = GoASTExtractor()
+        result = extractor.extract("services/gateway/main.go", GO_MULTI_HTTP_CALLS)
+        targets = [c.target_hint for c in result.calls]
+        assert len(result.calls) >= 3, (
+            f"Expected at least 3 HTTP calls but got {len(result.calls)}: {targets}"
+        )
+        assert any("auth-svc" in t for t in targets), f"Missing auth-svc in {targets}"
+        assert any("billing-svc" in t for t in targets), f"Missing billing-svc in {targets}"
+        assert any("inventory-svc" in t for t in targets), f"Missing inventory-svc in {targets}"
+
 
 class TestGoASTExtractorKafka:
     def test_detects_kafka_consumer_topic(self):
@@ -146,6 +170,33 @@ class TestGoASTExtractorKafka:
         result = extractor.extract("main.go", GO_KAFKA_CONSUMER)
         assert len(result.topics_consumed) >= 1
         assert "raw-documents" in result.topics_consumed
+
+
+class TestASTExtractionResultBridge:
+    def test_to_extraction_result_maps_services(self):
+        extractor = GoASTExtractor()
+        result = extractor.extract("cmd/main.go", GO_HTTP_SERVER)
+        converted = result.to_extraction_result()
+        assert len(converted.services) == len(result.services)
+        assert converted.services[0].id == result.services[0].service_id
+        assert converted.services[0].language == "go"
+
+    def test_to_extraction_result_maps_calls(self):
+        extractor = GoASTExtractor()
+        result = extractor.extract("services/gateway/main.go", GO_MULTI_HTTP_CALLS)
+        converted = result.to_extraction_result()
+        assert len(converted.calls) == len(result.calls)
+        for orig, mapped in zip(result.calls, converted.calls):
+            assert mapped.source_service_id == orig.source_service_id
+            assert mapped.target_service_id == orig.target_hint
+            assert mapped.protocol == orig.protocol
+
+    def test_confidence_defaults_to_one(self):
+        extractor = GoASTExtractor()
+        result = extractor.extract("cmd/main.go", GO_HTTP_SERVER)
+        assert result.services[0].confidence == 1.0
+        call_result = extractor.extract("services/gateway/main.go", GO_MULTI_HTTP_CALLS)
+        assert all(c.confidence == 1.0 for c in call_result.calls)
 
 
 class TestGoASTExtractorBatchExtraction:
