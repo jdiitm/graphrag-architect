@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from typing import Any, Dict, List, TypedDict
 
@@ -27,7 +28,7 @@ from orchestrator.app.observability import (
     get_tracer,
 )
 from orchestrator.app.schema_validation import validate_topology
-from orchestrator.app.workspace_loader import load_directory
+from orchestrator.app.workspace_loader import load_directory_chunked
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,10 @@ class IngestionState(TypedDict):
     extraction_checkpoint: Dict[str, str]
 
 
+def _get_workspace_max_bytes() -> int:
+    return int(os.environ.get("WORKSPACE_MAX_BYTES", "104857600"))
+
+
 def load_workspace_files(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.load_workspace") as span:
@@ -62,7 +67,13 @@ def load_workspace_files(state: IngestionState) -> dict:
                 (time.monotonic() - start) * 1000, {"node": "load_workspace"}
             )
             return {"raw_files": files}
-        files = load_directory(directory_path)
+        max_bytes = _get_workspace_max_bytes()
+        files: List[Dict[str, str]] = []
+        for chunk in load_directory_chunked(
+            directory_path, max_total_bytes=max_bytes,
+        ):
+            files.extend(chunk)
+        files.sort(key=lambda entry: entry["path"])
         span.set_attribute("file_count", len(files))
         INGESTION_DURATION.record(
             (time.monotonic() - start) * 1000, {"node": "load_workspace"}
