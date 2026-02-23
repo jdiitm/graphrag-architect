@@ -32,9 +32,9 @@ class TestMetricsEndpoint:
         response = client.get("/metrics")
         assert "text/plain" in response.headers["content-type"]
 
-    def test_contains_process_metrics(self, client):
+    def test_contains_platform_metrics(self, client):
         response = client.get("/metrics")
-        assert "process_" in response.text
+        assert "python_info" in response.text
 
 
 class TestHistogramsExportedViaEndpoint:
