@@ -1,32 +1,68 @@
 from __future__ import annotations
 
+import json
+import logging
+import uuid
+from pathlib import Path
 from enum import Enum
-from typing import Dict, List
+from typing import Dict, List, Optional, Union
+
+logger = logging.getLogger(__name__)
+
+_CHECKPOINT_ID_KEY = "__checkpoint_id__"
+
+
+_SOURCE_EXTENSIONS = frozenset({".go", ".py"})
 
 
 class FileStatus(Enum):
     PENDING = "pending"
     EXTRACTED = "extracted"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class ExtractionCheckpoint:
-    def __init__(self, statuses: Dict[str, FileStatus]) -> None:
+    def __init__(
+        self,
+        statuses: Dict[str, FileStatus],
+        checkpoint_id: Optional[str] = None,
+    ) -> None:
         self._statuses = dict(statuses)
+        self._checkpoint_id = checkpoint_id or str(uuid.uuid4())
+
+    @property
+    def checkpoint_id(self) -> str:
+        return self._checkpoint_id
 
     @classmethod
     def from_files(cls, files: List[Dict[str, str]]) -> ExtractionCheckpoint:
-        return cls({f["path"]: FileStatus.PENDING for f in files})
+        statuses: Dict[str, FileStatus] = {}
+        for f in files:
+            path = f["path"]
+            ext = Path(path).suffix.lower()
+            statuses[path] = (
+                FileStatus.PENDING if ext in _SOURCE_EXTENSIONS
+                else FileStatus.SKIPPED
+            )
+        return cls(statuses)
 
     @classmethod
     def from_dict(cls, data: Dict[str, str]) -> ExtractionCheckpoint:
-        return cls({
-            path: FileStatus(status_str)
-            for path, status_str in data.items()
-        })
+        checkpoint_id = data.get(_CHECKPOINT_ID_KEY)
+        return cls(
+            {
+                path: FileStatus(status_str)
+                for path, status_str in data.items()
+                if path != _CHECKPOINT_ID_KEY
+            },
+            checkpoint_id=checkpoint_id,
+        )
 
     def to_dict(self) -> Dict[str, str]:
-        return {path: status.value for path, status in self._statuses.items()}
+        result = {path: status.value for path, status in self._statuses.items()}
+        result[_CHECKPOINT_ID_KEY] = self._checkpoint_id
+        return result
 
     def status(self, path: str) -> FileStatus:
         return self._statuses.get(path, FileStatus.PENDING)
@@ -54,6 +90,24 @@ class ExtractionCheckpoint:
             if self._statuses[path] == FileStatus.FAILED:
                 self._statuses[path] = FileStatus.PENDING
 
+    def save(self, filepath: Union[str, Path]) -> None:
+        path = Path(filepath)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+
+    @classmethod
+    def load(cls, filepath: Union[str, Path]) -> Optional[ExtractionCheckpoint]:
+        path = Path(filepath)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return cls.from_dict(data)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Failed to load checkpoint from %s: %s", filepath, exc)
+            return None
+
     @property
     def all_done(self) -> bool:
-        return all(s == FileStatus.EXTRACTED for s in self._statuses.values())
+        terminal = {FileStatus.EXTRACTED, FileStatus.SKIPPED}
+        return all(s in terminal for s in self._statuses.values())

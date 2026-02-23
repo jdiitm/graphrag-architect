@@ -20,6 +20,8 @@ from orchestrator.app.extraction_models import (
     ServiceNode,
 )
 
+LLM_RETRYABLE_ERRORS = (ResourceExhausted, ServiceUnavailable, OSError, ValueError)
+
 SYSTEM_PROMPT = (
     "You are a distributed-systems code analyst. Given source files from a "
     "codebase, extract ONLY the following:\n\n"

@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 
 from orchestrator.app.checkpointing import (
@@ -97,3 +99,63 @@ class TestExtractionCheckpoint:
         restored = ExtractionCheckpoint.from_dict(data)
         assert restored.status("a.go") == FileStatus.EXTRACTED
         assert restored.status("b.go") == FileStatus.PENDING
+
+    def test_checkpoint_has_uuid_id(self):
+        cp = ExtractionCheckpoint.from_files([
+            {"path": "a.go", "content": ""},
+        ])
+        assert cp.checkpoint_id is not None
+        uuid.UUID(cp.checkpoint_id)
+
+    def test_checkpoint_id_preserved_in_serialization(self):
+        cp = ExtractionCheckpoint.from_files([
+            {"path": "a.go", "content": ""},
+        ])
+        original_id = cp.checkpoint_id
+        data = cp.to_dict()
+        restored = ExtractionCheckpoint.from_dict(data)
+        assert restored.checkpoint_id == original_id
+
+    def test_different_checkpoints_have_unique_ids(self):
+        cp1 = ExtractionCheckpoint.from_files([{"path": "a.go", "content": ""}])
+        cp2 = ExtractionCheckpoint.from_files([{"path": "b.go", "content": ""}])
+        assert cp1.checkpoint_id != cp2.checkpoint_id
+
+    def test_save_and_load_from_disk(self, tmp_path):
+        cp = ExtractionCheckpoint.from_files([
+            {"path": "a.go", "content": ""},
+            {"path": "b.go", "content": ""},
+        ])
+        cp.mark(["a.go"], FileStatus.EXTRACTED)
+        cp.mark(["b.go"], FileStatus.FAILED)
+
+        filepath = tmp_path / "checkpoint.json"
+        cp.save(filepath)
+
+        loaded = ExtractionCheckpoint.load(filepath)
+        assert loaded.checkpoint_id == cp.checkpoint_id
+        assert loaded.status("a.go") == FileStatus.EXTRACTED
+        assert loaded.status("b.go") == FileStatus.FAILED
+
+    def test_load_nonexistent_file_returns_none(self, tmp_path):
+        filepath = tmp_path / "missing.json"
+        result = ExtractionCheckpoint.load(filepath)
+        assert result is None
+
+    def test_all_done_with_non_source_files(self):
+        files = [
+            {"path": "main.go", "content": "package main"},
+            {"path": "deploy.yaml", "content": "apiVersion: v1"},
+            {"path": "Dockerfile", "content": "FROM alpine"},
+        ]
+        cp = ExtractionCheckpoint.from_files(files)
+        cp.mark(["main.go"], FileStatus.EXTRACTED)
+        assert cp.all_done is True
+
+    def test_non_source_files_marked_skipped(self):
+        files = [
+            {"path": "deploy.yaml", "content": "apiVersion: v1"},
+            {"path": "main.go", "content": "package main"},
+        ]
+        cp = ExtractionCheckpoint.from_files(files)
+        assert cp.status("deploy.yaml") == FileStatus.SKIPPED

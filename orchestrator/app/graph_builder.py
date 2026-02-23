@@ -15,7 +15,7 @@ from orchestrator.app.extraction_models import (
     KafkaTopicNode,
     ServiceNode,
 )
-from orchestrator.app.llm_extraction import ServiceExtractor
+from orchestrator.app.llm_extraction import LLM_RETRYABLE_ERRORS, ServiceExtractor
 from orchestrator.app.manifest_parser import parse_all_manifests
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitOpenError
 from orchestrator.app.neo4j_client import GraphRepository
@@ -70,6 +70,38 @@ def load_workspace_files(state: IngestionState) -> dict:
         return {"raw_files": files}
 
 
+def _ast_result_to_nodes(result: Any) -> List[Any]:
+    nodes: List[Any] = []
+    for ast_svc in result.services:
+        nodes.append(ServiceNode(
+            id=ast_svc.service_id,
+            name=ast_svc.name,
+            language=ast_svc.language,
+            framework=ast_svc.framework,
+            opentelemetry_enabled=ast_svc.opentelemetry_enabled,
+            confidence=1.0,
+        ))
+    for ast_call in result.calls:
+        nodes.append(CallsEdge(
+            source_service_id=ast_call.source_service_id,
+            target_service_id=ast_call.target_hint,
+            protocol=ast_call.protocol,
+            confidence=1.0,
+        ))
+    return nodes
+
+
+def _extract_file(
+    path: str, content: str,
+    go_ext: GoASTExtractor, py_ext: PythonASTExtractor,
+) -> List[Any]:
+    if path.endswith(".go"):
+        return _ast_result_to_nodes(go_ext.extract(path, content))
+    if path.endswith(".py"):
+        return _ast_result_to_nodes(py_ext.extract(path, content))
+    return []
+
+
 def parse_source_ast(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.parse_source_ast"):
@@ -77,32 +109,26 @@ def parse_source_ast(state: IngestionState) -> dict:
         raw_files = state.get("raw_files", [])
         checkpoint = _load_or_create_checkpoint(state, raw_files)
         pending = checkpoint.filter_files(raw_files, FileStatus.PENDING)
-        go_extractor = GoASTExtractor()
-        py_extractor = PythonASTExtractor()
-        go_result = go_extractor.extract_all(pending)
-        py_result = py_extractor.extract_all(pending)
-        extracted_paths = (
-            [f["path"] for f in pending if f["path"].endswith(".go")]
-            + [f["path"] for f in pending if f["path"].endswith(".py")]
-        )
-        checkpoint.mark(extracted_paths, FileStatus.EXTRACTED)
+        go_ext = GoASTExtractor()
+        py_ext = PythonASTExtractor()
         nodes: List[Any] = []
-        for ast_svc in go_result.services + py_result.services:
-            nodes.append(ServiceNode(
-                id=ast_svc.service_id,
-                name=ast_svc.name,
-                language=ast_svc.language,
-                framework=ast_svc.framework,
-                opentelemetry_enabled=ast_svc.opentelemetry_enabled,
-                confidence=1.0,
-            ))
-        for ast_call in go_result.calls + py_result.calls:
-            nodes.append(CallsEdge(
-                source_service_id=ast_call.source_service_id,
-                target_service_id=ast_call.target_hint,
-                protocol=ast_call.protocol,
-                confidence=1.0,
-            ))
+        extracted_paths: List[str] = []
+        failed_paths: List[str] = []
+
+        for file_entry in pending:
+            path = file_entry["path"]
+            try:
+                file_nodes = _extract_file(
+                    path, file_entry.get("content", ""), go_ext, py_ext,
+                )
+                nodes.extend(file_nodes)
+                extracted_paths.append(path)
+            except (SyntaxError, ValueError, OSError) as exc:
+                logger.warning("AST extraction failed for %s: %s", path, exc)
+                failed_paths.append(path)
+
+        checkpoint.mark(extracted_paths, FileStatus.EXTRACTED)
+        checkpoint.mark(failed_paths, FileStatus.FAILED)
         INGESTION_DURATION.record(
             (time.monotonic() - start) * 1000, {"node": "parse_source_ast"}
         )
@@ -152,8 +178,10 @@ async def enrich_with_llm(state: IngestionState) -> dict:
                 if key not in existing_edge_keys:
                     existing.append(call)
                     existing_edge_keys.add(key)
-        except Exception:
-            logger.warning("LLM enrichment unavailable, using AST results only")
+        except LLM_RETRYABLE_ERRORS as exc:
+            logger.warning(
+                "LLM enrichment unavailable, using AST results only: %s", exc,
+            )
         elapsed_ms = (time.monotonic() - start) * 1000
         LLM_EXTRACTION_DURATION.record(elapsed_ms, {"node": "enrich_with_llm"})
         return {"extracted_nodes": existing}
@@ -189,14 +217,34 @@ def _extract_manifest_entities(nodes: List[Any]) -> List[Any]:
     ]
 
 
+def _deduplicate_llm_against_ast(
+    ast_entities: List[Any], result: Any,
+) -> List[Any]:
+    ast_service_ids = {
+        n.id for n in ast_entities if isinstance(n, ServiceNode)
+    }
+    ast_edge_keys = {
+        (e.source_service_id, e.target_service_id, e.protocol)
+        for e in ast_entities if isinstance(e, CallsEdge)
+    }
+    llm_nodes: List[Any] = [
+        s for s in result.services if s.id not in ast_service_ids
+    ]
+    llm_nodes.extend(
+        c for c in result.calls
+        if (c.source_service_id, c.target_service_id, c.protocol)
+        not in ast_edge_keys
+    )
+    return llm_nodes
+
+
 async def fix_extraction_errors(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.fix_errors"):
         start = time.monotonic()
         existing = state.get("extracted_nodes", [])
         ast_entities = [
-            n for n in existing
-            if getattr(n, "confidence", 0) == 1.0
+            n for n in existing if getattr(n, "confidence", 0) == 1.0
         ]
         manifest_entities = _extract_manifest_entities(existing)
 
@@ -204,38 +252,19 @@ async def fix_extraction_errors(state: IngestionState) -> dict:
         checkpoint = _load_or_create_checkpoint(state, raw_files)
         checkpoint.retry_failed()
         failed_files = checkpoint.filter_files(raw_files, FileStatus.PENDING)
-        retries = state.get("validation_retries", 0)
 
         extractor = _build_extractor()
         result = await extractor.extract_all(failed_files)
-        retry_paths = [f["path"] for f in failed_files]
-        checkpoint.mark(retry_paths, FileStatus.EXTRACTED)
+        checkpoint.mark([f["path"] for f in failed_files], FileStatus.EXTRACTED)
 
-        ast_service_ids = {
-            n.id for n in ast_entities if isinstance(n, ServiceNode)
-        }
-        ast_edge_keys = {
-            (e.source_service_id, e.target_service_id, e.protocol)
-            for e in ast_entities if isinstance(e, CallsEdge)
-        }
-        llm_services = [
-            s for s in result.services if s.id not in ast_service_ids
-        ]
-        llm_calls = [
-            c for c in result.calls
-            if (c.source_service_id, c.target_service_id, c.protocol)
-            not in ast_edge_keys
-        ]
-
+        llm_nodes = _deduplicate_llm_against_ast(ast_entities, result)
         LLM_EXTRACTION_DURATION.record(
             (time.monotonic() - start) * 1000, {"node": "fix_errors"}
         )
         return {
-            "extracted_nodes": (
-                ast_entities + llm_services + llm_calls + manifest_entities
-            ),
+            "extracted_nodes": ast_entities + llm_nodes + manifest_entities,
             "extraction_errors": [],
-            "validation_retries": retries + 1,
+            "validation_retries": state.get("validation_retries", 0) + 1,
             "extraction_checkpoint": checkpoint.to_dict(),
         }
 
