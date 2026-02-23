@@ -1,3 +1,5 @@
+import pytest
+
 from orchestrator.app.access_control import CypherPermissionFilter, SecurityPrincipal
 
 
@@ -124,6 +126,3 @@ class TestACLInjectionStringLiteralBypass:
         final_return_pos = filtered.rfind("RETURN n")
         acl_pos = filtered.find("n.team_owner")
         assert acl_pos < final_return_pos
-
-
-import pytest
