@@ -28,23 +28,22 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    _validate_startup_security()
+    auth = _validate_startup_security()
     configure_telemetry()
     configure_metrics()
     init_driver()
-    _warn_insecure_auth()
+    _warn_insecure_auth(auth)
     try:
         yield
     finally:
         await close_driver()
 
 
-def _validate_startup_security() -> None:
-    AuthConfig.from_env()
+def _validate_startup_security() -> AuthConfig:
+    return AuthConfig.from_env()
 
 
-def _warn_insecure_auth() -> None:
-    auth = AuthConfig.from_env()
+def _warn_insecure_auth(auth: AuthConfig) -> None:
     if not auth.token_secret:
         if auth.require_tokens:
             logger.error(

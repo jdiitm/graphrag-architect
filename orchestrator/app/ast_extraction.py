@@ -8,6 +8,12 @@ from typing import Dict, List
 import tree_sitter_go
 from tree_sitter import Language, Parser, Node
 
+from orchestrator.app.extraction_models import (
+    CallsEdge,
+    ServiceExtractionResult,
+    ServiceNode,
+)
+
 
 GO_LANGUAGE = Language(tree_sitter_go.language())
 
@@ -53,6 +59,7 @@ class ASTServiceNode:
     name: str
     language: str
     framework: str = ""
+    confidence: float = 1.0
 
 
 @dataclass
@@ -60,6 +67,7 @@ class ASTCallEdge:
     source_service_id: str
     target_hint: str
     protocol: str
+    confidence: float = 1.0
 
 
 @dataclass
@@ -68,6 +76,27 @@ class ASTExtractionResult:
     calls: List[ASTCallEdge] = field(default_factory=list)
     topics_consumed: List[str] = field(default_factory=list)
     topics_produced: List[str] = field(default_factory=list)
+
+    def to_extraction_result(self) -> ServiceExtractionResult:
+        services = [
+            ServiceNode(
+                id=s.service_id,
+                name=s.name,
+                language=s.language,
+                framework=s.framework or "unknown",
+                opentelemetry_enabled=False,
+            )
+            for s in self.services
+        ]
+        calls = [
+            CallsEdge(
+                source_service_id=c.source_service_id,
+                target_service_id=c.target_hint,
+                protocol=c.protocol,
+            )
+            for c in self.calls
+        ]
+        return ServiceExtractionResult(services=services, calls=calls)
 
 
 def _derive_service_id(file_path: str) -> str:
@@ -219,7 +248,7 @@ class GoASTExtractor:
                             target_hint=target,
                             protocol="http",
                         ))
-                        return
+                        break
 
     def _detect_kafka_usage(
         self,
