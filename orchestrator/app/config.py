@@ -4,18 +4,41 @@ import os
 from dataclasses import dataclass
 
 
+_KNOWN_MODES = {"dev", "production"}
+
+
 @dataclass(frozen=True)
 class AuthConfig:
     token_secret: str = ""
     token_ttl_seconds: int = 3600
     require_tokens: bool = False
+    deployment_mode: str = "dev"
 
     @classmethod
     def from_env(cls) -> AuthConfig:
+        mode = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
+
+        if mode not in _KNOWN_MODES:
+            raise SystemExit(
+                f"FATAL: DEPLOYMENT_MODE={mode!r} is not recognized. "
+                f"Valid modes: {', '.join(sorted(_KNOWN_MODES))}"
+            )
+
+        secret = os.environ.get("AUTH_TOKEN_SECRET", "")
+        explicit_require = os.environ.get("AUTH_REQUIRE_TOKENS", "").lower() == "true"
+        require_tokens = explicit_require or mode == "production"
+
+        if mode == "production" and not secret:
+            raise SystemExit(
+                "FATAL: DEPLOYMENT_MODE=production but AUTH_TOKEN_SECRET is not set. "
+                "Refusing to start without authentication credentials."
+            )
+
         return cls(
-            token_secret=os.environ.get("AUTH_TOKEN_SECRET", ""),
+            token_secret=secret,
             token_ttl_seconds=int(os.environ.get("AUTH_TOKEN_TTL", "3600")),
-            require_tokens=os.environ.get("AUTH_REQUIRE_TOKENS", "").lower() == "true",
+            require_tokens=require_tokens,
+            deployment_mode=mode,
         )
 
 

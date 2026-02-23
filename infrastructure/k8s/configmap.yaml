@@ -17,3 +17,4 @@ data:
   OTEL_EXPORTER_OTLP_INSECURE: "true"
   NUM_WORKERS: "4"
   MAX_RETRIES: "3"
+  DEPLOYMENT_MODE: "production"
