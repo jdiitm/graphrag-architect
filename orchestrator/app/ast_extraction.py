@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List
@@ -269,6 +270,203 @@ class GoASTExtractor:
             path = file_entry.get("path", "")
             content = file_entry.get("content", "")
             if not path.endswith(".go"):
+                continue
+            single = self.extract(path, content)
+            for svc in single.services:
+                if svc.service_id not in seen_ids:
+                    seen_ids.add(svc.service_id)
+                    combined.services.append(svc)
+            combined.calls.extend(single.calls)
+            for topic in single.topics_consumed:
+                if topic not in combined.topics_consumed:
+                    combined.topics_consumed.append(topic)
+            for topic in single.topics_produced:
+                if topic not in combined.topics_produced:
+                    combined.topics_produced.append(topic)
+
+        return combined
+
+
+_PY_FRAMEWORK_CONSTRUCTORS: Dict[str, str] = {
+    "FastAPI": "fastapi",
+    "Flask": "flask",
+}
+
+_PY_HTTP_MODULES = frozenset({"httpx", "requests", "aiohttp"})
+
+_PY_HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
+
+_PY_KAFKA_PRODUCER_CLASSES = frozenset({
+    "AIOKafkaProducer",
+    "KafkaProducer",
+})
+
+_PY_KAFKA_CONSUMER_CLASSES = frozenset({
+    "AIOKafkaConsumer",
+    "KafkaConsumer",
+})
+
+
+class _PythonVisitor(ast.NodeVisitor):
+    def __init__(self, file_path: str) -> None:
+        self.file_path = file_path
+        self.service_id = _derive_service_id(file_path)
+        self.result = ASTExtractionResult()
+        self._imports: Dict[str, str] = {}
+        self._from_imports: Dict[str, str] = {}
+
+    def visit_Import(self, node: ast.Import) -> None:  # pylint: disable=invalid-name
+        for alias in node.names:
+            name = alias.asname or alias.name.split(".")[-1]
+            self._imports[name] = alias.name
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # pylint: disable=invalid-name
+        module = node.module or ""
+        for alias in node.names:
+            local = alias.asname or alias.name
+            self._from_imports[local] = f"{module}.{alias.name}"
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:  # pylint: disable=invalid-name
+        func_name = self._resolve_call_name(node)
+        self._check_framework(func_name)
+        self._check_grpc_server(func_name)
+        self._check_http_call(func_name, node)
+        self._check_kafka_producer(func_name, node)
+        self._check_kafka_consumer(func_name, node)
+        self.generic_visit(node)
+
+    def _resolve_call_name(self, node: ast.Call) -> str:
+        if isinstance(node.func, ast.Name):
+            return node.func.id
+        if isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Name):
+                return f"{node.func.value.id}.{node.func.attr}"
+            return node.func.attr
+        return ""
+
+    def _check_framework(self, func_name: str) -> None:
+        short = func_name.split(".")[-1] if "." in func_name else func_name
+        if short in _PY_FRAMEWORK_CONSTRUCTORS:
+            framework = _PY_FRAMEWORK_CONSTRUCTORS[short]
+            self.result.services.append(ASTServiceNode(
+                service_id=self.service_id,
+                name=self.service_id,
+                language="python",
+                framework=framework,
+            ))
+
+    def _check_grpc_server(self, func_name: str) -> None:
+        if func_name in ("grpc.server", "server"):
+            source_module = self._from_imports.get("server", "")
+            if func_name == "grpc.server" or "grpc" in source_module:
+                self.result.services.append(ASTServiceNode(
+                    service_id=self.service_id,
+                    name=self.service_id,
+                    language="python",
+                    framework="grpc",
+                ))
+
+    def _check_http_call(self, func_name: str, node: ast.Call) -> None:
+        parts = func_name.split(".")
+        if len(parts) != 2:
+            return
+        module_alias, method = parts
+        actual_module = self._imports.get(module_alias, module_alias)
+        if actual_module not in _PY_HTTP_MODULES:
+            return
+        if method not in _PY_HTTP_METHODS:
+            return
+        url = self._extract_first_string_arg(node)
+        self.result.calls.append(ASTCallEdge(
+            source_service_id=self.service_id,
+            target_hint=url,
+            protocol="http",
+        ))
+
+    def _check_kafka_producer(self, func_name: str, node: ast.Call) -> None:
+        short = func_name.split(".")[-1]
+        if short not in _PY_KAFKA_PRODUCER_CLASSES:
+            return
+        self._extract_kafka_send_topics(node)
+
+    def _check_kafka_consumer(self, func_name: str, node: ast.Call) -> None:
+        short = func_name.split(".")[-1]
+        if short not in _PY_KAFKA_CONSUMER_CLASSES:
+            return
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                if arg.value not in self.result.topics_consumed:
+                    self.result.topics_consumed.append(arg.value)
+
+    def _extract_kafka_send_topics(self, _node: ast.Call) -> None:
+        pass
+
+    @staticmethod
+    def _extract_first_string_arg(node: ast.Call) -> str:
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                return arg.value
+            if isinstance(arg, ast.JoinedStr):
+                parts = []
+                for val in arg.values:
+                    if isinstance(val, ast.Constant):
+                        parts.append(str(val.value))
+                    else:
+                        parts.append("{...}")
+                return "".join(parts)
+        return "unknown"
+
+
+class _KafkaSendVisitor(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.topics: List[str] = []
+
+    def visit_Call(self, node: ast.Call) -> None:  # pylint: disable=invalid-name
+        func_name = ""
+        if isinstance(node.func, ast.Attribute):
+            func_name = node.func.attr
+        if func_name == "send" and node.args:
+            first_arg = node.args[0]
+            if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
+                self.topics.append(first_arg.value)
+        self.generic_visit(node)
+
+
+class PythonASTExtractor:
+    def extract(
+        self, file_path: str, content: str,
+    ) -> ASTExtractionResult:
+        if not file_path.endswith(".py"):
+            return ASTExtractionResult()
+
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return ASTExtractionResult()
+
+        visitor = _PythonVisitor(file_path)
+        visitor.visit(tree)
+
+        send_visitor = _KafkaSendVisitor()
+        send_visitor.visit(tree)
+        for topic in send_visitor.topics:
+            if topic not in visitor.result.topics_produced:
+                visitor.result.topics_produced.append(topic)
+
+        return visitor.result
+
+    def extract_all(
+        self, files: List[Dict[str, str]],
+    ) -> ASTExtractionResult:
+        combined = ASTExtractionResult()
+        seen_ids: set[str] = set()
+
+        for file_entry in files:
+            path = file_entry.get("path", "")
+            content = file_entry.get("content", "")
+            if not path.endswith(".py"):
                 continue
             single = self.extract(path, content)
             for svc in single.services:
