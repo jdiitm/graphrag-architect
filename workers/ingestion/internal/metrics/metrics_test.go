@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/metrics"
 )
@@ -112,4 +113,37 @@ func TestMetricsImplementsPipelineObserver(t *testing.T) {
 	m := metrics.New()
 	var obs metrics.PipelineObserver = m
 	obs.RecordDLQSinkError()
+}
+
+func TestLastBatchTimeZeroWhenNoBatchRecorded(t *testing.T) {
+	m := metrics.New()
+	if !m.LastBatchTime().IsZero() {
+		t.Fatal("expected zero time before any batch recorded")
+	}
+}
+
+func TestLastBatchTimeUpdatedOnRecordBatchDuration(t *testing.T) {
+	m := metrics.New()
+	before := time.Now()
+	m.RecordBatchDuration(1.0)
+	after := time.Now()
+
+	last := m.LastBatchTime()
+	if last.Before(before) || last.After(after) {
+		t.Fatalf("LastBatchTime() = %v, want between %v and %v", last, before, after)
+	}
+}
+
+func TestLastBatchTimeUpdatesOnSubsequentBatches(t *testing.T) {
+	m := metrics.New()
+	m.RecordBatchDuration(1.0)
+	first := m.LastBatchTime()
+
+	time.Sleep(5 * time.Millisecond)
+	m.RecordBatchDuration(2.0)
+	second := m.LastBatchTime()
+
+	if !second.After(first) {
+		t.Fatalf("second LastBatchTime (%v) should be after first (%v)", second, first)
+	}
 }

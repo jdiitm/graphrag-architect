@@ -3,6 +3,8 @@ package metrics
 import (
 	"net/http"
 	"strconv"
+	"sync/atomic"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -15,6 +17,7 @@ type Metrics struct {
 	dlqRouted     prometheus.Counter
 	dlqSinkError  prometheus.Counter
 	jobsProcessed *prometheus.CounterVec
+	lastBatchAt   atomic.Value
 }
 
 func New() *Metrics {
@@ -64,6 +67,15 @@ func (m *Metrics) RecordConsumerLag(topic string, partition int32, lag int64) {
 
 func (m *Metrics) RecordBatchDuration(seconds float64) {
 	m.batchDuration.Observe(seconds)
+	m.lastBatchAt.Store(time.Now())
+}
+
+func (m *Metrics) LastBatchTime() time.Time {
+	v := m.lastBatchAt.Load()
+	if v == nil {
+		return time.Time{}
+	}
+	return v.(time.Time)
 }
 
 func (m *Metrics) RecordDLQRouted() {

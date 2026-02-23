@@ -1,3 +1,32 @@
+## Completed: DLQ Deadlock Remediation (HIGH — Audit 3.1)
+
+Branch: `feat/dlq-deadlock-remediation`
+Quality Gates: Pylint 10/10, Python 398/398, Go 82/82
+
+### Audit Finding Addressed
+Consumer pipeline deadlock when DLQ Kafka sink becomes unreachable. Three
+root causes: missing ack timeout, no DLQ fallback sink, liveness probe blind spot.
+
+### Changes
+1. `cmd/main.go`: Configured `consumer.WithAckTimeout(30s)` (env: ACK_TIMEOUT_SECONDS),
+   file-based DLQ fallback via `dlq.WithFallback()` (env: DLQ_FALLBACK_PATH),
+   and dedicated `/healthz` liveness endpoint
+2. `internal/dlq/file_sink.go`: File-based DLQ fallback sink implementing `DeadLetterSink`.
+   Writes JSONL records with full error metadata. Thread-safe, creates parent directories.
+3. `internal/healthz/checker.go`: Dedicated liveness endpoint checking consumer health via
+   `LastBatchTime()`. Returns 503 when no activity recorded or activity exceeds threshold
+   (default 45s, below Kafka session.timeout.ms). K8s liveness probe should target this
+   instead of `/metrics`.
+4. `internal/metrics/metrics.go`: Added `LastBatchTime()` tracking via `sync/atomic.Value`,
+   updated on every `RecordBatchDuration()` call (post-commit).
+
+### New Tests: 13 (all Go)
+- 4 file sink tests (write, append, parent dirs, interface compliance)
+- 6 healthz checker tests (healthy, no activity, stale, default threshold, custom threshold, JSON)
+- 3 metrics LastBatchTime tests (zero, updated, subsequent)
+
+---
+
 ## Completed: Query Path require_tokens Fail-Closed Fix (LOW-001)
 
 Branch: `fix/query-require-tokens-fail-closed`

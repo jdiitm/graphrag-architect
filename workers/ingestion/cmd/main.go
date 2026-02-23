@@ -14,6 +14,7 @@ import (
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/consumer"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dispatcher"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dlq"
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/healthz"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/metrics"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/processor"
 )
@@ -48,8 +49,10 @@ func main() {
 		kafkaBrokers, kafkaTopic, consumerGroup, numWorkers)
 
 	m := metrics.New()
+	healthChecker := healthz.NewChecker(m)
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", m.Handler())
+	mux.Handle("/healthz", healthChecker)
 	metricsSrv := &http.Server{Addr: metricsAddr, Handler: mux}
 	go func() {
 		log.Printf("metrics server listening on %s", metricsAddr)
@@ -76,7 +79,12 @@ func main() {
 	kafkaSource := NewKafkaJobSource(kafkaBrokers, kafkaTopic, consumerGroup)
 	defer kafkaSource.Close()
 
-	cons := consumer.New(kafkaSource, disp.Jobs(), disp.Acks(), consumer.WithObserver(m))
+	ackTimeoutSec := envIntOrDefault("ACK_TIMEOUT_SECONDS", 30)
+	log.Printf("consumer ack timeout: %ds", ackTimeoutSec)
+	cons := consumer.New(kafkaSource, disp.Jobs(), disp.Acks(),
+		consumer.WithObserver(m),
+		consumer.WithAckTimeout(time.Duration(ackTimeoutSec)*time.Second),
+	)
 
 	var sink dlq.DeadLetterSink
 	dlqSinkMode := envOrDefault("DLQ_SINK", "kafka")
@@ -93,7 +101,17 @@ func main() {
 		sink = kafkaSink
 		log.Printf("DLQ sink: kafka topic=%s", dlqTopic)
 	}
-	dlqHandler := dlq.NewHandler(disp.DLQ(), sink, dlq.WithObserver(m))
+	var dlqOpts []dlq.Option
+	dlqOpts = append(dlqOpts, dlq.WithObserver(m))
+	if fallbackPath := os.Getenv("DLQ_FALLBACK_PATH"); fallbackPath != "" {
+		fileSink, err := dlq.NewFileSink(fallbackPath)
+		if err != nil {
+			log.Fatalf("create dlq file fallback: %v", err)
+		}
+		dlqOpts = append(dlqOpts, dlq.WithFallback(fileSink))
+		log.Printf("DLQ fallback: file=%s", fallbackPath)
+	}
+	dlqHandler := dlq.NewHandler(disp.DLQ(), sink, dlqOpts...)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
