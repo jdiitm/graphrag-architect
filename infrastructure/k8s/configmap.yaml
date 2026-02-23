@@ -18,3 +18,5 @@ data:
   NUM_WORKERS: "4"
   MAX_RETRIES: "3"
   DEPLOYMENT_MODE: "production"
+  EXTRACTION_TOPIC: "extraction-pending"
+  STAGING_DIR: "/data/staging"
