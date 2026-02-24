@@ -552,6 +552,62 @@ class TestDockerComposeNoApocFileAccess:
         )
 
 
+class TestKafkaAdvertisedListenersPodNameResolution:
+
+    @pytest.fixture(name="kafka_statefulset")
+    def _kafka_statefulset(self) -> dict:
+        docs = list(yaml.safe_load_all(
+            KAFKA_STATEFULSET_PATH.read_text(encoding="utf-8")
+        ))
+        for doc in docs:
+            if doc and doc.get("kind") == "StatefulSet":
+                return doc
+        pytest.fail("No StatefulSet found in kafka-statefulset.yaml")
+
+    def _get_kafka_env(self, statefulset: dict) -> list[dict]:
+        containers = statefulset["spec"]["template"]["spec"]["containers"]
+        for container in containers:
+            if container["name"] == "kafka":
+                return container.get("env", [])
+        pytest.fail("No kafka container found")
+
+    def test_pod_name_is_downward_api_ref(
+        self, kafka_statefulset: dict,
+    ) -> None:
+        env_vars = self._get_kafka_env(kafka_statefulset)
+        pod_name_var = None
+        for var in env_vars:
+            if var["name"] == "POD_NAME":
+                pod_name_var = var
+                break
+        assert pod_name_var is not None, (
+            "POD_NAME env var must exist as a Kubernetes downward API "
+            "reference so $(POD_NAME) in KAFKA_ADVERTISED_LISTENERS "
+            "resolves correctly"
+        )
+        value_from = pod_name_var.get("valueFrom", {})
+        field_ref = value_from.get("fieldRef", {})
+        assert field_ref.get("fieldPath") == "metadata.name", (
+            "POD_NAME must reference metadata.name via fieldRef, "
+            f"got: {field_ref}"
+        )
+
+    def test_advertised_listeners_references_pod_name(
+        self, kafka_statefulset: dict,
+    ) -> None:
+        env_vars = self._get_kafka_env(kafka_statefulset)
+        adv = None
+        for var in env_vars:
+            if var["name"] == "KAFKA_ADVERTISED_LISTENERS":
+                adv = var.get("value", "")
+                break
+        assert adv is not None
+        assert "$(POD_NAME)" in adv, (
+            "KAFKA_ADVERTISED_LISTENERS must use $(POD_NAME) for "
+            "per-broker DNS resolution in the headless service"
+        )
+
+
 class TestKafkaListenerSecurityProtocolMap:
 
     @pytest.fixture(name="kafka_statefulset")
