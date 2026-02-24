@@ -32,11 +32,12 @@ type JobSource interface {
 }
 
 type Consumer struct {
-	source     JobSource
-	observer   metrics.PipelineObserver
-	jobs       chan<- domain.Job
-	acks       <-chan struct{}
-	ackTimeout time.Duration
+	source       JobSource
+	observer     metrics.PipelineObserver
+	jobs         chan<- domain.Job
+	acks         <-chan struct{}
+	ackTimeout   time.Duration
+	maxBatchWait time.Duration
 }
 
 type ConsumerOption func(*Consumer)
@@ -50,6 +51,12 @@ func WithObserver(obs metrics.PipelineObserver) ConsumerOption {
 func WithAckTimeout(d time.Duration) ConsumerOption {
 	return func(c *Consumer) {
 		c.ackTimeout = d
+	}
+}
+
+func WithMaxBatchWait(d time.Duration) ConsumerOption {
+	return func(c *Consumer) {
+		c.maxBatchWait = d
 	}
 }
 
@@ -82,24 +89,33 @@ func (c *Consumer) Run(ctx context.Context) error {
 			return err
 		}
 
-		pollCtx, pollSpan := telemetry.StartPollSpan(ctx, len(batch))
+		batchCtx, batchCancel := c.batchContext(ctx)
+		pollCtx, pollSpan := telemetry.StartPollSpan(batchCtx, len(batch))
 
 		for _, job := range batch {
 			select {
 			case <-pollCtx.Done():
 				pollSpan.End()
-				return pollCtx.Err()
+				batchCancel()
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				continue
 			case c.jobs <- job:
 			}
 		}
 
 		if err := c.awaitAcks(pollCtx, len(batch)); err != nil {
-			if errors.Is(err, ErrAckTimeout) {
+			batchCancel()
+			if errors.Is(err, ErrAckTimeout) || errors.Is(err, context.DeadlineExceeded) {
 				c.observer.RecordBatchDuration(time.Since(batchStart).Seconds())
 				pollSpan.End()
 				continue
 			}
 			pollSpan.End()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return err
 		}
 
@@ -107,14 +123,23 @@ func (c *Consumer) Run(ctx context.Context) error {
 		if err := c.source.Commit(commitCtx); err != nil {
 			commitSpan.End()
 			pollSpan.End()
+			batchCancel()
 			return fmt.Errorf("offset commit: %w", err)
 		}
 		commitSpan.End()
 		pollSpan.End()
+		batchCancel()
 
 		c.observer.RecordBatchDuration(time.Since(batchStart).Seconds())
 		c.reportLag(batch)
 	}
+}
+
+func (c *Consumer) batchContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if c.maxBatchWait > 0 {
+		return context.WithTimeout(parent, c.maxBatchWait)
+	}
+	return context.WithCancel(parent)
 }
 
 func (c *Consumer) awaitAcks(ctx context.Context, count int) error {
