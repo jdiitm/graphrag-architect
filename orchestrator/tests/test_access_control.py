@@ -438,50 +438,43 @@ class TestJWTTokenVerification:
             )
 
 
-class TestRequireVerificationFlag:
-    def test_token_with_require_and_no_secret_raises(self):
+class TestFailClosedAuth:
+    def test_token_with_no_secret_raises(self):
         with pytest.raises(InvalidTokenError, match="no secret configured"):
             SecurityPrincipal.from_header(
                 "Bearer team=ops,role=admin",
                 token_secret="",
-                require_verification=True,
             )
 
-    def test_no_token_with_require_returns_anonymous(self):
+    def test_no_token_returns_anonymous(self):
         principal = SecurityPrincipal.from_header(
             "",
             token_secret="",
-            require_verification=True,
         )
         assert principal.role == "anonymous"
 
-    def test_token_with_require_and_secret_verifies(self):
+    def test_token_with_secret_verifies(self):
         token = sign_token({"team": "ops", "role": "viewer"}, "s3cret")
         principal = SecurityPrincipal.from_header(
             f"Bearer {token}",
             token_secret="s3cret",
-            require_verification=True,
         )
         assert principal.team == "ops"
         assert principal.role == "viewer"
 
-    def test_forged_token_with_require_and_secret_rejected(self):
+    def test_forged_token_with_secret_rejected(self):
         with pytest.raises(InvalidTokenError):
             SecurityPrincipal.from_header(
                 "Bearer forged.token.here",
                 token_secret="real-secret",
-                require_verification=True,
             )
 
-    def test_token_without_require_and_no_secret_returns_anonymous(self):
-        principal = SecurityPrincipal.from_header(
-            "Bearer some-unverifiable-token",
-            token_secret="",
-            require_verification=False,
-        )
-        assert principal.role == "anonymous"
-        assert principal.team == "*"
-        assert principal.namespace == "*"
+    def test_token_without_secret_always_rejects(self):
+        with pytest.raises(InvalidTokenError, match="no secret configured"):
+            SecurityPrincipal.from_header(
+                "Bearer some-unverifiable-token",
+                token_secret="",
+            )
 
 
 class TestNodeMetadataOnIngestion:

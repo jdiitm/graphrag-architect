@@ -94,6 +94,11 @@ func (c *Consumer) Run(ctx context.Context) error {
 		}
 
 		if err := c.awaitAcks(pollCtx, len(batch)); err != nil {
+			if errors.Is(err, ErrAckTimeout) {
+				c.observer.RecordBatchDuration(time.Since(batchStart).Seconds())
+				pollSpan.End()
+				continue
+			}
 			pollSpan.End()
 			return err
 		}

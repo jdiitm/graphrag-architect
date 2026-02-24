@@ -95,6 +95,46 @@ class TestTenantAwareDriverPool:
         assert d2.closed
 
 
+class TestTenantAwarePoolIntegration:
+
+    def test_get_database_for_physical_tenant(self) -> None:
+        registry = TenantRegistry()
+        registry.register(TenantConfig(
+            tenant_id="bigcorp",
+            isolation_mode=IsolationMode.PHYSICAL,
+            database_name="bigcorp_db",
+        ))
+        cfg = registry.get("bigcorp")
+        assert cfg is not None
+        assert cfg.database_name == "bigcorp_db"
+
+    def test_get_database_for_logical_tenant_uses_default(self) -> None:
+        registry = TenantRegistry()
+        registry.register(TenantConfig(tenant_id="smallco"))
+        cfg = registry.get("smallco")
+        assert cfg is not None
+        assert cfg.database_name == "neo4j"
+
+    def test_pool_resolves_database_for_tenant(self) -> None:
+        from orchestrator.app.neo4j_pool import resolve_database_for_tenant
+
+        registry = TenantRegistry()
+        registry.register(TenantConfig(
+            tenant_id="acme",
+            isolation_mode=IsolationMode.PHYSICAL,
+            database_name="acme_db",
+        ))
+        assert resolve_database_for_tenant(registry, "acme") == "acme_db"
+        assert resolve_database_for_tenant(registry, "unknown") == "neo4j"
+
+    def test_pool_resolves_logical_to_default(self) -> None:
+        from orchestrator.app.neo4j_pool import resolve_database_for_tenant
+
+        registry = TenantRegistry()
+        registry.register(TenantConfig(tenant_id="smallco"))
+        assert resolve_database_for_tenant(registry, "smallco") == "neo4j"
+
+
 class TestDeadCodeRemoved:
 
     def test_inject_tenant_filter_not_exported(self) -> None:

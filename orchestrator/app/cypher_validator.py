@@ -1,3 +1,4 @@
+import re
 from typing import FrozenSet
 
 from orchestrator.app.cypher_tokenizer import (
@@ -120,3 +121,40 @@ def _check_multi_statement(tokens: list, raw: str) -> None:
             raise CypherValidationError(
                 f"Cypher contains multiple statements: {raw[:80]}"
             )
+
+
+MAX_VARIABLE_PATH_DEPTH = 5
+
+
+def estimate_query_cost(cypher: str) -> int:
+    tokens = tokenize_cypher(cypher.strip())
+    cost = 1
+    match_count = sum(
+        1 for t in tokens
+        if t.token_type == TokenType.KEYWORD
+        and t.value.upper() == "MATCH"
+        and t.brace_depth == 0
+    )
+    cost += match_count
+
+    raw = cypher.upper()
+    var_paths = re.findall(r"\*(\d+)?\.\.(\d+)", raw)
+    for _, max_depth_str in var_paths:
+        try:
+            depth = int(max_depth_str)
+        except ValueError:
+            depth = MAX_VARIABLE_PATH_DEPTH
+        if depth > MAX_VARIABLE_PATH_DEPTH:
+            raise CypherValidationError(
+                f"Variable-length path depth {depth} exceeds "
+                f"maximum {MAX_VARIABLE_PATH_DEPTH}"
+            )
+        cost += depth * 2
+
+    unbounded = re.findall(r"\*\s*\]", raw) + re.findall(r"\*\s*\)", raw)
+    if unbounded:
+        raise CypherValidationError(
+            "Unbounded variable-length path (*) is not allowed"
+        )
+
+    return cost

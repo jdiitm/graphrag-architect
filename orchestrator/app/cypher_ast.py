@@ -295,6 +295,38 @@ def _inject_before_return(
             return
 
 
+def validate_acl_coverage(cypher: str, acl_marker: str) -> bool:
+    ast = CypherParser(cypher).parse()
+    return _all_matches_have_acl(ast.clauses, acl_marker)
+
+
+def _all_matches_have_acl(clauses: List[Any], marker: str) -> bool:
+    i = 0
+    while i < len(clauses):
+        clause = clauses[i]
+        if isinstance(clause, CallSubquery) and clause.body:
+            if not _all_matches_have_acl(clause.body, marker):
+                return False
+        if isinstance(clause, UnionQuery):
+            for branch in clause.branches:
+                if not _all_matches_have_acl(branch, marker):
+                    return False
+        if isinstance(clause, MatchClause):
+            match_text = _tokens_text(clause.tokens)
+            if marker in match_text:
+                i += 1
+                continue
+            next_idx = i + 1
+            if next_idx < len(clauses) and isinstance(clauses[next_idx], WhereClause):
+                where_text = _tokens_text(clauses[next_idx].tokens)
+                if marker not in where_text:
+                    return False
+            else:
+                return False
+        i += 1
+    return True
+
+
 def _strip_where_keyword(text: str) -> str:
     stripped = text.lstrip()
     if stripped.upper().startswith("WHERE"):

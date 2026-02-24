@@ -95,3 +95,66 @@ class TestMatchTemplate:
             "Expected None when intent matches but required params are missing, "
             f"got {result}"
         )
+
+    def test_matches_topic_producers_query(self) -> None:
+        result = match_template(
+            "Which services produce to the order-events topic?"
+        )
+        assert result is not None
+        assert result.template_name == "topic_producers"
+        assert "topic_name" in result.params
+
+    def test_matches_service_deployments_query(self) -> None:
+        result = match_template(
+            "Where is auth-service deployed?"
+        )
+        assert result is not None
+        assert result.template_name == "service_deployments"
+        assert result.params.get("name") == "auth-service"
+
+    def test_matches_cross_team_dependencies(self) -> None:
+        result = match_template(
+            "Show me all cross-team dependencies"
+        )
+        assert result is not None
+        assert result.template_name == "cross_team_dependencies"
+
+    def test_all_templates_use_parameters_not_interpolation(self) -> None:
+        catalog = TemplateCatalog()
+        for name, template in catalog.all_templates().items():
+            for param in template.parameters:
+                assert f"${param}" in template.cypher, (
+                    f"Template {name} should use ${param} parameter"
+                )
+            assert "f'" not in template.cypher, (
+                f"Template {name} should not use f-string interpolation"
+            )
+
+
+class TestAclCoverageValidation:
+
+    def test_single_match_with_acl_passes(self) -> None:
+        from orchestrator.app.cypher_ast import inject_acl_all_scopes, validate_acl_coverage
+        cypher = "MATCH (n:Service) RETURN n"
+        acl = "n.team_owner = $acl_team"
+        injected = inject_acl_all_scopes(cypher, acl)
+        assert validate_acl_coverage(injected, "$acl_team")
+
+    def test_multi_match_all_covered(self) -> None:
+        from orchestrator.app.cypher_ast import inject_acl_all_scopes, validate_acl_coverage
+        cypher = "MATCH (a:Service) MATCH (b:Service) RETURN a, b"
+        acl = "a.team_owner = $acl_team"
+        injected = inject_acl_all_scopes(cypher, acl)
+        assert validate_acl_coverage(injected, "$acl_team")
+
+    def test_uninjected_cypher_fails_validation(self) -> None:
+        from orchestrator.app.cypher_ast import validate_acl_coverage
+        cypher = "MATCH (n:Service) RETURN n"
+        assert not validate_acl_coverage(cypher, "$acl_team")
+
+    def test_subquery_coverage(self) -> None:
+        from orchestrator.app.cypher_ast import inject_acl_all_scopes, validate_acl_coverage
+        cypher = "MATCH (a:Service) CALL { MATCH (b:Service) RETURN b } RETURN a, b"
+        acl = "a.team_owner = $acl_team"
+        injected = inject_acl_all_scopes(cypher, acl)
+        assert validate_acl_coverage(injected, "$acl_team")

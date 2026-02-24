@@ -267,10 +267,18 @@ class GraphRepository:
         driver: AsyncDriver,
         circuit_breaker: Optional[CircuitBreaker] = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        database: Optional[str] = None,
     ) -> None:
         self._driver = driver
         self._cb = circuit_breaker or CircuitBreaker(CircuitBreakerConfig())
         self._batch_size = batch_size
+        self._database = database
+
+    def _session(self) -> Any:
+        kwargs: Dict[str, Any] = {}
+        if self._database:
+            kwargs["database"] = self._database
+        return self._driver.session(**kwargs)
 
     async def commit_topology(self, entities: List[Any]) -> None:
         if not entities:
@@ -304,7 +312,7 @@ class GraphRepository:
             )
 
         for chunk in _chunk_list(records, self._batch_size):
-            async with self._driver.session() as session:
+            async with self._session() as session:
                 await session.execute_write(
                     self._run_unwind, query=unwind_query, batch=chunk,
                 )
@@ -332,7 +340,7 @@ class GraphRepository:
         cutoff = (
             datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
         ).isoformat()
-        async with self._driver.session() as session:
+        async with self._session() as session:
             result = await session.execute_write(
                 self._run_prune, query=query,
                 current_id=current_ingestion_id, cutoff=cutoff,
@@ -370,7 +378,7 @@ class GraphRepository:
             f"`vector.similarity_function`: 'cosine'"
             f"}}}}"
         )
-        async with self._driver.session() as session:
+        async with self._session() as session:
             await session.run(cypher)
 
     async def upsert_embeddings(
@@ -388,7 +396,7 @@ class GraphRepository:
             f"MATCH (n:{label} {{{id_field}: item.id}}) "
             f"SET n.embedding = item.embedding"
         )
-        async with self._driver.session() as session:
+        async with self._session() as session:
             await session.execute_write(
                 self._run_unwind, query=cypher, batch=embeddings,
             )

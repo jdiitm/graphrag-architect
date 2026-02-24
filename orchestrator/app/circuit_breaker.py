@@ -6,6 +6,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Protocol, TypeVar, runtime_checkable
 
+try:
+    import redis.asyncio as aioredis
+except ImportError:  # pragma: no cover
+    aioredis = None  # type: ignore[assignment]
+
 T = TypeVar("T")
 
 
@@ -49,6 +54,55 @@ class InMemoryStateStore:
 
     async def save(self, name: str, snapshot: CircuitSnapshot) -> None:
         self._data[name] = snapshot
+
+
+class RedisStateStore:
+    def __init__(
+        self,
+        url: str,
+        key_prefix: str = "graphrag:cb:",
+        ttl_seconds: int = 300,
+        password: str = "",
+        db: int = 0,
+    ) -> None:
+        if aioredis is None:
+            raise ImportError("redis package is required for RedisStateStore")
+        kwargs: dict[str, Any] = {"decode_responses": True, "db": db}
+        if password:
+            kwargs["password"] = password
+        self._redis = aioredis.from_url(url, **kwargs)
+        self._prefix = key_prefix
+        self._ttl = ttl_seconds
+
+    def _key(self, name: str) -> str:
+        return f"{self._prefix}{name}"
+
+    async def load(self, name: str) -> CircuitSnapshot:
+        data = await self._redis.hgetall(self._key(name))
+        if not data:
+            return CircuitSnapshot()
+        return CircuitSnapshot(
+            state=CircuitState(data.get("state", "closed")),
+            failure_count=int(data.get("failure_count", 0)),
+            last_failure_time=float(data.get("last_failure_time", 0.0)),
+            half_open_calls=int(data.get("half_open_calls", 0)),
+        )
+
+    async def save(self, name: str, snapshot: CircuitSnapshot) -> None:
+        key = self._key(name)
+        mapping = {
+            "state": snapshot.state.value,
+            "failure_count": str(snapshot.failure_count),
+            "last_failure_time": str(snapshot.last_failure_time),
+            "half_open_calls": str(snapshot.half_open_calls),
+        }
+        pipe = self._redis.pipeline()
+        pipe.hset(key, mapping=mapping)
+        pipe.expire(key, self._ttl)
+        await pipe.execute()
+
+    async def close(self) -> None:
+        await self._redis.aclose()
 
 
 class CircuitBreaker:

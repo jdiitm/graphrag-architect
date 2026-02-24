@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+
+try:
+    import redis.asyncio as aioredis
+except ImportError:  # pragma: no cover
+    aioredis = None  # type: ignore[assignment]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -58,3 +68,65 @@ class SubgraphCache:
             size=len(self._cache),
             maxsize=self._maxsize,
         )
+
+
+def cache_key(cypher: str, acl_params: Dict[str, str]) -> str:
+    normalized = normalize_cypher(cypher)
+    sorted_acl = json.dumps(acl_params, sort_keys=True)
+    raw = f"{normalized}|{sorted_acl}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+class RedisSubgraphCache:
+    def __init__(
+        self,
+        redis_url: str,
+        ttl_seconds: int = 300,
+        key_prefix: str = "graphrag:sgcache:",
+        l1_maxsize: int = 256,
+        password: str = "",
+        db: int = 0,
+    ) -> None:
+        if aioredis is None:
+            raise ImportError("redis package is required for RedisSubgraphCache")
+        kwargs: dict[str, Any] = {"decode_responses": True, "db": db}
+        if password:
+            kwargs["password"] = password
+        self._redis = aioredis.from_url(redis_url, **kwargs)
+        self._ttl = ttl_seconds
+        self._prefix = key_prefix
+        self._l1 = SubgraphCache(maxsize=l1_maxsize)
+
+    def _rkey(self, key: str) -> str:
+        return f"{self._prefix}{key}"
+
+    def get_sync(self, key: str) -> Optional[List[Dict[str, Any]]]:
+        return self._l1.get(key)
+
+    async def get(self, key: str) -> Optional[List[Dict[str, Any]]]:
+        l1_result = self._l1.get(key)
+        if l1_result is not None:
+            return l1_result
+        try:
+            raw = await self._redis.get(self._rkey(key))
+            if raw is not None:
+                value = json.loads(raw)
+                self._l1.put(key, value)
+                return value
+        except Exception:
+            logger.debug("Redis cache get failed, falling back to L1 miss")
+        return None
+
+    async def put(self, key: str, value: List[Dict[str, Any]]) -> None:
+        self._l1.put(key, value)
+        try:
+            raw = json.dumps(value)
+            await self._redis.setex(self._rkey(key), self._ttl, raw)
+        except Exception:
+            logger.debug("Redis cache put failed, L1 still updated")
+
+    async def invalidate_all(self) -> None:
+        self._l1.invalidate_all()
+
+    def stats(self) -> CacheStats:
+        return self._l1.stats()

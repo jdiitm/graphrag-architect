@@ -1,13 +1,16 @@
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from orchestrator.app.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
+    CircuitSnapshot,
     CircuitState,
     CircuitOpenError,
+    InMemoryStateStore,
+    RedisStateStore,
 )
 
 
@@ -138,3 +141,69 @@ class TestCircuitBreakerState:
         func = AsyncMock(return_value="done")
         await cb.call(func, "a", key="b")
         func.assert_awaited_once_with("a", key="b")
+
+
+class TestRedisStateStore:
+    @pytest.mark.asyncio
+    async def test_load_returns_default_when_empty(self):
+        mock_redis = AsyncMock()
+        mock_redis.hgetall = AsyncMock(return_value={})
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            store = RedisStateStore(url="redis://localhost:6379")
+        snap = await store.load("test-circuit")
+        assert snap.state == CircuitState.CLOSED
+        assert snap.failure_count == 0
+
+    @pytest.mark.asyncio
+    async def test_save_writes_hash_with_ttl(self):
+        mock_pipe = AsyncMock()
+        mock_pipe.hset = AsyncMock()
+        mock_pipe.expire = AsyncMock()
+        mock_pipe.execute = AsyncMock(return_value=[True, True])
+
+        mock_redis = AsyncMock()
+        mock_redis.pipeline = lambda: mock_pipe
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            store = RedisStateStore(url="redis://localhost:6379", ttl_seconds=120)
+        snap = CircuitSnapshot(
+            state=CircuitState.OPEN,
+            failure_count=5,
+            last_failure_time=1000.0,
+            half_open_calls=0,
+        )
+        await store.save("test-circuit", snap)
+        mock_pipe.hset.assert_called_once()
+        mock_pipe.expire.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_load_parses_stored_data(self):
+        mock_redis = AsyncMock()
+        mock_redis.hgetall = AsyncMock(return_value={
+            "state": "open",
+            "failure_count": "3",
+            "last_failure_time": "99.5",
+            "half_open_calls": "0",
+        })
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            store = RedisStateStore(url="redis://localhost:6379")
+        snap = await store.load("test-circuit")
+        assert snap.state == CircuitState.OPEN
+        assert snap.failure_count == 3
+        assert snap.last_failure_time == 99.5
+
+
+class TestContainerStoreSelection:
+    def test_selects_inmemory_when_no_redis_url(self):
+        from orchestrator.app.container import _build_state_store
+        import os
+        os.environ.pop("REDIS_URL", None)
+        store = _build_state_store()
+        assert isinstance(store, InMemoryStateStore)
+
+    def test_selects_redis_when_url_set(self):
+        from orchestrator.app.container import _build_state_store
+        with patch.dict("os.environ", {"REDIS_URL": "redis://localhost:6379"}):
+            with patch("redis.asyncio.from_url") as mock_from_url:
+                mock_from_url.return_value = AsyncMock()
+                store = _build_state_store()
+        assert isinstance(store, RedisStateStore)

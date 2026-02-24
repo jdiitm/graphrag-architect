@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from orchestrator.app.subgraph_cache import (
@@ -113,3 +115,52 @@ class TestNormalizeCypher:
         q1 = "  MATCH   (n)   RETURN n  ;  "
         q2 = "match (n) return n"
         assert normalize_cypher(q1) == normalize_cypher(q2)
+
+
+class TestCacheKey:
+    def test_same_query_same_acl_same_key(self) -> None:
+        from orchestrator.app.subgraph_cache import cache_key
+        k1 = cache_key("MATCH (n) RETURN n", {"acl_team": "ops"})
+        k2 = cache_key("MATCH (n) RETURN n", {"acl_team": "ops"})
+        assert k1 == k2
+
+    def test_different_acl_different_key(self) -> None:
+        from orchestrator.app.subgraph_cache import cache_key
+        k1 = cache_key("MATCH (n) RETURN n", {"acl_team": "ops"})
+        k2 = cache_key("MATCH (n) RETURN n", {"acl_team": "dev"})
+        assert k1 != k2
+
+
+class TestRedisSubgraphCache:
+    @pytest.mark.asyncio
+    async def test_l1_hit_avoids_redis(self) -> None:
+        from orchestrator.app.subgraph_cache import RedisSubgraphCache
+        mock_redis = AsyncMock()
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            cache = RedisSubgraphCache(redis_url="redis://localhost:6379")
+        cache._l1.put("k1", [{"a": 1}])
+        result = await cache.get("k1")
+        assert result == [{"a": 1}]
+        mock_redis.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_l2_hit_populates_l1(self) -> None:
+        from orchestrator.app.subgraph_cache import RedisSubgraphCache
+        mock_redis = AsyncMock()
+        mock_redis.get = AsyncMock(return_value='[{"b": 2}]')
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            cache = RedisSubgraphCache(redis_url="redis://localhost:6379")
+        result = await cache.get("k2")
+        assert result == [{"b": 2}]
+        l1_result = cache._l1.get("k2")
+        assert l1_result == [{"b": 2}]
+
+    @pytest.mark.asyncio
+    async def test_put_writes_to_both_tiers(self) -> None:
+        from orchestrator.app.subgraph_cache import RedisSubgraphCache
+        mock_redis = AsyncMock()
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            cache = RedisSubgraphCache(redis_url="redis://localhost:6379", ttl_seconds=60)
+        await cache.put("k3", [{"c": 3}])
+        assert cache._l1.get("k3") == [{"c": 3}]
+        mock_redis.setex.assert_awaited_once()
