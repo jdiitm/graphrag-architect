@@ -151,4 +151,7 @@ def match_template(query: str) -> Optional[TemplateMatch]:
     if "limit" in template.parameters:
         params["limit"] = "10"
 
+    if any(p not in params for p in template.parameters):
+        return None
+
     return TemplateMatch(template_name=matched_intent, params=params)

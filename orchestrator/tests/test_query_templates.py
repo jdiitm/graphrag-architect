@@ -88,3 +88,10 @@ class TestMatchTemplate:
             "Tell me a joke about distributed systems"
         )
         assert result is None
+
+    def test_intent_matches_but_entity_extraction_fails_returns_none(self) -> None:
+        result = match_template("What is the blast radius?")
+        assert result is None, (
+            "Expected None when intent matches but required params are missing, "
+            f"got {result}"
+        )
