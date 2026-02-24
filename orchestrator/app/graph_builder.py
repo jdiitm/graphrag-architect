@@ -30,6 +30,7 @@ from orchestrator.app.observability import (
     get_tracer,
 )
 from orchestrator.app.schema_validation import validate_topology
+from orchestrator.app.checkpoint_store import get_checkpointer
 from orchestrator.app.workspace_loader import load_directory_chunked
 
 logger = logging.getLogger(__name__)
@@ -433,4 +434,12 @@ builder.add_conditional_edges(
 builder.add_edge("fix_errors", "validate_schema")
 builder.add_edge("commit_graph", END)
 
-ingestion_graph = builder.compile()
+def _compile_ingestion_graph():
+    try:
+        checkpointer = get_checkpointer()
+    except RuntimeError:
+        checkpointer = None
+    return builder.compile(checkpointer=checkpointer)
+
+
+ingestion_graph = _compile_ingestion_graph()

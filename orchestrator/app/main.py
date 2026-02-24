@@ -21,6 +21,7 @@ from orchestrator.app.config import AuthConfig, RateLimitConfig
 from orchestrator.app.executor import shutdown_pool
 from orchestrator.app.graph_builder import ingestion_graph
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
+from orchestrator.app.checkpoint_store import close_checkpointer, init_checkpointer
 from orchestrator.app.neo4j_pool import close_driver, init_driver
 from orchestrator.app.observability import configure_metrics, configure_telemetry
 from orchestrator.app.query_engine import query_graph
@@ -47,6 +48,7 @@ async def lifespan(_app: FastAPI):
     auth = _validate_startup_security()
     configure_telemetry()
     configure_metrics()
+    init_checkpointer()
     init_driver()
     set_ingestion_semaphore(
         asyncio.Semaphore(RateLimitConfig.from_env().max_concurrent_ingestions)
@@ -57,6 +59,7 @@ async def lifespan(_app: FastAPI):
     finally:
         shutdown_pool()
         await close_driver()
+        close_checkpointer()
 
 
 def _validate_startup_security() -> AuthConfig:
