@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import sys
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -31,9 +33,24 @@ def normalize_cypher(query: str) -> str:
     return normalized
 
 
+def default_cache_maxsize() -> int:
+    raw = os.environ.get("SUBGRAPH_CACHE_MAXSIZE", "256")
+    try:
+        return int(raw)
+    except ValueError:
+        return 256
+
+
+def _estimate_bytes(value: List[Dict[str, Any]]) -> int:
+    return sys.getsizeof(json.dumps(value, default=str))
+
+
 class SubgraphCache:
-    def __init__(self, maxsize: int = 256) -> None:
+    def __init__(
+        self, maxsize: int = 256, max_value_bytes: int = 0,
+    ) -> None:
         self._maxsize = maxsize
+        self._max_value_bytes = max_value_bytes
         self._cache: OrderedDict[str, List[Dict[str, Any]]] = OrderedDict()
         self._hits = 0
         self._misses = 0
@@ -47,6 +64,9 @@ class SubgraphCache:
         return self._cache[key]
 
     def put(self, key: str, value: List[Dict[str, Any]]) -> None:
+        if self._max_value_bytes > 0:
+            if _estimate_bytes(value) > self._max_value_bytes:
+                return
         if key in self._cache:
             self._cache.move_to_end(key)
         else:
