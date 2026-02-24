@@ -99,21 +99,22 @@ async def lifespan(_app: FastAPI):
 
 
 def _validate_startup_security() -> AuthConfig:
-    return AuthConfig.from_env()
+    auth = AuthConfig.from_env()
+    if auth.require_tokens and not auth.token_secret:
+        raise SystemExit(
+            "FATAL: Auth is fail-closed (require_tokens=true) but "
+            "AUTH_TOKEN_SECRET is not set. Set AUTH_TOKEN_SECRET or "
+            "explicitly set AUTH_REQUIRE_TOKENS=false for development."
+        )
+    return auth
 
 
 def _warn_insecure_auth(auth: AuthConfig) -> None:
     if not auth.token_secret:
-        if auth.require_tokens:
-            logger.error(
-                "AUTH_REQUIRE_TOKENS is true but AUTH_TOKEN_SECRET is not set. "
-                "All authenticated endpoints will reject requests."
-            )
-        else:
-            logger.warning(
-                "AUTH_TOKEN_SECRET is not set. Token verification is disabled. "
-                "Set AUTH_TOKEN_SECRET for production deployments."
-            )
+        logger.warning(
+            "AUTH_TOKEN_SECRET is not set. Token verification is disabled. "
+            "Set AUTH_TOKEN_SECRET for production deployments."
+        )
 
 
 app = FastAPI(title="GraphRAG Orchestrator", version="1.0.0", lifespan=lifespan)

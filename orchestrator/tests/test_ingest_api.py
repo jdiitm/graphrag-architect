@@ -341,7 +341,7 @@ class TestAuthRequireTokensFailClosed:
 
     @patch("orchestrator.app.main.ingestion_graph")
     @patch.dict("os.environ", {}, clear=False)
-    def test_ingest_allows_when_require_tokens_not_set(
+    def test_ingest_rejects_when_require_tokens_not_set_and_no_secret(
         self, mock_graph, client
     ):
         mock_graph.ainvoke = AsyncMock(return_value={
@@ -362,7 +362,7 @@ class TestAuthRequireTokensFailClosed:
                 }],
             },
         )
-        assert response.status_code == 200
+        assert response.status_code == 503
 
 
 class TestLoadWorkspacePreservesRawFiles:

@@ -26,8 +26,11 @@ class AuthConfig:
             )
 
         secret = os.environ.get("AUTH_TOKEN_SECRET", "")
-        explicit_require = os.environ.get("AUTH_REQUIRE_TOKENS", "").lower() == "true"
-        require_tokens = explicit_require or mode == "production"
+        raw_require = os.environ.get("AUTH_REQUIRE_TOKENS", "").lower()
+        if raw_require == "false":
+            require_tokens = False
+        else:
+            require_tokens = True
 
         if mode == "production" and not secret:
             raise SystemExit(

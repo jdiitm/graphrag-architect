@@ -1,3 +1,4 @@
+import os
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,6 +11,12 @@ from orchestrator.app.query_models import QueryComplexity
 def _reset_graph_builder_container() -> None:
     import orchestrator.app.graph_builder as gb
     gb.set_container(None)
+
+
+@pytest.fixture(autouse=True)
+def _default_auth_open_for_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    if "AUTH_REQUIRE_TOKENS" not in os.environ:
+        monkeypatch.setenv("AUTH_REQUIRE_TOKENS", "false")
 
 
 @pytest.fixture
