@@ -31,14 +31,14 @@ class SandboxedQueryExecutor:
         return self._config
 
     def inject_limit(self, cypher: str) -> str:
-        match = _LIMIT_PATTERN.search(cypher)
-        if match:
-            existing_limit = int(match.group(1))
-            if existing_limit > self._config.max_results:
-                return _LIMIT_PATTERN.sub(
-                    f"LIMIT {self._config.max_results}", cypher,
-                )
-            return cypher
+        def _cap_limit(match: re.Match) -> str:
+            value = int(match.group(1))
+            if value > self._config.max_results:
+                return f"LIMIT {self._config.max_results}"
+            return match.group(0)
+
+        if _LIMIT_PATTERN.search(cypher):
+            return _LIMIT_PATTERN.sub(_cap_limit, cypher)
         return f"{cypher.rstrip().rstrip(';')} LIMIT {self._config.max_results}"
 
     async def explain_check(self, session: Any, cypher: str) -> None:

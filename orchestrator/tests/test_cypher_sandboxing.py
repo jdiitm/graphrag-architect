@@ -34,6 +34,66 @@ class TestLimitInjection:
         assert "1000" in result
 
 
+class TestNestedSubqueryLimitEnforcement:
+
+    def test_inner_limit_in_subquery_is_capped(self) -> None:
+        config = CypherSandboxConfig(max_results=100)
+        executor = SandboxedQueryExecutor(config)
+        cypher = (
+            "MATCH (n:Service) "
+            "WHERE n.id IN [x IN "
+            "[(m) IN MATCH (m:Service) RETURN m LIMIT 9999] "
+            "| x.id] "
+            "RETURN n LIMIT 100"
+        )
+        result = executor.inject_limit(cypher)
+        assert "9999" not in result, (
+            "Nested LIMIT 9999 must be capped by the sandbox"
+        )
+
+    def test_call_subquery_limit_is_capped(self) -> None:
+        config = CypherSandboxConfig(max_results=100)
+        executor = SandboxedQueryExecutor(config)
+        cypher = (
+            "MATCH (n:Service) "
+            "CALL { MATCH (m:Database) RETURN m LIMIT 50000 } "
+            "RETURN n, m LIMIT 100"
+        )
+        result = executor.inject_limit(cypher)
+        assert "50000" not in result, (
+            "CALL subquery LIMIT 50000 must be capped to max_results"
+        )
+
+    def test_all_limit_clauses_are_enforced(self) -> None:
+        config = CypherSandboxConfig(max_results=200)
+        executor = SandboxedQueryExecutor(config)
+        cypher = "MATCH (a) RETURN a LIMIT 5000 UNION MATCH (b) RETURN b LIMIT 5000"
+        result = executor.inject_limit(cypher)
+        limits = re.findall(r"LIMIT\s+(\d+)", result, re.IGNORECASE)
+        for limit_val in limits:
+            assert int(limit_val) <= 200, (
+                f"All LIMIT values must be <= max_results (200), "
+                f"found LIMIT {limit_val}"
+            )
+
+    def test_bypass_small_outer_large_inner_limit(self) -> None:
+        config = CypherSandboxConfig(max_results=100)
+        executor = SandboxedQueryExecutor(config)
+        cypher = (
+            "MATCH (n:Service) RETURN n LIMIT 50 "
+            "UNION "
+            "MATCH (m:Service) RETURN m LIMIT 9999"
+        )
+        result = executor.inject_limit(cypher)
+        limits = re.findall(r"LIMIT\s+(\d+)", result, re.IGNORECASE)
+        for limit_val in limits:
+            assert int(limit_val) <= 100, (
+                f"When first LIMIT is within bounds but a subsequent "
+                f"LIMIT exceeds max_results, ALL limits must still be "
+                f"capped. Found LIMIT {limit_val}"
+            )
+
+
 class TestExplainPreFlight:
 
     @pytest.mark.asyncio
