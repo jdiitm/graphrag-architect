@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
@@ -83,7 +84,9 @@ def _calls_cypher(entity: CallsEdge) -> CypherOp:
         "MATCH (a:Service {id: $source_service_id}), "
         "(b:Service {id: $target_service_id}) "
         "MERGE (a)-[r:CALLS]->(b) SET r.protocol = $protocol, "
-        "r.confidence = $confidence"
+        "r.confidence = $confidence, "
+        "r.ingestion_id = $ingestion_id, "
+        "r.last_seen_at = $last_seen_at"
     )
     return query, entity.model_dump()
 
@@ -92,7 +95,9 @@ def _produces_cypher(entity: ProducesEdge) -> CypherOp:
     query = (
         "MATCH (s:Service {id: $service_id}), "
         "(t:KafkaTopic {name: $topic_name}) "
-        "MERGE (s)-[r:PRODUCES]->(t) SET r.event_schema = $event_schema"
+        "MERGE (s)-[r:PRODUCES]->(t) SET r.event_schema = $event_schema, "
+        "r.ingestion_id = $ingestion_id, "
+        "r.last_seen_at = $last_seen_at"
     )
     return query, entity.model_dump()
 
@@ -101,7 +106,9 @@ def _consumes_cypher(entity: ConsumesEdge) -> CypherOp:
     query = (
         "MATCH (s:Service {id: $service_id}), "
         "(t:KafkaTopic {name: $topic_name}) "
-        "MERGE (s)-[r:CONSUMES]->(t) SET r.consumer_group = $consumer_group"
+        "MERGE (s)-[r:CONSUMES]->(t) SET r.consumer_group = $consumer_group, "
+        "r.ingestion_id = $ingestion_id, "
+        "r.last_seen_at = $last_seen_at"
     )
     return query, entity.model_dump()
 
@@ -110,7 +117,9 @@ def _deployed_in_cypher(entity: DeployedInEdge) -> CypherOp:
     query = (
         "MATCH (s:Service {id: $service_id}), "
         "(k:K8sDeployment {id: $deployment_id}) "
-        "MERGE (s)-[r:DEPLOYED_IN]->(k)"
+        "MERGE (s)-[r:DEPLOYED_IN]->(k) "
+        "SET r.ingestion_id = $ingestion_id, "
+        "r.last_seen_at = $last_seen_at"
     )
     return query, entity.model_dump()
 
@@ -213,27 +222,35 @@ _UNWIND_QUERIES: Dict[type, str] = {
         "(b:Service {id: row.target_service_id}) "
         "MERGE (a)-[r:CALLS]->(b) "
         "SET r.protocol = row.protocol, "
-        "r.confidence = row.confidence"
+        "r.confidence = row.confidence, "
+        "r.ingestion_id = row.ingestion_id, "
+        "r.last_seen_at = row.last_seen_at"
     ),
     ProducesEdge: (
         "UNWIND $batch AS row "
         "MATCH (s:Service {id: row.service_id}), "
         "(t:KafkaTopic {name: row.topic_name}) "
         "MERGE (s)-[r:PRODUCES]->(t) "
-        "SET r.event_schema = row.event_schema"
+        "SET r.event_schema = row.event_schema, "
+        "r.ingestion_id = row.ingestion_id, "
+        "r.last_seen_at = row.last_seen_at"
     ),
     ConsumesEdge: (
         "UNWIND $batch AS row "
         "MATCH (s:Service {id: row.service_id}), "
         "(t:KafkaTopic {name: row.topic_name}) "
         "MERGE (s)-[r:CONSUMES]->(t) "
-        "SET r.consumer_group = row.consumer_group"
+        "SET r.consumer_group = row.consumer_group, "
+        "r.ingestion_id = row.ingestion_id, "
+        "r.last_seen_at = row.last_seen_at"
     ),
     DeployedInEdge: (
         "UNWIND $batch AS row "
         "MATCH (s:Service {id: row.service_id}), "
         "(k:K8sDeployment {id: row.deployment_id}) "
-        "MERGE (s)-[r:DEPLOYED_IN]->(k)"
+        "MERGE (s)-[r:DEPLOYED_IN]->(k) "
+        "SET r.ingestion_id = row.ingestion_id, "
+        "r.last_seen_at = row.last_seen_at"
     ),
 }
 
@@ -299,6 +316,41 @@ class GraphRepository:
         batch: List[Dict[str, Any]],
     ) -> None:
         await tx.run(query, batch=batch)
+
+    async def prune_stale_edges(
+        self,
+        current_ingestion_id: str,
+        max_age_hours: int = 24,
+    ) -> int:
+        query = (
+            "MATCH ()-[r]->() "
+            "WHERE r.ingestion_id IS NOT NULL "
+            "AND r.ingestion_id <> $current_id "
+            "AND r.last_seen_at < $cutoff "
+            "DELETE r RETURN count(r) AS pruned"
+        )
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+        ).isoformat()
+        async with self._driver.session() as session:
+            result = await session.execute_write(
+                self._run_prune, query=query,
+                current_id=current_ingestion_id, cutoff=cutoff,
+            )
+            return result
+
+    @staticmethod
+    async def _run_prune(
+        tx: AsyncManagedTransaction,
+        query: str,
+        current_id: str,
+        cutoff: str,
+    ) -> int:
+        result = await tx.run(query, current_id=current_id, cutoff=cutoff)
+        record = await result.single()
+        if record is None:
+            return 0
+        return record["pruned"]
 
     async def create_vector_index(
         self,

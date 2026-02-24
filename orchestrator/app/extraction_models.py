@@ -53,20 +53,28 @@ class CallsEdge(BaseModel):
     target_service_id: str
     protocol: str
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    ingestion_id: str = ""
+    last_seen_at: str = ""
 
 class ProducesEdge(BaseModel):
     service_id: str
     topic_name: str
     event_schema: str
+    ingestion_id: str = ""
+    last_seen_at: str = ""
 
 class ConsumesEdge(BaseModel):
     service_id: str
     topic_name: str
     consumer_group: str
+    ingestion_id: str = ""
+    last_seen_at: str = ""
 
 class DeployedInEdge(BaseModel):
     service_id: str
     deployment_id: str
+    ingestion_id: str = ""
+    last_seen_at: str = ""
 
 class ServiceExtractionResult(BaseModel):
     services: List[ServiceNode]

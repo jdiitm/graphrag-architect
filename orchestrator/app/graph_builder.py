@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import time
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -14,8 +16,11 @@ from orchestrator.app.config import ExtractionConfig
 from orchestrator.app.container import AppContainer
 from orchestrator.app.extraction_models import (
     CallsEdge,
+    ConsumesEdge,
+    DeployedInEdge,
     K8sDeploymentNode,
     KafkaTopicNode,
+    ProducesEdge,
     ServiceNode,
 )
 from orchestrator.app.llm_extraction import ServiceExtractor
@@ -320,12 +325,29 @@ async def fix_extraction_errors(state: IngestionState) -> dict:
             "extraction_checkpoint": checkpoint.to_dict(),
         }
 
+_EDGE_TYPES = (CallsEdge, ProducesEdge, ConsumesEdge, DeployedInEdge)
+
+
+def _stamp_ingestion_metadata(
+    entities: List[Any], ingestion_id: str,
+) -> List[Any]:
+    edge_types = _EDGE_TYPES
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for entity in entities:
+        if isinstance(entity, edge_types):
+            entity.ingestion_id = ingestion_id
+            entity.last_seen_at = now_iso
+    return entities
+
+
 async def commit_to_neo4j(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.commit_neo4j") as span:
         start = time.monotonic()
         try:
             entities = state.get("extracted_nodes", [])
+            ingestion_id = str(uuid.uuid4())
+            _stamp_ingestion_metadata(entities, ingestion_id)
             driver = get_driver()
             repo = GraphRepository(
                 driver, circuit_breaker=get_container().circuit_breaker
@@ -335,6 +357,12 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
             await sink.flush()
             span.set_attribute("entity_count", sink.total_entities)
             span.set_attribute("flush_count", sink.flush_count)
+            span.set_attribute("ingestion_id", ingestion_id)
+            try:
+                pruned = await repo.prune_stale_edges(ingestion_id)
+                span.set_attribute("edges_pruned", pruned)
+            except Exception as prune_exc:
+                logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
             return {"commit_status": "success", "completion_tracked": True}
         except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:
             span.set_status(StatusCode.ERROR, str(exc))
