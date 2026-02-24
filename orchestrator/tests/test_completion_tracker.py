@@ -29,9 +29,7 @@ class TestFileCompletionStore:
         self, tracker_dir: str,
     ) -> None:
         store = FileCompletionStore(tracker_dir)
-        asyncio.get_event_loop().run_until_complete(
-            store.mark("abc123")
-        )
+        asyncio.run(store.mark("abc123"))
         entries = os.listdir(tracker_dir)
         assert len(entries) == 1
 
@@ -39,29 +37,30 @@ class TestFileCompletionStore:
         self, tracker_dir: str,
     ) -> None:
         store = FileCompletionStore(tracker_dir)
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(store.mark("hash-001"))
-        result = loop.run_until_complete(store.exists("hash-001"))
-        assert result is True
+
+        async def _run():
+            await store.mark("hash-001")
+            return await store.exists("hash-001")
+
+        assert asyncio.run(_run()) is True
 
     def test_is_complete_returns_false_for_unknown(
         self, tracker_dir: str,
     ) -> None:
         store = FileCompletionStore(tracker_dir)
-        result = asyncio.get_event_loop().run_until_complete(
-            store.exists("unknown-hash")
-        )
-        assert result is False
+        assert asyncio.run(store.exists("unknown-hash")) is False
 
     def test_duplicate_mark_is_idempotent(
         self, tracker_dir: str,
     ) -> None:
         store = FileCompletionStore(tracker_dir)
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(store.mark("dup-hash"))
-        loop.run_until_complete(store.mark("dup-hash"))
-        result = loop.run_until_complete(store.exists("dup-hash"))
-        assert result is True
+
+        async def _run():
+            await store.mark("dup-hash")
+            await store.mark("dup-hash")
+            return await store.exists("dup-hash")
+
+        assert asyncio.run(_run()) is True
         entries = os.listdir(tracker_dir)
         assert len(entries) == 1
 
@@ -69,46 +68,42 @@ class TestFileCompletionStore:
         self, tracker_dir: str,
     ) -> None:
         store = FileCompletionStore(tracker_dir)
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(store.mark("old-hash"))
+        asyncio.run(store.mark("old-hash"))
         record_path = os.path.join(tracker_dir, "old-hash.complete")
         old_time = 0.0
         os.utime(record_path, (old_time, old_time))
-        removed = loop.run_until_complete(store.cleanup(max_age_seconds=3600))
+
+        async def _run():
+            removed = await store.cleanup(max_age_seconds=3600)
+            exists = await store.exists("old-hash")
+            return removed, exists
+
+        removed, exists = asyncio.run(_run())
         assert removed >= 1
-        result = loop.run_until_complete(store.exists("old-hash"))
-        assert result is False
+        assert exists is False
 
 
 class TestCompletionTracker:
     def test_mark_and_check(self, tracker: CompletionTracker) -> None:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(tracker.mark_committed("content-hash-1"))
-        result = loop.run_until_complete(
-            tracker.is_committed("content-hash-1")
-        )
-        assert result is True
+        async def _run():
+            await tracker.mark_committed("content-hash-1")
+            return await tracker.is_committed("content-hash-1")
+
+        assert asyncio.run(_run()) is True
 
     def test_uncommitted_returns_false(
         self, tracker: CompletionTracker,
     ) -> None:
-        result = asyncio.get_event_loop().run_until_complete(
-            tracker.is_committed("never-committed")
-        )
-        assert result is False
+        assert asyncio.run(tracker.is_committed("never-committed")) is False
 
     def test_skip_already_committed(
         self, tracker: CompletionTracker,
     ) -> None:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(tracker.mark_committed("already-done"))
-        should_skip = loop.run_until_complete(
-            tracker.should_skip("already-done")
-        )
-        assert should_skip is True
+        async def _run():
+            await tracker.mark_committed("already-done")
+            return await tracker.should_skip("already-done")
+
+        assert asyncio.run(_run()) is True
 
     def test_do_not_skip_new(self, tracker: CompletionTracker) -> None:
-        should_skip = asyncio.get_event_loop().run_until_complete(
-            tracker.should_skip("brand-new")
-        )
-        assert should_skip is False
+        assert asyncio.run(tracker.should_skip("brand-new")) is False
