@@ -8,6 +8,9 @@ metadata:
 spec:
   backoffLimit: 3
   template:
+    metadata:
+      labels:
+        app: neo4j-schema-init
     spec:
       restartPolicy: OnFailure
       containers:

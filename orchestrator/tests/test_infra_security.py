@@ -9,6 +9,7 @@ import pytest
 INFRA_DIR = Path(__file__).resolve().parents[2] / "infrastructure"
 NETWORK_POLICIES_PATH = INFRA_DIR / "k8s" / "network-policies.yaml"
 KAFKA_STATEFULSET_PATH = INFRA_DIR / "k8s" / "kafka-statefulset.yaml"
+SCHEMA_JOB_PATH = INFRA_DIR / "k8s" / "neo4j-schema-job.yaml"
 SECRETS_PATH = INFRA_DIR / "k8s" / "secrets.yaml"
 DOCKER_COMPOSE_PATH = INFRA_DIR / "docker-compose.yml"
 
@@ -295,6 +296,55 @@ class TestSchemaInitNetworkPolicy:
         assert targets_neo4j, (
             "Schema init egress policy must allow traffic "
             "to app: neo4j on port 7687"
+        )
+
+
+class TestSchemaInitJobPodLabels:
+
+    @pytest.fixture(name="schema_job")
+    def _schema_job(self) -> dict:
+        docs = list(yaml.safe_load_all(
+            SCHEMA_JOB_PATH.read_text(encoding="utf-8")
+        ))
+        for doc in docs:
+            if doc and doc.get("kind") == "Job":
+                return doc
+        pytest.fail("No Job found in neo4j-schema-job.yaml")
+
+    def test_pod_template_has_labels(self, schema_job: dict) -> None:
+        pod_template = schema_job["spec"]["template"]
+        pod_labels = pod_template.get("metadata", {}).get("labels", {})
+        assert pod_labels, (
+            "Schema init Job pod template must have metadata.labels. "
+            "Kubernetes does not propagate Job.metadata.labels to pods. "
+            "Without explicit pod labels, NetworkPolicies cannot match "
+            "the schema init pods and traffic is blocked by deny-all."
+        )
+
+    def test_pod_template_label_matches_network_policy(
+        self, schema_job: dict, network_policies: list[dict]
+    ) -> None:
+        pod_labels = (
+            schema_job["spec"]["template"]
+            .get("metadata", {}).get("labels", {})
+        )
+        pod_app_label = pod_labels.get("app")
+        assert pod_app_label == "neo4j-schema-init", (
+            f"Schema init pod template must have app: neo4j-schema-init "
+            f"to match NetworkPolicy selectors, got app: {pod_app_label}"
+        )
+
+        egress_policy = _find_network_policy(
+            network_policies, "allow-schema-init-egress"
+        )
+        assert egress_policy is not None
+        egress_selector = (
+            egress_policy["spec"]["podSelector"]
+            .get("matchLabels", {}).get("app")
+        )
+        assert pod_app_label == egress_selector, (
+            f"Pod template label app={pod_app_label} must match "
+            f"allow-schema-init-egress podSelector app={egress_selector}"
         )
 
 
