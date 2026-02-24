@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -34,6 +35,8 @@ from orchestrator.app.subgraph_cache import (
     default_cache_maxsize,
     normalize_cypher,
 )
+from orchestrator.app.config import VectorStoreConfig
+from orchestrator.app.vector_store import SearchResult, create_vector_store
 from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
@@ -60,18 +63,18 @@ _SANDBOX = SandboxedQueryExecutor()
 _TEMPLATE_CATALOG = TemplateCatalog()
 _SUBGRAPH_CACHE = SubgraphCache(maxsize=default_cache_maxsize())
 
+_VS_CFG = VectorStoreConfig.from_env()
+_VECTOR_STORE = create_vector_store(
+    backend=_VS_CFG.backend, url=_VS_CFG.qdrant_url, api_key=_VS_CFG.qdrant_api_key,
+)
+
+_VECTOR_COLLECTION = "service_embeddings"
+
 
 def _sandbox_inject_limit(cypher: str) -> str:
     return _SANDBOX.inject_limit(cypher)
 
 
-
-_VECTOR_SEARCH_CYPHER = (
-    "CALL db.index.vector.queryNodes('service_embedding_index', $limit, $query_embedding) "
-    "YIELD node, score "
-    "RETURN node {.*, score: score} AS result "
-    "ORDER BY score DESC"
-)
 
 _FULLTEXT_FALLBACK_CYPHER = (
     "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
@@ -118,6 +121,18 @@ def _get_neo4j_driver() -> AsyncDriver:
 
 def _get_query_timeout() -> float:
     return get_query_timeout()
+
+
+def _get_hop_edge_limit() -> int:
+    raw = os.environ.get("HOP_EDGE_LIMIT", "500")
+    try:
+        return int(raw)
+    except ValueError:
+        return 500
+
+
+def _search_results_to_dicts(results: List[SearchResult]) -> List[Dict[str, Any]]:
+    return [{**r.metadata, "score": r.score} for r in results]
 
 
 @asynccontextmanager
@@ -223,37 +238,8 @@ async def vector_retrieve(state: QueryState) -> dict:
         start = time.monotonic()
         try:
             async with _neo4j_session() as driver:
-                query_text = state["query"]
-                limit = state.get("max_results", 10)
-                query_embedding = await _embed_query(query_text)
-                use_vector = query_embedding is not None
-
-                if use_vector:
-                    cypher = _VECTOR_SEARCH_CYPHER
-                else:
-                    cypher = _FULLTEXT_FALLBACK_CYPHER
-
-                filtered_cypher, acl_params = _apply_acl(
-                    cypher, state, alias="node",
-                )
-
-                async def _tx_func(
-                    tx: AsyncManagedTransaction,
-                ) -> list:
-                    params: Dict[str, Any] = {**acl_params, "limit": limit}
-                    if use_vector:
-                        params["query_embedding"] = query_embedding
-                    else:
-                        params["query"] = query_text
-                    result = await tx.run(filtered_cypher, **params)
-                    return await result.data()
-
-                timeout = _get_query_timeout()
-                async with driver.session() as session:
-                    records = await session.execute_read(
-                        _tx_func, timeout=timeout,
-                    )
-                return {"candidates": records}
+                candidates = await _fetch_candidates(driver, state)
+                return {"candidates": candidates}
         finally:
             QUERY_DURATION.record(
                 (time.monotonic() - start) * 1000, {"node": "vector_retrieve"}
@@ -264,18 +250,28 @@ async def _fetch_candidates(
     driver: AsyncDriver, state: QueryState,
 ) -> list:
     query_embedding = await _embed_query(state["query"])
-    use_vector = query_embedding is not None
-    base_cypher = _VECTOR_SEARCH_CYPHER if use_vector else _FULLTEXT_FALLBACK_CYPHER
+    limit = state.get("max_results", 10)
+    tenant_id = state.get("tenant_id", "")
+
+    if query_embedding is not None:
+        if tenant_id:
+            results = await _VECTOR_STORE.search_with_tenant(
+                _VECTOR_COLLECTION, query_embedding,
+                tenant_id=tenant_id, limit=limit,
+            )
+        else:
+            results = await _VECTOR_STORE.search(
+                _VECTOR_COLLECTION, query_embedding, limit=limit,
+            )
+        return _search_results_to_dicts(results)
+
+    base_cypher = _FULLTEXT_FALLBACK_CYPHER
     vec_cypher, vec_acl = _apply_acl(base_cypher, state, alias="node")
 
     async def _vector_tx(tx: AsyncManagedTransaction) -> list:
         params: Dict[str, Any] = {
-            **vec_acl, "limit": state.get("max_results", 10),
+            **vec_acl, "limit": limit, "query": state["query"],
         }
-        if use_vector:
-            params["query_embedding"] = query_embedding
-        else:
-            params["query"] = state["query"]
         result = await tx.run(vec_cypher, **params)
         return await result.data()
 
@@ -295,18 +291,21 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                     c.get("name", c.get("result", {}).get("name", ""))
                     for c in candidates
                 ]
+                hop_limit = _get_hop_edge_limit()
                 hop_cypher, hop_acl = _apply_acl(
                     "MATCH (n)-[r]-(m) "
                     "WHERE n.name IN $names "
                     "AND r.tombstoned_at IS NULL "
                     "RETURN n.name AS source, type(r) AS rel, "
-                    "m.name AS target",
+                    "m.name AS target "
+                    "LIMIT $hop_limit",
                     state, alias="m",
                 )
 
                 async def _hop_tx(tx: AsyncManagedTransaction) -> list:
                     result = await tx.run(
-                        hop_cypher, names=names, **hop_acl,
+                        hop_cypher, names=names, hop_limit=hop_limit,
+                        **hop_acl,
                     )
                     return await result.data()
 
@@ -466,30 +465,7 @@ async def hybrid_retrieve(state: QueryState) -> dict:
 
 async def _hybrid_vector_phase(state: QueryState) -> list:
     async with _neo4j_session() as driver:
-        query_embedding = await _embed_query(state["query"])
-        use_vector = query_embedding is not None
-        base_cypher = _VECTOR_SEARCH_CYPHER if use_vector else _FULLTEXT_FALLBACK_CYPHER
-        vec_cypher, vec_acl = _apply_acl(
-            base_cypher, state, alias="node",
-        )
-
-        async def _vector_tx(tx: AsyncManagedTransaction) -> list:
-            params: Dict[str, Any] = {
-                **vec_acl,
-                "limit": state.get("max_results", 10),
-            }
-            if use_vector:
-                params["query_embedding"] = query_embedding
-            else:
-                params["query"] = state["query"]
-            result = await tx.run(vec_cypher, **params)
-            return await result.data()
-
-        timeout = _get_query_timeout()
-        async with driver.session() as session:
-            return await session.execute_read(
-                _vector_tx, timeout=timeout,
-            )
+        return await _fetch_candidates(driver, state)
 
 
 async def _hybrid_aggregation_phase(

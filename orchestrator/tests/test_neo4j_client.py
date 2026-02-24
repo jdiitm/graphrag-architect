@@ -365,17 +365,50 @@ class TestGraphRepositoryTenantDatabase:
 
     @pytest.mark.asyncio
     async def test_session_uses_specified_database(self) -> None:
+        from neo4j import WRITE_ACCESS
         driver, session, tx = _mock_driver()
         repo = GraphRepository(driver, database="acme_db")
         await repo.commit_topology([SAMPLE_SERVICE])
-        driver.session.assert_called_with(database="acme_db")
+        driver.session.assert_called_with(
+            database="acme_db", default_access_mode=WRITE_ACCESS,
+        )
 
     @pytest.mark.asyncio
     async def test_session_omits_database_when_none(self) -> None:
+        from neo4j import WRITE_ACCESS
         driver, session, tx = _mock_driver()
         repo = GraphRepository(driver)
         await repo.commit_topology([SAMPLE_SERVICE])
-        driver.session.assert_called_with()
+        driver.session.assert_called_with(default_access_mode=WRITE_ACCESS)
+
+
+class TestReadReplicaRouting:
+
+    @pytest.mark.asyncio
+    async def test_read_operations_use_read_access(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        await repo.read_topology(label="Service")
+        call_kwargs = driver.session.call_args
+        if call_kwargs.kwargs:
+            access = call_kwargs.kwargs.get("default_access_mode")
+        else:
+            access = None
+        from neo4j import READ_ACCESS
+        assert access == READ_ACCESS
+
+    @pytest.mark.asyncio
+    async def test_write_operations_use_write_access(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        await repo.commit_topology([SAMPLE_SERVICE])
+        call_kwargs = driver.session.call_args
+        if call_kwargs.kwargs:
+            access = call_kwargs.kwargs.get("default_access_mode")
+        else:
+            access = None
+        from neo4j import WRITE_ACCESS
+        assert access == WRITE_ACCESS
 
 
 class TestCommitTopologyIdempotent:

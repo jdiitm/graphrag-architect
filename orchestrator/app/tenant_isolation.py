@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+from collections import OrderedDict
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol
@@ -69,18 +72,44 @@ class TenantRegistry:
         return False
 
 
+def default_max_tenant_pools() -> int:
+    raw = os.environ.get("MAX_TENANT_POOLS", "64")
+    try:
+        return int(raw)
+    except ValueError:
+        return 64
+
+
 class TenantAwareDriverPool:
-    def __init__(self, default_driver: Any) -> None:
+    def __init__(
+        self, default_driver: Any, max_tenants: int = 0,
+    ) -> None:
         self._default_driver = default_driver
-        self._drivers: Dict[str, Any] = {}
+        self._max_tenants = max_tenants or default_max_tenant_pools()
+        self._drivers: OrderedDict[str, Any] = OrderedDict()
 
     def register_driver(self, tenant_id: str, driver: Any) -> None:
+        if tenant_id in self._drivers:
+            self._drivers.move_to_end(tenant_id)
+            self._drivers[tenant_id] = driver
+            return
+        while len(self._drivers) >= self._max_tenants and self._drivers:
+            _, evicted = self._drivers.popitem(last=False)
+            if hasattr(evicted, "close"):
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(evicted.close())
+                except RuntimeError:
+                    logger.warning(
+                        "Could not schedule close for evicted tenant driver %s",
+                        tenant_id,
+                    )
         self._drivers[tenant_id] = driver
 
     def get_driver(self, tenant_id: str) -> Any:
-        driver = self._drivers.get(tenant_id)
-        if driver is not None:
-            return driver
+        if tenant_id in self._drivers:
+            self._drivers.move_to_end(tenant_id)
+            return self._drivers[tenant_id]
         return self._default_driver
 
     async def close_all(self) -> None:

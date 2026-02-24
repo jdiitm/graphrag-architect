@@ -95,6 +95,75 @@ class TestTenantAwareDriverPool:
         assert d2.closed
 
 
+class TestTenantPoolLRUEviction:
+
+    def test_pool_respects_max_tenants(self) -> None:
+        default = object()
+        pool = TenantAwareDriverPool(default, max_tenants=3)
+        for i in range(5):
+            pool.register_driver(f"tenant-{i}", object())
+        assert len(pool._drivers) <= 3
+
+    @pytest.mark.asyncio
+    async def test_lru_eviction_closes_oldest_driver(self) -> None:
+        import asyncio
+
+        class FakeDriver:
+            closed = False
+            async def close(self) -> None:
+                self.closed = True
+
+        default = object()
+        pool = TenantAwareDriverPool(default, max_tenants=2)
+        d0 = FakeDriver()
+        d1 = FakeDriver()
+        d2 = FakeDriver()
+        pool.register_driver("t0", d0)
+        pool.register_driver("t1", d1)
+        pool.register_driver("t2", d2)
+        await asyncio.sleep(0)
+        assert d0.closed
+
+    def test_evicted_tenant_falls_back_to_default(self) -> None:
+        default = object()
+        pool = TenantAwareDriverPool(default, max_tenants=2)
+        pool.register_driver("t0", object())
+        pool.register_driver("t1", object())
+        pool.register_driver("t2", object())
+        assert pool.get_driver("t0") is default
+
+    def test_get_driver_refreshes_lru_order(self) -> None:
+        default = object()
+        pool = TenantAwareDriverPool(default, max_tenants=3)
+        pool.register_driver("t0", object())
+        pool.register_driver("t1", object())
+        pool.register_driver("t2", object())
+        pool.get_driver("t0")
+        pool.register_driver("t3", object())
+        assert pool.get_driver("t0") is not default
+        assert pool.get_driver("t1") is default
+
+    def test_eviction_without_event_loop_logs_warning(self, caplog) -> None:
+        import logging
+
+        class FakeDriver:
+            async def close(self) -> None:
+                pass
+
+        default = object()
+        pool = TenantAwareDriverPool(default, max_tenants=1)
+        pool.register_driver("t0", FakeDriver())
+        with caplog.at_level(logging.WARNING, logger="orchestrator.app.tenant_isolation"):
+            pool.register_driver("t1", FakeDriver())
+        assert any("evicted tenant driver" in r.message.lower() for r in caplog.records)
+
+    def test_max_tenants_configurable_via_env(self) -> None:
+        from orchestrator.app.tenant_isolation import default_max_tenant_pools
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("MAX_TENANT_POOLS", "128")
+            assert default_max_tenant_pools() == 128
+
+
 class TestTenantAwarePoolIntegration:
 
     def test_get_database_for_physical_tenant(self) -> None:

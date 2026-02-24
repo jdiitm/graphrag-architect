@@ -60,6 +60,13 @@ spec:
     scaleDown:
       stabilizationWindowSeconds: 300
   metrics:
+    - type: External
+      external:
+        metric:
+          name: orchestrator_p99_latency_ms
+        target:
+          type: AverageValue
+          averageValue: "500"
     - type: Resource
       resource:
         name: cpu

@@ -21,6 +21,15 @@ def _serialize_candidate(candidate: Any) -> str:
     return str(candidate)
 
 
+def _rank_by_relevance(
+    candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    has_scores = any("score" in c for c in candidates)
+    if not has_scores:
+        return candidates
+    return sorted(candidates, key=lambda c: c.get("score", 0.0), reverse=True)
+
+
 def truncate_context(
     candidates: List[Dict[str, Any]],
     budget: TokenBudget,
@@ -28,7 +37,8 @@ def truncate_context(
     if not candidates:
         return []
 
-    capped = candidates[:budget.max_results]
+    ranked = _rank_by_relevance(candidates)
+    capped = ranked[:budget.max_results]
 
     result: List[Dict[str, Any]] = []
     total_tokens = 0

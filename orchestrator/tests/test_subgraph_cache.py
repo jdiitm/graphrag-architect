@@ -161,6 +161,30 @@ class TestCacheKey:
         assert k1 != k2
 
 
+class TestCreateSubgraphCache:
+    def test_returns_redis_cache_when_url_set(self) -> None:
+        from orchestrator.app.subgraph_cache import (
+            RedisSubgraphCache,
+            create_subgraph_cache,
+        )
+        mock_redis = AsyncMock()
+        with patch("redis.asyncio.from_url", return_value=mock_redis), \
+             patch.dict("os.environ", {"REDIS_URL": "redis://localhost:6379"}):
+            cache = create_subgraph_cache()
+        assert isinstance(cache, RedisSubgraphCache)
+
+    def test_returns_in_memory_when_no_url(self) -> None:
+        from orchestrator.app.subgraph_cache import (
+            SubgraphCache,
+            create_subgraph_cache,
+        )
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("REDIS_URL", None)
+            cache = create_subgraph_cache()
+        assert isinstance(cache, SubgraphCache)
+
+
 class TestRedisSubgraphCache:
     @pytest.mark.asyncio
     async def test_l1_hit_avoids_redis(self) -> None:

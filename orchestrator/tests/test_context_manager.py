@@ -63,6 +63,40 @@ class TestTruncateContext:
         assert [c["id"] for c in result] == [0, 1, 2, 3, 4]
 
 
+class TestSemanticTruncation:
+
+    def test_highest_scored_items_survive(self) -> None:
+        budget = TokenBudget(max_context_tokens=100, max_results=2)
+        candidates = [
+            {"name": "low-svc", "score": 0.1},
+            {"name": "high-svc", "score": 0.95},
+            {"name": "mid-svc", "score": 0.5},
+        ]
+        result = truncate_context(candidates, budget)
+        names = [c["name"] for c in result]
+        assert "high-svc" in names
+
+    def test_low_scored_items_dropped_first(self) -> None:
+        budget = TokenBudget(max_context_tokens=60, max_results=50)
+        candidates = [
+            {"name": f"svc-{i}", "data": "x" * 40, "score": 0.1 * i}
+            for i in range(10)
+        ]
+        result = truncate_context(candidates, budget)
+        if len(result) < len(candidates):
+            surviving_scores = [c["score"] for c in result]
+            dropped_scores = [
+                c["score"] for c in candidates if c not in result
+            ]
+            assert min(surviving_scores) >= max(dropped_scores)
+
+    def test_graceful_when_no_scores(self) -> None:
+        budget = TokenBudget(max_context_tokens=100_000, max_results=50)
+        candidates = [{"name": f"svc-{i}"} for i in range(5)]
+        result = truncate_context(candidates, budget)
+        assert len(result) == 5
+
+
 class TestFormatContextForPrompt:
 
     def test_returns_string(self) -> None:

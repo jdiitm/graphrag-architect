@@ -204,6 +204,40 @@ class TestAllowsReadKeywords:
         assert result == "MATCH (n) RETURN n"
 
 
+class TestCartesianProductDetection:
+    def test_rejects_comma_separated_match_patterns(self):
+        with pytest.raises(CypherValidationError, match="[Cc]artesian"):
+            validate_cypher_readonly("MATCH (a), (b) RETURN a, b")
+
+    def test_rejects_multi_node_comma_pattern(self):
+        with pytest.raises(CypherValidationError, match="[Cc]artesian"):
+            validate_cypher_readonly("MATCH (n:Service), (m:Database) RETURN n, m")
+
+    def test_allows_connected_match_pattern(self):
+        result = validate_cypher_readonly("MATCH (a)-[r]-(b) RETURN a, b")
+        assert "MATCH" in result
+
+    def test_allows_single_node_match(self):
+        result = validate_cypher_readonly("MATCH (n:Service) RETURN n")
+        assert "MATCH" in result
+
+    def test_allows_multiple_match_clauses_with_where(self):
+        result = validate_cypher_readonly(
+            "MATCH (a:Service) MATCH (b:Database) WHERE b.name = a.db RETURN a, b"
+        )
+        assert "MATCH" in result
+
+    def test_rejects_three_disconnected_nodes(self):
+        with pytest.raises(CypherValidationError, match="[Cc]artesian"):
+            validate_cypher_readonly("MATCH (a), (b), (c) RETURN a, b, c")
+
+    def test_allows_path_with_multiple_relationships(self):
+        result = validate_cypher_readonly(
+            "MATCH (a)-[:CALLS]->(b)-[:PRODUCES]->(c) RETURN a, c"
+        )
+        assert "MATCH" in result
+
+
 class TestStringLiteralsNotFalsePositive:
     def test_allows_delete_keyword_inside_string_literal(self):
         result = validate_cypher_readonly(
