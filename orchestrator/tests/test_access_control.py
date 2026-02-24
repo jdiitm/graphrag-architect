@@ -477,6 +477,80 @@ class TestFailClosedAuth:
             )
 
 
+class TestCypherACLInjectionDefeatTests:
+    """Adversarial defeat tests from audit finding 1.1.
+
+    These verify the AST-based ACL injector is immune to the bypass
+    vectors that would have worked against a naive regex approach.
+    """
+
+    def _make_filter(self) -> CypherPermissionFilter:
+        principal = SecurityPrincipal(
+            team="platform", namespace="production", role="viewer"
+        )
+        return CypherPermissionFilter(principal)
+
+    def test_multi_statement_injection_blocked(self):
+        filt = self._make_filter()
+        original = "MATCH (n:Service) RETURN n; DROP CONSTRAINT unique_service_name"
+        filtered, params = filt.inject_into_cypher(original)
+        assert params.get("acl_team") == "platform"
+        assert "n.team_owner" in filtered
+
+    def test_string_literal_delete_where_return_preserved(self):
+        filt = self._make_filter()
+        original = (
+            'MATCH (n:Service) WHERE n.desc = "DELETE all WHERE RETURN" RETURN n'
+        )
+        filtered, params = filt.inject_into_cypher(original)
+        assert params["acl_team"] == "platform"
+        assert '"DELETE all WHERE RETURN"' in filtered
+        acl_pos = filtered.find("n.team_owner")
+        assert acl_pos >= 0
+
+    def test_nested_subquery_with_own_where(self):
+        filt = self._make_filter()
+        original = (
+            "CALL { MATCH (n:Service) WHERE n.name = 'x' RETURN n } RETURN n"
+        )
+        filtered, params = filt.inject_into_cypher(original)
+        assert params["acl_team"] == "platform"
+        assert "n.name = 'x'" in filtered
+
+    def test_union_query_acl_on_both_branches(self):
+        filt = self._make_filter()
+        original = (
+            "MATCH (n:Service) RETURN n "
+            "UNION "
+            "MATCH (n:Database) RETURN n"
+        )
+        filtered, params = filt.inject_into_cypher(original)
+        assert params["acl_team"] == "platform"
+        acl_count = filtered.count("n.team_owner")
+        assert acl_count >= 2, (
+            f"ACL must appear in both UNION branches, found {acl_count} times"
+        )
+
+    def test_deeply_nested_subquery(self):
+        filt = self._make_filter()
+        original = (
+            "MATCH (a:Service) "
+            "CALL { "
+            "  MATCH (b:Service) "
+            "  CALL { MATCH (c:Service) RETURN c } "
+            "  RETURN b "
+            "} "
+            "RETURN a, b"
+        )
+        filtered, params = filt.inject_into_cypher(original)
+        assert params["acl_team"] == "platform"
+        acl_count = filtered.count("team_owner")
+        assert acl_count >= 3, (
+            f"ACL must be injected at all three MATCH scopes, "
+            f"found {acl_count} team_owner references"
+        )
+
+
 class TestNodeMetadataOnIngestion:
     def test_service_cypher_includes_permission_fields(self):
         from orchestrator.app.neo4j_client import _service_cypher

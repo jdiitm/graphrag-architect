@@ -117,9 +117,25 @@ def load_directory_chunked(
         )
 
 
-def load_directory(directory_path: str) -> List[Dict[str, str]]:
+def _default_max_bytes() -> int:
+    raw = os.environ.get("WORKSPACE_MAX_BYTES", "104857600")
+    try:
+        return int(raw)
+    except ValueError:
+        return 104857600
+
+
+def load_directory(
+    directory_path: str,
+    max_total_bytes: Optional[int] = None,
+    skipped: Optional[List[str]] = None,
+) -> List[Dict[str, str]]:
+    effective_max = max_total_bytes if max_total_bytes is not None else _default_max_bytes()
     results: List[Dict[str, str]] = []
-    for chunk in load_directory_chunked(directory_path, chunk_size=1000):
+    for chunk in load_directory_chunked(
+        directory_path, chunk_size=1000,
+        max_total_bytes=effective_max, skipped=skipped,
+    ):
         results.extend(chunk)
     results.sort(key=lambda entry: entry["path"])
     return results

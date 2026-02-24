@@ -245,6 +245,84 @@ func (s *commitTrackingSource) Commit(_ context.Context) error {
 
 func (s *commitTrackingSource) Close() {}
 
+func TestConsumer_MaxBatchWaitBoundsAckDuration(t *testing.T) {
+	src := &commitTrackingSource{
+		batches: [][]domain.Job{
+			{sampleJob("slow1"), sampleJob("slow2"), sampleJob("slow3")},
+			{sampleJob("fast")},
+		},
+	}
+
+	var mu sync.Mutex
+	commitCount := 0
+	src.onCommit = func() {
+		mu.Lock()
+		commitCount++
+		mu.Unlock()
+	}
+
+	jobs := make(chan domain.Job, 10)
+	acks := make(chan struct{}, 10)
+
+	c := consumer.New(src, jobs, acks,
+		consumer.WithAckTimeout(2*time.Second),
+		consumer.WithMaxBatchWait(100*time.Millisecond),
+	)
+
+	go func() {
+		for j := range jobs {
+			_ = j
+			time.Sleep(50 * time.Millisecond)
+			acks <- struct{}{}
+		}
+	}()
+
+	start := time.Now()
+	err := c.Run(context.Background())
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf(
+			"consumer took %v, expected it to abandon the slow batch "+
+				"within maxBatchWait (100ms) and continue polling",
+			elapsed,
+		)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if commitCount < 1 {
+		t.Fatalf("expected at least 1 commit (for the fast batch), got %d", commitCount)
+	}
+}
+
+func TestConsumer_MaxBatchWaitDefaultIsZeroMeansUnbounded(t *testing.T) {
+	src := &stubSource{
+		batches: [][]domain.Job{
+			{sampleJob("a")},
+		},
+	}
+	jobs := make(chan domain.Job, 10)
+	acks := make(chan struct{}, 10)
+
+	c := consumer.New(src, jobs, acks)
+
+	go func() {
+		<-jobs
+		time.Sleep(20 * time.Millisecond)
+		acks <- struct{}{}
+	}()
+
+	err := c.Run(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil with no maxBatchWait, got %v", err)
+	}
+}
+
 func TestConsumer_CommitsAfterBatchProcessed(t *testing.T) {
 	var mu sync.Mutex
 	var events []string

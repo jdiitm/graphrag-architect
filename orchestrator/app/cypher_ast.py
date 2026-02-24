@@ -135,38 +135,45 @@ class CypherParser:
                 clauses.append(self._parse_generic())
         return clauses
 
-    def _collect_until_clause_keyword(self) -> List[CypherToken]:
+    def _collect_until_clause_keyword(
+        self, scope_depth: int = 0,
+    ) -> List[CypherToken]:
         collected: List[CypherToken] = []
         while self._pos < len(self._tokens):
             tok = self._tokens[self._pos]
             if (tok.token_type == TokenType.KEYWORD
                     and tok.value.upper() in _CLAUSE_KEYWORDS
-                    and tok.brace_depth == 0):
+                    and tok.brace_depth == scope_depth):
                 break
             if (tok.token_type == TokenType.PUNCTUATION
-                    and tok.value == "}"):
+                    and tok.value == "}"
+                    and tok.brace_depth <= scope_depth):
                 break
             collected.append(self._advance())
         return collected
 
     def _parse_match(self) -> MatchClause:
-        tokens = [self._advance()]
-        tokens.extend(self._collect_until_clause_keyword())
+        kw_tok = self._advance()
+        tokens = [kw_tok]
+        tokens.extend(self._collect_until_clause_keyword(kw_tok.brace_depth))
         return MatchClause(tokens=tokens)
 
     def _parse_where(self) -> WhereClause:
-        tokens = [self._advance()]
-        tokens.extend(self._collect_until_clause_keyword())
+        kw_tok = self._advance()
+        tokens = [kw_tok]
+        tokens.extend(self._collect_until_clause_keyword(kw_tok.brace_depth))
         return WhereClause(tokens=tokens)
 
     def _parse_return(self) -> ReturnClause:
-        tokens = [self._advance()]
-        tokens.extend(self._collect_until_clause_keyword())
+        kw_tok = self._advance()
+        tokens = [kw_tok]
+        tokens.extend(self._collect_until_clause_keyword(kw_tok.brace_depth))
         return ReturnClause(tokens=tokens)
 
     def _parse_with(self) -> WithClause:
-        tokens = [self._advance()]
-        tokens.extend(self._collect_until_clause_keyword())
+        kw_tok = self._advance()
+        tokens = [kw_tok]
+        tokens.extend(self._collect_until_clause_keyword(kw_tok.brace_depth))
         return WithClause(tokens=tokens)
 
     def _parse_call(self) -> CallSubquery:
@@ -205,8 +212,9 @@ class CypherParser:
         )
 
     def _parse_generic(self) -> GenericClause:
-        tokens = [self._advance()]
-        tokens.extend(self._collect_until_clause_keyword())
+        kw_tok = self._advance()
+        tokens = [kw_tok]
+        tokens.extend(self._collect_until_clause_keyword(kw_tok.brace_depth))
         return GenericClause(tokens=tokens)
 
 
