@@ -17,6 +17,7 @@ from orchestrator.app.access_control import (
     InvalidTokenError,
     SecurityPrincipal,
 )
+from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.config import AuthConfig, KafkaConsumerConfig, RateLimitConfig
 from orchestrator.app.executor import shutdown_pool
 from orchestrator.app.graph_builder import ingestion_graph, run_streaming_pipeline
@@ -62,6 +63,7 @@ async def _kafka_ingest_callback(raw_files: List[Dict[str, str]]) -> Dict[str, A
         "extraction_errors": [],
         "validation_retries": 0,
         "commit_status": "",
+        "tenant_id": "default",
     }
     result = await ingestion_graph.ainvoke(initial_state)
     return {
@@ -241,6 +243,7 @@ async def _run_ingestion(request: IngestRequest) -> IngestResponse:
         "extraction_errors": [],
         "validation_retries": 0,
         "commit_status": "",
+        "tenant_id": "default",
     }
     try:
         result = await ingestion_graph.ainvoke(initial_state)
@@ -261,9 +264,27 @@ async def _run_ingestion(request: IngestRequest) -> IngestResponse:
     return response
 
 
+def _resolve_tenant_context(authorization: Optional[str]) -> TenantContext:
+    if not authorization:
+        return TenantContext.default()
+    auth = AuthConfig.from_env()
+    if not auth.token_secret:
+        return TenantContext.default()
+    try:
+        principal = SecurityPrincipal.from_header(
+            authorization, token_secret=auth.token_secret,
+        )
+        return TenantContext.default(tenant_id=principal.team)
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except AuthConfigurationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 def _build_query_state(
     request: QueryRequest, authorization: str,
 ) -> Dict[str, Any]:
+    tenant_ctx = _resolve_tenant_context(authorization)
     return {
         "query": request.query,
         "max_results": request.max_results,
@@ -278,6 +299,7 @@ def _build_query_state(
         "authorization": authorization,
         "evaluation_score": -1.0,
         "retrieval_quality": "skipped",
+        "tenant_id": tenant_ctx.tenant_id,
     }
 
 

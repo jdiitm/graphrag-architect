@@ -267,7 +267,6 @@ workers/ingestion/internal/metrics/observer.go
 pyproject.toml
 README.md
 architecture_state.md
-claude-progress.txt
 ```
 
 Also read any files from Step 3 discovery not covered by Sub-Audits A-B.

@@ -15,6 +15,7 @@ _DETACH_KEYWORD = "DETACH"
 ALLOWED_PROCEDURES: FrozenSet[str] = frozenset({
     "db.index.fulltext.queryNodes",
     "db.index.fulltext.queryRelationships",
+    "db.index.vector.queryNodes",
     "db.labels",
     "db.relationshipTypes",
     "db.propertyKeys",

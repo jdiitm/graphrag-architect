@@ -60,6 +60,7 @@ class TestStubProvider:
                     language="go",
                     framework="gin",
                     opentelemetry_enabled=True,
+                    tenant_id="test-tenant",
                 )
             ],
             calls=[

@@ -36,6 +36,7 @@ class TestConfidenceField:
             language="Go",
             framework="gin",
             opentelemetry_enabled=True,
+            tenant_id="test-tenant",
         )
         assert node.confidence == 1.0
 
@@ -46,6 +47,7 @@ class TestConfidenceBounds:
             ServiceNode(
                 id="auth", name="auth", language="go",
                 framework="gin", opentelemetry_enabled=True, confidence=1.5,
+                tenant_id="test-tenant",
             )
 
     def test_service_node_rejects_negative_confidence(self):
@@ -53,6 +55,7 @@ class TestConfidenceBounds:
             ServiceNode(
                 id="auth", name="auth", language="go",
                 framework="gin", opentelemetry_enabled=True, confidence=-0.1,
+                tenant_id="test-tenant",
             )
 
     def test_calls_edge_rejects_confidence_above_one(self):
@@ -77,6 +80,7 @@ class TestCypherIncludesConfidence:
         node = ServiceNode(
             id="auth", name="auth", language="go",
             framework="gin", opentelemetry_enabled=True, confidence=0.85,
+            tenant_id="test-tenant",
         )
         query, params = _service_cypher(node)
         assert "confidence" in query
@@ -114,6 +118,7 @@ func main() {
             "extraction_errors": [],
             "validation_retries": 0,
             "commit_status": "",
+            "tenant_id": "test-tenant",
         }
         result = await parse_source_ast(state)
         services = [n for n in result["extracted_nodes"] if isinstance(n, ServiceNode)]
@@ -135,6 +140,7 @@ app = FastAPI()
             "extraction_errors": [],
             "validation_retries": 0,
             "commit_status": "",
+            "tenant_id": "test-tenant",
         }
         result = await parse_source_ast(state)
         services = [n for n in result["extracted_nodes"] if isinstance(n, ServiceNode)]
@@ -171,6 +177,7 @@ func (f *FP) Process(ctx context.Context) error {
             "extraction_errors": [],
             "validation_retries": 0,
             "commit_status": "",
+            "tenant_id": "test-tenant",
         }
         result = await parse_source_ast(state)
         calls = [n for n in result["extracted_nodes"] if isinstance(n, CallsEdge)]
@@ -186,6 +193,7 @@ class TestFixExtractionErrorsPreservesAST:
         ast_service = ServiceNode(
             id="auth", name="auth", language="go",
             framework="gin", opentelemetry_enabled=False, confidence=1.0,
+            tenant_id="test-tenant",
         )
         ast_edge = CallsEdge(
             source_service_id="auth", target_service_id="orders",
@@ -194,6 +202,7 @@ class TestFixExtractionErrorsPreservesAST:
         llm_service = ServiceNode(
             id="payments", name="payments", language="python",
             framework="fastapi", opentelemetry_enabled=False, confidence=0.7,
+            tenant_id="test-tenant",
         )
         state = {
             "directory_path": "",
@@ -208,6 +217,7 @@ class TestFixExtractionErrorsPreservesAST:
             services=[ServiceNode(
                 id="new-svc", name="new-svc", language="go",
                 framework="gin", opentelemetry_enabled=False,
+                tenant_id="test-tenant",
             )],
             calls=[],
         )
@@ -238,10 +248,12 @@ class TestFixExtractionErrorsPreservesAST:
         ast_service = ServiceNode(
             id="auth", name="auth", language="go",
             framework="gin", opentelemetry_enabled=False, confidence=1.0,
+            tenant_id="test-tenant",
         )
         stale_llm = ServiceNode(
             id="stale-llm", name="stale", language="python",
             framework="flask", opentelemetry_enabled=False, confidence=0.7,
+            tenant_id="test-tenant",
         )
         state = {
             "directory_path": "",
@@ -255,6 +267,7 @@ class TestFixExtractionErrorsPreservesAST:
         fresh_llm = ServiceNode(
             id="fresh-llm", name="fresh", language="go",
             framework="gin", opentelemetry_enabled=False,
+            tenant_id="test-tenant",
         )
         mock_result = ServiceExtractionResult(
             services=[fresh_llm], calls=[],
@@ -285,6 +298,7 @@ class TestGracefulDegradation:
         ast_service = ServiceNode(
             id="auth", name="auth", language="go",
             framework="gin", opentelemetry_enabled=False, confidence=1.0,
+            tenant_id="test-tenant",
         )
         state = {
             "directory_path": "",
@@ -487,6 +501,7 @@ class TestEnrichMergesOTel:
         ast_service = ServiceNode(
             id="auth", name="auth", language="go",
             framework="gin", opentelemetry_enabled=False, confidence=1.0,
+            tenant_id="test-tenant",
         )
         state = {
             "directory_path": "",
@@ -500,6 +515,7 @@ class TestEnrichMergesOTel:
         llm_service = ServiceNode(
             id="auth", name="auth-service", language="go",
             framework="gin", opentelemetry_enabled=True,
+            tenant_id="test-tenant",
         )
         mock_result = ServiceExtractionResult(
             services=[llm_service], calls=[],

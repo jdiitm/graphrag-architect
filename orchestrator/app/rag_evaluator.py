@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List
+import re
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Set
 
 from orchestrator.app.vector_store import _cosine_similarity
 
@@ -12,6 +13,24 @@ class RelevanceScore:
     score: float
     context_count: int
     retrieval_path: str
+
+
+@dataclass(frozen=True)
+class EvaluationResult:
+    context_relevance: float
+    faithfulness: float
+    groundedness: float
+    ungrounded_claims: List[str] = field(default_factory=list)
+    context_count: int = 0
+    retrieval_path: str = "vector"
+
+    @property
+    def score(self) -> float:
+        return (
+            0.3 * self.context_relevance
+            + 0.4 * self.faithfulness
+            + 0.3 * self.groundedness
+        )
 
 
 def evaluate_relevance(
@@ -25,6 +44,103 @@ def evaluate_relevance(
         for ctx in context_embeddings
     )
     return total / len(context_embeddings)
+
+
+_ENTITY_PATTERN = re.compile(
+    r"\b([A-Za-z][\w-]*(?:-[A-Za-z][\w-]*)*)(?:\s+(?:service|topic|database|deployment))?",
+)
+
+
+def _extract_entity_names_from_text(text: str) -> Set[str]:
+    return {m.group(1).lower() for m in _ENTITY_PATTERN.finditer(text)}
+
+
+def _extract_entity_names_from_context(
+    sources: List[Dict[str, Any]],
+) -> Set[str]:
+    names: Set[str] = set()
+    for source in sources:
+        for key in ("name", "id", "source", "target",
+                    "affected_service", "consumer_service",
+                    "producer_service", "service"):
+            val = source.get(key)
+            if isinstance(val, str) and val:
+                names.add(val.lower())
+        result = source.get("result")
+        if isinstance(result, dict):
+            for key in ("name", "id"):
+                val = result.get(key)
+                if isinstance(val, str) and val:
+                    names.add(val.lower())
+    return names
+
+
+def _compute_faithfulness(
+    answer: str,
+    sources: List[Dict[str, Any]],
+) -> tuple:
+    if not answer or not sources:
+        return 1.0, []
+
+    answer_entities = _extract_entity_names_from_text(answer)
+    context_entities = _extract_entity_names_from_context(sources)
+
+    stop_words = {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been",
+        "being", "have", "has", "had", "do", "does", "did", "will",
+        "would", "could", "should", "may", "might", "shall", "can",
+        "not", "no", "and", "or", "but", "if", "then", "else",
+        "when", "where", "how", "what", "which", "who", "whom",
+        "this", "that", "these", "those", "it", "its", "to", "of",
+        "in", "for", "on", "with", "at", "by", "from", "as", "into",
+        "through", "during", "before", "after", "above", "below",
+        "between", "out", "off", "over", "under", "again", "further",
+        "all", "each", "every", "both", "few", "more", "most",
+        "other", "some", "such", "only", "very",
+    }
+
+    meaningful_entities = {e for e in answer_entities if e not in stop_words and len(e) > 2}
+    if not meaningful_entities:
+        return 1.0, []
+
+    ungrounded = [e for e in meaningful_entities if e not in context_entities]
+    if not meaningful_entities:
+        return 1.0, ungrounded
+
+    coverage = 1.0 - len(ungrounded) / len(meaningful_entities)
+    return max(0.0, coverage), ungrounded
+
+
+def _compute_groundedness(
+    answer: str,
+    sources: List[Dict[str, Any]],
+) -> float:
+    if not answer or not sources:
+        return 1.0
+
+    answer_entities = _extract_entity_names_from_text(answer)
+    context_entities = _extract_entity_names_from_context(sources)
+
+    stop_words = {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been",
+        "being", "have", "has", "had", "do", "does", "did", "will",
+        "would", "could", "should", "may", "might", "shall", "can",
+        "not", "no", "and", "or", "but", "if", "then", "else",
+        "when", "where", "how", "what", "which", "who", "whom",
+        "this", "that", "these", "those", "it", "its", "to", "of",
+        "in", "for", "on", "with", "at", "by", "from", "as", "into",
+        "through", "during", "before", "after", "above", "below",
+        "between", "out", "off", "over", "under", "again", "further",
+        "all", "each", "every", "both", "few", "more", "most",
+        "other", "some", "such", "only", "very",
+    }
+
+    meaningful = {e for e in answer_entities if e not in stop_words and len(e) > 2}
+    if not meaningful:
+        return 1.0
+
+    verified = sum(1 for e in meaningful if e in context_entities)
+    return verified / len(meaningful)
 
 
 class RAGEvaluator:
@@ -42,6 +158,30 @@ class RAGEvaluator:
         return RelevanceScore(
             query=query,
             score=score,
+            context_count=len(context_embeddings),
+            retrieval_path=retrieval_path,
+        )
+
+    def evaluate_faithfulness(
+        self,
+        query: str,
+        answer: str,
+        sources: List[Dict[str, Any]],
+        query_embedding: List[float],
+        context_embeddings: List[List[float]],
+        retrieval_path: str = "vector",
+    ) -> EvaluationResult:
+        context_relevance = evaluate_relevance(
+            query_embedding, context_embeddings,
+        )
+        faithfulness_score, ungrounded = _compute_faithfulness(answer, sources)
+        groundedness = _compute_groundedness(answer, sources)
+
+        return EvaluationResult(
+            context_relevance=context_relevance,
+            faithfulness=faithfulness_score,
+            groundedness=groundedness,
+            ungrounded_claims=ungrounded,
             context_count=len(context_embeddings),
             retrieval_path=retrieval_path,
         )

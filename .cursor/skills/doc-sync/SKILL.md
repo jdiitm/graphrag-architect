@@ -43,7 +43,7 @@ git status --porcelain      # must be empty
 
 - The PRD (`docs/prd/`) defines what the system SHOULD do — do NOT modify PRD files.
 - The architecture spec (`docs/architecture/`) defines the target design — update it ONLY when implementation has materially diverged (new components, removed components, changed interfaces).
-- All other docs (`README.md`, `architecture_state.md`, `claude-progress.txt`) MUST reflect reality.
+- All other docs (`README.md`, `architecture_state.md`) MUST reflect reality.
 
 ## Step 1: Read the Entire Codebase
 
@@ -97,7 +97,6 @@ Read each of these files in full:
 ```
 README.md
 architecture_state.md
-claude-progress.txt
 docs/architecture/01_SYSTEM_DESIGN.md
 docs/architecture/02_DATA_DICTIONARY.md
 ```
@@ -128,16 +127,6 @@ Build a comparison table for each mutable doc. Check every factual claim against
 | Data flow description | Actual `graph_builder.py` DAG and `main.py` endpoints |
 | Graph schema (nodes/edges) | Actual `extraction_models.py` |
 | File listings per component | Actual files on disk |
-
-### claude-progress.txt checks
-
-| Check | Source of Truth |
-|-------|----------------|
-| Latest entry's "Completed" section | Actual files and git log |
-| Test counts | Actual test runner output |
-| "Unresolved" items | Actual codebase (are they still unresolved?) |
-| "Next Step" suggestions | Still relevant given current state? |
-| Quality gate numbers | Actual pylint/pytest/go output |
 
 ### docs/architecture/01_SYSTEM_DESIGN.md checks
 
@@ -174,26 +163,6 @@ For each discrepancy found, update the doc to match reality. Follow these rules:
 - ASCII diagram if data flow changed
 - File listings if files were added/removed
 
-**claude-progress.txt:**
-- Do NOT rewrite history. Only update the topmost entry's "Unresolved" section if items have been resolved since it was written.
-- If the topmost entry is stale (refers to work 2+ PRs ago), add a brief sync entry at the top:
-
-```markdown
-## <date>: Documentation Sync
-
-### State of the System
-- FR-N: <status for each>
-- Quality Gates: Pylint X/10, Python A/B, Go C/D
-- Total tests: N
-- Open PRs: <list or "none">
-
-### Unresolved
-- <current list of unimplemented items>
-
-### Next Step
-- <most impactful next task>
-```
-
 **docs/architecture/01_SYSTEM_DESIGN.md:**
 - DAG node status table (Implemented/Stub column)
 - File tree listings per component
@@ -218,7 +187,7 @@ If any docs were changed:
 
 ```bash
 cd /home/j/side/graphrag-architect
-git add README.md architecture_state.md claude-progress.txt docs/architecture/
+git add README.md architecture_state.md docs/architecture/
 git commit -m "$(cat <<'EOF'
 docs: sync documentation with codebase reality
 

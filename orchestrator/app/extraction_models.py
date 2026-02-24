@@ -17,6 +17,7 @@ class ServiceNode(BaseModel):
     language: str
     framework: str
     opentelemetry_enabled: bool
+    tenant_id: str = Field(..., min_length=1)
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -26,6 +27,7 @@ class ServiceNode(BaseModel):
 class DatabaseNode(BaseModel):
     id: str
     type: str
+    tenant_id: str = Field(..., min_length=1)
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
     content_hash: str = ""
@@ -35,6 +37,7 @@ class KafkaTopicNode(BaseModel):
     name: str
     partitions: int
     retention_ms: int
+    tenant_id: str = Field(..., min_length=1)
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
     content_hash: str = ""
@@ -44,6 +47,7 @@ class K8sDeploymentNode(BaseModel):
     id: str
     namespace: str
     replicas: int
+    tenant_id: str = Field(..., min_length=1)
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
     content_hash: str = ""

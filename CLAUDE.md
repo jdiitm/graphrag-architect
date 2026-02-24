@@ -26,12 +26,11 @@ We are implementing a **Hybrid VectorCypher Retrieval approach**:
 ## 5. The Agentic Execution Loop (Strict TDD)
 For every task you undertake, you must execute the following Red-Green-Refactor cycle in order, using XML tags to structure your reasoning:
 
-1.  **<explore>**: Run terminal commands to understand the current file state and read `claude-progress.txt`.
+1.  **<explore>**: Run terminal commands to understand the current file state and read existing implementations.
 2.  **<plan>**: Outline your exact approach. If defining a new feature, explicitly state the behaviors you will test.
 3.  **<test_red>**: Write the failing unit tests *first*. Run the test suite to prove they fail. You are strictly forbidden from writing implementation code during this step.
 4.  **<implement_green>**: Write the minimal amount of code necessary to make the failing tests pass. Run the tests to confirm success.
 5.  **<refactor>**: Clean up the code, optimize logic, and enforce the formatting invariants from Section 3. Verify tests remain green.
-6.  **<document>**: Update `claude-progress.txt` with the completed actions and state the next step.
 
 ## 6. Pre-Push / Pre-PR Quality Gates (Mandatory)
 Before any `git push` or `gh pr create`, you must pass ALL quality gates. This is non-negotiable.

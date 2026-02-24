@@ -488,6 +488,7 @@ class TestNodeMetadataOnIngestion:
             language="Go",
             framework="gin",
             opentelemetry_enabled=True,
+            tenant_id="test-tenant",
             team_owner="platform",
             namespace_acl=["production", "staging"],
         )
@@ -505,6 +506,7 @@ class TestNodeMetadataOnIngestion:
             id="auth-deploy",
             namespace="production",
             replicas=3,
+            tenant_id="test-tenant",
             team_owner="platform",
             namespace_acl=["production"],
         )
@@ -519,6 +521,7 @@ class TestNodeMetadataOnIngestion:
         node = DatabaseNode(
             id="orders-db",
             type="PostgreSQL",
+            tenant_id="test-tenant",
             team_owner="data-team",
             namespace_acl=["production", "staging"],
         )
@@ -536,6 +539,7 @@ class TestNodeMetadataOnIngestion:
             name="user-events",
             partitions=12,
             retention_ms=604800000,
+            tenant_id="test-tenant",
             team_owner="platform",
             namespace_acl=["production"],
         )

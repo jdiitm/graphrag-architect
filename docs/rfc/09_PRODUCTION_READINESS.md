@@ -276,7 +276,7 @@ gantt
 | RISK-05 | **Security exposure in LLM extraction**: Malicious code comments could inject extraction prompts or exfiltrate data via LLM responses | High | Critical | None (identified gap) | Input sanitization; output schema validation; extraction sandboxing |
 | RISK-06 | **LLM cost explosion at scale**: 1M documents * $0.075/1M tokens = $37,500 per full re-index | Medium | High | Content-hash deduplication (planned) | Fine-tuned open-source model for extraction; incremental-only re-indexing |
 | RISK-07 | **Schema drift**: Graph schema evolves without proper migration, causing query failures or data inconsistency | Medium | High | Cypher IF NOT EXISTS (idempotent) | Schema versioning system; migration runner; backward compatibility tests |
-| RISK-08 | **Key person dependency**: System knowledge concentrated in automated agents, no human operational experience | High | Medium | claude-progress.txt, audit reports, documentation | Operational runbooks; on-call rotation; knowledge transfer sessions |
+| RISK-08 | **Key person dependency**: System knowledge concentrated in automated agents, no human operational experience | High | Medium | Audit reports, architecture docs, PR history | Operational runbooks; on-call rotation; knowledge transfer sessions |
 | RISK-09 | **Regulatory compliance gap**: Enterprise customers require SOC2/GDPR before procurement | Medium | High | None (not yet required) | SOC2 gap analysis (Phase 4); GDPR endpoints (Phase 5); DPA template |
 | RISK-10 | **Embedding model drift**: Changing the embedding model invalidates all existing vectors, requiring full re-index | Low | High | None (embeddings not yet implemented) | Model versioning; side-by-side index migration; dual-read during transition |
 

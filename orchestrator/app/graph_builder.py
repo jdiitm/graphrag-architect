@@ -74,6 +74,7 @@ class IngestionState(TypedDict, total=False):
     commit_status: str
     extraction_checkpoint: Dict[str, str]
     skipped_files: List[str]
+    tenant_id: str
 
 
 def _get_workspace_max_bytes() -> int:
@@ -157,6 +158,7 @@ async def parse_source_ast(state: IngestionState) -> dict:
             + [f["path"] for f in pending if f["path"].endswith(".py")]
         )
         checkpoint.mark(extracted_paths, FileStatus.EXTRACTED)
+        tenant_id = state.get("tenant_id", "default")
         nodes: List[Any] = []
         for ast_svc in go_result.services + py_result.services:
             nodes.append(ServiceNode(
@@ -166,6 +168,7 @@ async def parse_source_ast(state: IngestionState) -> dict:
                 framework=ast_svc.framework,
                 opentelemetry_enabled=ast_svc.opentelemetry_enabled,
                 confidence=1.0,
+                tenant_id=tenant_id,
             ))
         for ast_call in go_result.calls + py_result.calls:
             nodes.append(CallsEdge(
@@ -235,8 +238,9 @@ async def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
         start = time.monotonic()
         raw_files = state.get("raw_files", [])
         existing = list(state.get("extracted_nodes", []))
+        tenant_id = state.get("tenant_id", "default")
         manifest_entities = await asyncio.to_thread(
-            parse_all_manifests, raw_files,
+            parse_all_manifests, raw_files, tenant_id,
         )
         checkpoint = _load_or_create_checkpoint(state, raw_files)
         yaml_paths = [
@@ -398,38 +402,77 @@ async def _process_chunk(
     )
 
 
+class StreamingIngestionPipeline:
+    def __init__(self, max_bytes: int = 0, chunk_size: int = 50) -> None:
+        self._max_bytes = max_bytes or _get_workspace_max_bytes()
+        self._chunk_size = chunk_size
+        self._chunk_count = 0
+        self._total_entities = 0
+        self._commit_status = "success"
+        self._skipped: List[str] = []
+
+    @property
+    def chunk_count(self) -> int:
+        return self._chunk_count
+
+    @property
+    def total_entities(self) -> int:
+        return self._total_entities
+
+    @property
+    def commit_status(self) -> str:
+        return self._commit_status
+
+    async def process_directory(self, directory_path: str) -> dict:
+        for chunk in load_directory_chunked(
+            directory_path,
+            chunk_size=self._chunk_size,
+            max_total_bytes=self._max_bytes,
+            skipped=self._skipped,
+        ):
+            await self._process_single_chunk(chunk)
+        return self._build_result()
+
+    async def process_files(self, raw_files: List[Dict[str, str]]) -> dict:
+        for i in range(0, len(raw_files), self._chunk_size):
+            chunk = raw_files[i:i + self._chunk_size]
+            await self._process_single_chunk(chunk)
+        return self._build_result()
+
+    async def _process_single_chunk(
+        self, chunk: List[Dict[str, str]],
+    ) -> None:
+        chunk_nodes, chunk_status, _ = await _process_chunk(chunk)
+        self._total_entities += len(chunk_nodes)
+        if chunk_status == "failed":
+            self._commit_status = "failed"
+        self._chunk_count += 1
+
+    def _build_result(self) -> dict:
+        return {
+            "extracted_nodes": [],
+            "commit_status": self._commit_status,
+            "extraction_errors": [],
+            "skipped_files": self._skipped,
+        }
+
+
 async def run_streaming_pipeline(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.streaming_pipeline") as span:
         directory_path = state.get("directory_path", "")
+        pipeline = StreamingIngestionPipeline()
+
         if not directory_path:
             raw_files = state.get("raw_files", [])
-            nodes, status, _ = await _process_chunk(raw_files)
-            return {
-                "extracted_nodes": nodes,
-                "commit_status": status,
-                "extraction_errors": [],
-                "skipped_files": [],
-            }
+            result = await pipeline.process_files(raw_files)
+        else:
+            result = await pipeline.process_directory(directory_path)
 
-        max_bytes = _get_workspace_max_bytes()
-        skipped: List[str] = []
-        commit_status = "success"
-        chunk_count = 0
-        total_entities = 0
-
-        for chunk in load_directory_chunked(
-            directory_path, max_total_bytes=max_bytes, skipped=skipped,
-        ):
-            chunk_nodes, chunk_status, _ = await _process_chunk(chunk)
-            total_entities += len(chunk_nodes)
-            if chunk_status == "failed":
-                commit_status = "failed"
-            chunk_count += 1
-
-        span.set_attribute("chunk_count", chunk_count)
-        span.set_attribute("total_entities", total_entities)
-        if skipped:
+        span.set_attribute("chunk_count", pipeline.chunk_count)
+        span.set_attribute("total_entities", pipeline.total_entities)
+        if result.get("skipped_files"):
+            skipped = result["skipped_files"]
             span.set_attribute("skipped_count", len(skipped))
             logger.warning(
                 "Streaming pipeline skipped %d file(s) beyond byte limit: %s",
@@ -437,12 +480,7 @@ async def run_streaming_pipeline(state: IngestionState) -> dict:
                 ", ".join(skipped[:10]),
             )
 
-        return {
-            "extracted_nodes": [],
-            "commit_status": commit_status,
-            "extraction_errors": [],
-            "skipped_files": skipped,
-        }
+        return result
 
 
 builder = StateGraph(IngestionState)

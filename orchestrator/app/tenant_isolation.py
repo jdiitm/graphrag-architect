@@ -22,6 +22,25 @@ class TenantConfig:
     max_concurrent_queries: int = 50
 
 
+@dataclass(frozen=True)
+class TenantContext:
+    tenant_id: str
+    isolation_mode: IsolationMode = IsolationMode.LOGICAL
+    database_name: str = "neo4j"
+
+    @classmethod
+    def from_config(cls, config: TenantConfig) -> TenantContext:
+        return cls(
+            tenant_id=config.tenant_id,
+            isolation_mode=config.isolation_mode,
+            database_name=config.database_name,
+        )
+
+    @classmethod
+    def default(cls, tenant_id: str = "") -> TenantContext:
+        return cls(tenant_id=tenant_id)
+
+
 class TenantDriver(Protocol):
     async def session(self, **kwargs: Any) -> Any: ...
     async def close(self) -> None: ...

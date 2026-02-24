@@ -124,6 +124,66 @@ class TestInMemoryVectorStoreDelete:
         assert "b" in ids
 
 
+@pytest.mark.asyncio
+class TestInMemoryVectorStoreTenantSearch:
+    async def test_search_with_tenant_filters_by_tenant_id(self) -> None:
+        store = InMemoryVectorStore()
+        await store.upsert(
+            "coll",
+            [
+                VectorRecord(id="a", vector=[1.0, 0.0], metadata={"tenant_id": "t1"}),
+                VectorRecord(id="b", vector=[0.9, 0.1], metadata={"tenant_id": "t2"}),
+                VectorRecord(id="c", vector=[0.8, 0.2], metadata={"tenant_id": "t1"}),
+            ],
+        )
+        results = await store.search_with_tenant("coll", [1.0, 0.0], "t1", limit=10)
+        ids = [r.id for r in results]
+        assert "a" in ids
+        assert "c" in ids
+        assert "b" not in ids
+
+    async def test_search_with_tenant_empty_collection(self) -> None:
+        store = InMemoryVectorStore()
+        results = await store.search_with_tenant("missing", [1.0, 0.0], "t1")
+        assert results == []
+
+    async def test_search_with_empty_tenant_returns_all(self) -> None:
+        store = InMemoryVectorStore()
+        await store.upsert(
+            "coll",
+            [
+                VectorRecord(id="a", vector=[1.0, 0.0], metadata={"tenant_id": "t1"}),
+                VectorRecord(id="b", vector=[0.0, 1.0], metadata={"tenant_id": "t2"}),
+            ],
+        )
+        results = await store.search_with_tenant("coll", [1.0, 0.0], "", limit=10)
+        assert len(results) == 2
+
+
+class TestCosineEdgeCases:
+    def test_mismatched_dimensions_raises(self) -> None:
+        with pytest.raises(ValueError, match="same dimension"):
+            _cosine_similarity([1.0], [1.0, 2.0])
+
+    def test_empty_vectors_return_zero(self) -> None:
+        assert _cosine_similarity([], []) == 0.0
+
+    def test_zero_vectors_return_zero(self) -> None:
+        assert _cosine_similarity([0.0, 0.0], [0.0, 0.0]) == 0.0
+
+
+class TestCreateVectorStore:
+    def test_default_returns_in_memory(self) -> None:
+        from orchestrator.app.vector_store import create_vector_store
+        store = create_vector_store()
+        assert isinstance(store, InMemoryVectorStore)
+
+    def test_qdrant_backend(self) -> None:
+        from orchestrator.app.vector_store import create_vector_store, QdrantVectorStore
+        store = create_vector_store(backend="qdrant", url="http://localhost:6333")
+        assert isinstance(store, QdrantVectorStore)
+
+
 class TestVectorStoreConfig:
     def test_from_env_defaults(self) -> None:
         with patch.dict("os.environ", {}, clear=True):

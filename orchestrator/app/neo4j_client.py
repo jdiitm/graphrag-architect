@@ -46,6 +46,7 @@ def _service_cypher(entity: ServiceNode) -> CypherOp:
         "MERGE (n:Service {id: $id}) "
         "SET n.name = $name, n.language = $language, "
         "n.framework = $framework, n.opentelemetry_enabled = $opentelemetry_enabled, "
+        "n.tenant_id = $tenant_id, "
         "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl, "
         "n.confidence = $confidence"
     )
@@ -56,6 +57,7 @@ def _database_cypher(entity: DatabaseNode) -> CypherOp:
     query = (
         "MERGE (n:Database {id: $id}) "
         "SET n.type = $type, "
+        "n.tenant_id = $tenant_id, "
         "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
     )
     return query, entity.model_dump()
@@ -65,6 +67,7 @@ def _kafka_topic_cypher(entity: KafkaTopicNode) -> CypherOp:
     query = (
         "MERGE (n:KafkaTopic {name: $name}) "
         "SET n.partitions = $partitions, n.retention_ms = $retention_ms, "
+        "n.tenant_id = $tenant_id, "
         "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
     )
     return query, entity.model_dump()
@@ -74,6 +77,7 @@ def _k8s_deployment_cypher(entity: K8sDeploymentNode) -> CypherOp:
     query = (
         "MERGE (n:K8sDeployment {id: $id}) "
         "SET n.namespace = $namespace, n.replicas = $replicas, "
+        "n.tenant_id = $tenant_id, "
         "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
     )
     return query, entity.model_dump()
@@ -189,6 +193,7 @@ _UNWIND_QUERIES: Dict[type, str] = {
         "SET n.name = row.name, n.language = row.language, "
         "n.framework = row.framework, "
         "n.opentelemetry_enabled = row.opentelemetry_enabled, "
+        "n.tenant_id = row.tenant_id, "
         "n.team_owner = row.team_owner, "
         "n.namespace_acl = row.namespace_acl, "
         "n.confidence = row.confidence"
@@ -197,6 +202,7 @@ _UNWIND_QUERIES: Dict[type, str] = {
         "UNWIND $batch AS row "
         "MERGE (n:Database {id: row.id}) "
         "SET n.type = row.type, "
+        "n.tenant_id = row.tenant_id, "
         "n.team_owner = row.team_owner, "
         "n.namespace_acl = row.namespace_acl"
     ),
@@ -205,6 +211,7 @@ _UNWIND_QUERIES: Dict[type, str] = {
         "MERGE (n:KafkaTopic {name: row.name}) "
         "SET n.partitions = row.partitions, "
         "n.retention_ms = row.retention_ms, "
+        "n.tenant_id = row.tenant_id, "
         "n.team_owner = row.team_owner, "
         "n.namespace_acl = row.namespace_acl"
     ),
@@ -213,6 +220,7 @@ _UNWIND_QUERIES: Dict[type, str] = {
         "MERGE (n:K8sDeployment {id: row.id}) "
         "SET n.namespace = row.namespace, "
         "n.replicas = row.replicas, "
+        "n.tenant_id = row.tenant_id, "
         "n.team_owner = row.team_owner, "
         "n.namespace_acl = row.namespace_acl"
     ),
@@ -330,35 +338,84 @@ class GraphRepository:
         current_ingestion_id: str,
         max_age_hours: int = 24,
     ) -> int:
+        return await self.tombstone_stale_edges(current_ingestion_id)
+
+    async def tombstone_stale_edges(
+        self,
+        current_ingestion_id: str,
+    ) -> int:
         query = (
             "MATCH ()-[r]->() "
             "WHERE r.ingestion_id IS NOT NULL "
             "AND r.ingestion_id <> $current_id "
-            "AND r.last_seen_at < $cutoff "
-            "DELETE r RETURN count(r) AS pruned"
+            "AND r.tombstoned_at IS NULL "
+            "SET r.tombstoned_at = $timestamp "
+            "RETURN count(r) AS tombstoned"
         )
-        cutoff = (
-            datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
-        ).isoformat()
+        timestamp = datetime.now(timezone.utc).isoformat()
         async with self._session() as session:
             result = await session.execute_write(
-                self._run_prune, query=query,
-                current_id=current_ingestion_id, cutoff=cutoff,
+                self._run_tombstone, query=query,
+                current_id=current_ingestion_id, timestamp=timestamp,
             )
             return result
 
     @staticmethod
-    async def _run_prune(
+    async def _run_tombstone(
         tx: AsyncManagedTransaction,
         query: str,
         current_id: str,
-        cutoff: str,
+        timestamp: str,
     ) -> int:
-        result = await tx.run(query, current_id=current_id, cutoff=cutoff)
+        result = await tx.run(
+            query, current_id=current_id, timestamp=timestamp,
+        )
         record = await result.single()
         if record is None:
             return 0
-        return record["pruned"]
+        return record["tombstoned"]
+
+    async def reap_tombstoned_edges(
+        self,
+        ttl_days: int = 7,
+        batch_size: int = 100,
+    ) -> int:
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=ttl_days)
+        ).isoformat()
+        total_reaped = 0
+        while True:
+            query = (
+                "MATCH ()-[r]->() "
+                "WHERE r.tombstoned_at IS NOT NULL "
+                "AND r.tombstoned_at < $cutoff "
+                "WITH r LIMIT $batch_size "
+                "DELETE r RETURN count(r) AS reaped"
+            )
+            async with self._session() as session:
+                reaped = await session.execute_write(
+                    self._run_reap, query=query,
+                    cutoff=cutoff, batch_size=batch_size,
+                )
+                total_reaped += reaped
+                if reaped < batch_size:
+                    break
+        return total_reaped
+
+    @staticmethod
+    async def _run_reap(
+        tx: AsyncManagedTransaction,
+        query: str,
+        cutoff: str,
+        batch_size: int,
+    ) -> int:
+        result = await tx.run(
+            query, cutoff=cutoff, batch_size=batch_size,
+        )
+        record = await result.single()
+        if record is None:
+            return 0
+        return record["reaped"]
 
     async def create_vector_index(
         self,

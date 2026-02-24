@@ -89,6 +89,7 @@ class TestCompletionTrackerWiredIntoCommit:
             ServiceNode(
                 id="svc-1", name="auth", language="go",
                 framework="gin", opentelemetry_enabled=False, confidence=1.0,
+                tenant_id="test-tenant",
             ),
         ]
 
