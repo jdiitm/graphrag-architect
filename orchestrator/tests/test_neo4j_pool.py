@@ -8,8 +8,12 @@ from orchestrator.app import neo4j_pool
 @pytest.fixture(autouse=True)
 def _reset_pool():
     neo4j_pool._state["driver"] = None
+    neo4j_pool._state["query_timeout"] = None
+    neo4j_pool._state["database"] = None
     yield
     neo4j_pool._state["driver"] = None
+    neo4j_pool._state["query_timeout"] = None
+    neo4j_pool._state["database"] = None
 
 
 class TestGetDriverBeforeInit:
@@ -64,6 +68,30 @@ class TestInitDriver:
         assert call_kwargs["max_transaction_retry_time"] == 99.0
 
 
+class TestGetQueryTimeout:
+    def test_returns_stored_timeout_after_init(self):
+        fake_config = MagicMock()
+        fake_config.uri = "bolt://host:7687"
+        fake_config.username = "neo4j"
+        fake_config.password = "pw"
+        fake_config.query_timeout = 15.0
+
+        with patch(
+            "orchestrator.app.neo4j_pool.Neo4jConfig.from_env",
+            return_value=fake_config,
+        ), patch(
+            "orchestrator.app.neo4j_pool.AsyncGraphDatabase.driver",
+            return_value=MagicMock(),
+        ):
+            neo4j_pool.init_driver()
+
+        assert neo4j_pool.get_query_timeout() == 15.0
+
+    def test_raises_before_init(self):
+        with pytest.raises(RuntimeError, match="not initialized"):
+            neo4j_pool.get_query_timeout()
+
+
 class TestGetDriverAfterInit:
     def test_returns_singleton_driver(self):
         sentinel = MagicMock()
@@ -81,6 +109,40 @@ class TestGetDriverAfterInit:
         second = neo4j_pool.get_driver()
 
         assert first is second
+
+
+class TestDatabaseConfig:
+    def test_get_database_returns_stored_value(self):
+        fake_config = MagicMock()
+        fake_config.uri = "neo4j://host:7687"
+        fake_config.username = "neo4j"
+        fake_config.password = "pw"
+        fake_config.query_timeout = 30.0
+        fake_config.database = "graphrag"
+
+        with patch(
+            "orchestrator.app.neo4j_pool.Neo4jConfig.from_env",
+            return_value=fake_config,
+        ), patch(
+            "orchestrator.app.neo4j_pool.AsyncGraphDatabase.driver",
+            return_value=MagicMock(),
+        ):
+            neo4j_pool.init_driver()
+
+        assert neo4j_pool.get_database() == "graphrag"
+
+    def test_get_database_defaults_to_neo4j(self):
+        from orchestrator.app.config import Neo4jConfig
+        cfg = Neo4jConfig(
+            uri="neo4j://host:7687",
+            username="neo4j",
+            password="pw",
+        )
+        assert cfg.database == "neo4j"
+
+    def test_get_database_raises_before_init(self):
+        with pytest.raises(RuntimeError, match="not initialized"):
+            neo4j_pool.get_database()
 
 
 class TestCloseDriver:

@@ -19,7 +19,7 @@ from orchestrator.app.access_control import (
 )
 from orchestrator.app.config import AuthConfig, KafkaConsumerConfig, RateLimitConfig
 from orchestrator.app.executor import shutdown_pool
-from orchestrator.app.graph_builder import ingestion_graph
+from orchestrator.app.graph_builder import ingestion_graph, run_streaming_pipeline
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
 from orchestrator.app.kafka_consumer import AsyncKafkaConsumer
 from orchestrator.app.checkpoint_store import close_checkpointer, init_checkpointer
@@ -207,6 +207,23 @@ async def ingest(
         return response
     finally:
         sem.release()
+
+
+async def _run_streaming_ingestion(directory_path: str) -> IngestResponse:
+    try:
+        result = await run_streaming_pipeline({
+            "directory_path": directory_path,
+        })
+    except Exception as exc:
+        logger.exception("Streaming ingestion failed")
+        raise HTTPException(
+            status_code=500, detail="Internal ingestion error"
+        ) from exc
+    return IngestResponse(
+        status=result.get("commit_status", "unknown"),
+        entities_extracted=len(result.get("extracted_nodes", [])),
+        errors=result.get("extraction_errors", []),
+    )
 
 
 async def _run_ingestion(request: IngestRequest) -> IngestResponse:

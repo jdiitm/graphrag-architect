@@ -199,7 +199,7 @@ class TestCypherPermissionFilter:
         assert filtered == original
         assert params == {}
 
-    def test_inject_skips_where_inside_nested_subquery(self):
+    def test_inject_covers_call_subquery_scopes(self):
         principal = SecurityPrincipal(
             team="platform", namespace="production", role="viewer"
         )
@@ -214,11 +214,12 @@ class TestCypherPermissionFilter:
         assert "m.type = 'PostgreSQL'" in filtered, (
             "Subquery WHERE condition must be preserved"
         )
-        subquery_where = filtered.find("WHERE", filtered.find("CALL {"))
-        outer_acl_pos = filtered.find("n.team_owner")
+        outer_acl = filtered.find("n.team_owner")
+        assert outer_acl >= 0, "ACL must be injected on the outer MATCH"
+        inner_acl = filtered.find("n.team_owner", filtered.find("CALL"))
         subquery_end = filtered.find("}")
-        assert outer_acl_pos > subquery_end, (
-            "ACL clause must not be injected inside the subquery"
+        assert inner_acl >= 0 and inner_acl < subquery_end, (
+            "AST-level ACL must also inject inside CALL subquery scope"
         )
 
     def test_inject_skips_where_inside_case_expression(self):

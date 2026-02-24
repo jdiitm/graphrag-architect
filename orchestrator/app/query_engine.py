@@ -13,9 +13,15 @@ from orchestrator.app.access_control import (
     SecurityPrincipal,
 )
 from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfig, RAGEvalConfig
+from orchestrator.app.cypher_sandbox import (
+    QueryTooExpensiveError,
+    SandboxedQueryExecutor,
+)
 from orchestrator.app.prompt_sanitizer import sanitize_query_input
 from orchestrator.app.cypher_validator import CypherValidationError, validate_cypher_readonly
-from orchestrator.app.neo4j_pool import get_driver
+from orchestrator.app.query_templates import TemplateCatalog, match_template
+from orchestrator.app.subgraph_cache import SubgraphCache, normalize_cypher
+from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
@@ -36,6 +42,18 @@ _ROUTE_MAP = {
 }
 
 MAX_CYPHER_ITERATIONS = 3
+
+_SANDBOX = SandboxedQueryExecutor()
+_TEMPLATE_CATALOG = TemplateCatalog()
+_SUBGRAPH_CACHE = SubgraphCache(maxsize=256)
+
+
+def _sandbox_inject_limit(cypher: str) -> str:
+    return _SANDBOX.inject_limit(cypher)
+
+
+async def _sandbox_explain_check(session: Any, cypher: str) -> None:
+    await _SANDBOX.explain_check(session, cypher)
 
 _VECTOR_SEARCH_CYPHER = (
     "CALL db.index.vector.queryNodes('service_embedding_index', $limit, $query_embedding) "
@@ -85,6 +103,10 @@ async def _embed_query(text: str) -> Optional[List[float]]:
 
 def _get_neo4j_driver() -> AsyncDriver:
     return get_driver()
+
+
+def _get_query_timeout() -> float:
+    return get_query_timeout()
 
 
 @asynccontextmanager
@@ -215,8 +237,11 @@ async def vector_retrieve(state: QueryState) -> dict:
                     result = await tx.run(filtered_cypher, **params)
                     return await result.data()
 
+                timeout = _get_query_timeout()
                 async with driver.session() as session:
-                    records = await session.execute_read(_tx_func)
+                    records = await session.execute_read(
+                        _tx_func, timeout=timeout,
+                    )
                 return {"candidates": records}
         finally:
             QUERY_DURATION.record(
@@ -243,8 +268,9 @@ async def _fetch_candidates(
         result = await tx.run(vec_cypher, **params)
         return await result.data()
 
+    timeout = _get_query_timeout()
     async with driver.session() as session:
-        return await session.execute_read(_vector_tx)
+        return await session.execute_read(_vector_tx, timeout=timeout)
 
 
 async def single_hop_retrieve(state: QueryState) -> dict:
@@ -272,8 +298,11 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                     )
                     return await result.data()
 
+                timeout = _get_query_timeout()
                 async with driver.session() as session:
-                    hop_records = await session.execute_read(_hop_tx)
+                    hop_records = await session.execute_read(
+                        _hop_tx, timeout=timeout,
+                    )
 
                 return {
                     "candidates": candidates,
@@ -286,12 +315,76 @@ async def single_hop_retrieve(state: QueryState) -> dict:
             )
 
 
+async def _execute_sandboxed_read(
+    driver: AsyncDriver,
+    cypher: str,
+    acl_params: Dict[str, str],
+) -> Optional[list]:
+    cache_key = normalize_cypher(cypher) + "|" + str(sorted(acl_params.items()))
+    cached = _SUBGRAPH_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    sandboxed = _sandbox_inject_limit(cypher)
+    frozen = tuple(acl_params.items())
+    async with driver.session() as session:
+        try:
+            await _sandbox_explain_check(session, sandboxed)
+        except QueryTooExpensiveError:
+            _query_logger.warning(
+                "Cypher query too expensive, skipping: %s",
+                sandboxed[:120],
+            )
+            return None
+
+        async def _tx(
+            tx: AsyncManagedTransaction,
+            _q: str = sandboxed,
+            _fp: tuple = frozen,
+        ) -> list:
+            result = await tx.run(_q, **dict(_fp))
+            return await result.data()
+
+        timeout = _get_query_timeout()
+        records = await session.execute_read(_tx, timeout=timeout)
+
+    if records:
+        _SUBGRAPH_CACHE.put(cache_key, records)
+    return records
+
+
+async def _try_template_match(
+    state: QueryState, driver: AsyncDriver,
+) -> Optional[dict]:
+    tmatch = match_template(state["query"])
+    if tmatch is None:
+        return None
+    template = _TEMPLATE_CATALOG.get(tmatch.template_name)
+    if template is None:
+        return None
+    acl_cypher, acl_params = _apply_acl(template.cypher, state)
+    merged_params = {**tmatch.params, **acl_params}
+    records = await _execute_sandboxed_read(
+        driver, acl_cypher, merged_params,
+    )
+    if records is None or not records:
+        return None
+    return {
+        "cypher_query": template.cypher,
+        "cypher_results": records,
+        "iteration_count": 0,
+    }
+
+
 async def cypher_retrieve(state: QueryState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("query.cypher_retrieve"):
         start = time.monotonic()
         try:
             async with _neo4j_session() as driver:
+                template_result = await _try_template_match(state, driver)
+                if template_result is not None:
+                    return template_result
                 records: list = []
                 generated = ""
                 prior_attempt = ""
@@ -315,18 +408,15 @@ async def cypher_retrieve(state: QueryState) -> dict:
                     acl_cypher, acl_params = _apply_acl(
                         validated, state,
                     )
-                    frozen_acl = tuple(acl_params.items())
-
-                    async def _cypher_tx(
-                        tx: AsyncManagedTransaction,
-                        _q: str = acl_cypher,
-                        _fp: tuple = frozen_acl,
-                    ) -> list:
-                        result = await tx.run(_q, **dict(_fp))
-                        return await result.data()
-
-                    async with driver.session() as session:
-                        records = await session.execute_read(_cypher_tx)
+                    records = await _execute_sandboxed_read(
+                        driver, acl_cypher, acl_params,
+                    )
+                    if records is None:
+                        return {
+                            "cypher_query": validated,
+                            "cypher_results": [],
+                            "iteration_count": iteration,
+                        }
                     if records:
                         return {
                             "cypher_query": validated,
@@ -379,8 +469,11 @@ async def _hybrid_vector_phase(state: QueryState) -> list:
             result = await tx.run(vec_cypher, **params)
             return await result.data()
 
+        timeout = _get_query_timeout()
         async with driver.session() as session:
-            return await session.execute_read(_vector_tx)
+            return await session.execute_read(
+                _vector_tx, timeout=timeout,
+            )
 
 
 async def _hybrid_aggregation_phase(
@@ -404,12 +497,16 @@ async def _hybrid_aggregation_phase(
     agg_acl_cypher, agg_acl_params = _apply_acl(validated_agg, state)
 
     async with _neo4j_session() as driver:
-        async def _agg_tx(tx: AsyncManagedTransaction) -> list:
-            result = await tx.run(agg_acl_cypher, **agg_acl_params)
-            return await result.data()
-
-        async with driver.session() as session:
-            agg_records = await session.execute_read(_agg_tx)
+        agg_records = await _execute_sandboxed_read(
+            driver, agg_acl_cypher, agg_acl_params,
+        )
+        if agg_records is None:
+            return {
+                "candidates": candidates,
+                "cypher_query": validated_agg,
+                "cypher_results": [],
+                "iteration_count": 1,
+            }
 
     return {
         "candidates": candidates,

@@ -50,6 +50,36 @@ class InMemoryBlobStore:
         return key in self._store
 
 
+async def upload_files_to_blob(
+    store: BlobStore,
+    files: list[dict[str, str]],
+    prefix: str = "",
+) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    for entry in files:
+        path = entry["path"]
+        content = entry.get("content", "")
+        blob_key = f"{prefix}/{path}" if prefix else path
+        await store.put(blob_key, content.encode("utf-8"))
+        refs.append({"path": path, "blob_key": blob_key})
+    return refs
+
+
+async def resolve_file_content(
+    store: BlobStore,
+    file_refs: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    resolved: list[dict[str, str]] = []
+    for ref in file_refs:
+        if "content" in ref:
+            resolved.append(ref)
+            continue
+        blob_key = ref.get("blob_key", "")
+        data = await store.get(blob_key)
+        resolved.append({"path": ref["path"], "content": data.decode("utf-8")})
+    return resolved
+
+
 class BlobFetcher:
     def __init__(self, store: BlobStore) -> None:
         self._store = store

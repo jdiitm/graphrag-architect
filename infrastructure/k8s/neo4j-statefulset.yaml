@@ -6,7 +6,7 @@ metadata:
   labels:
     app: neo4j
 spec:
-  serviceName: neo4j
+  serviceName: neo4j-headless
   replicas: 3
   selector:
     matchLabels:
@@ -28,6 +28,8 @@ spec:
               containerPort: 7687
             - name: http
               containerPort: 7474
+            - name: discovery
+              containerPort: 5000
           env:
             - name: NEO4J_PASSWORD
               valueFrom:
@@ -83,6 +85,28 @@ spec:
         resources:
           requests:
             storage: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: neo4j-headless
+  namespace: graphrag
+  labels:
+    app: neo4j
+spec:
+  clusterIP: None
+  selector:
+    app: neo4j
+  ports:
+    - name: bolt
+      port: 7687
+      targetPort: bolt
+    - name: http
+      port: 7474
+      targetPort: http
+    - name: discovery
+      port: 5000
+      targetPort: discovery
 ---
 apiVersion: v1
 kind: Service

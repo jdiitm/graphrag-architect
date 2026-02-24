@@ -79,3 +79,58 @@ class TestBlobFetcher:
         payload = {"content": "package main"}
         content = await fetcher.fetch_if_blob(payload)
         assert content is None
+
+
+class TestUploadFilesToBlob:
+
+    @pytest.mark.asyncio
+    async def test_uploads_and_returns_refs(self) -> None:
+        from orchestrator.app.blob_fetcher import upload_files_to_blob
+
+        store = InMemoryBlobStore()
+        files = [
+            {"path": "main.go", "content": "package main"},
+            {"path": "utils.py", "content": "def foo(): pass"},
+        ]
+        refs = await upload_files_to_blob(store, files, prefix="run-1")
+        assert len(refs) == 2
+        assert refs[0]["path"] == "main.go"
+        assert "blob_key" in refs[0]
+        assert "content" not in refs[0]
+        stored = await store.get(refs[0]["blob_key"])
+        assert stored == b"package main"
+
+    @pytest.mark.asyncio
+    async def test_empty_files_returns_empty(self) -> None:
+        from orchestrator.app.blob_fetcher import upload_files_to_blob
+
+        store = InMemoryBlobStore()
+        refs = await upload_files_to_blob(store, [], prefix="run-2")
+        assert refs == []
+
+
+class TestResolveFileContent:
+
+    @pytest.mark.asyncio
+    async def test_resolves_blob_ref_to_content(self) -> None:
+        from orchestrator.app.blob_fetcher import (
+            resolve_file_content,
+            upload_files_to_blob,
+        )
+
+        store = InMemoryBlobStore()
+        files = [{"path": "app.py", "content": "import os"}]
+        refs = await upload_files_to_blob(store, files, prefix="run-3")
+        resolved = await resolve_file_content(store, refs)
+        assert len(resolved) == 1
+        assert resolved[0]["path"] == "app.py"
+        assert resolved[0]["content"] == "import os"
+
+    @pytest.mark.asyncio
+    async def test_passthrough_inline_content(self) -> None:
+        from orchestrator.app.blob_fetcher import resolve_file_content
+
+        store = InMemoryBlobStore()
+        files = [{"path": "inline.go", "content": "package main"}]
+        resolved = await resolve_file_content(store, files)
+        assert resolved[0]["content"] == "package main"

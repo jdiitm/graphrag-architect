@@ -375,6 +375,90 @@ func TestDispatcherDLQAckUnblockedByContextCancel(t *testing.T) {
 	}
 }
 
+func TestDispatcherJobTimeoutRoutesDLQ(t *testing.T) {
+	proc := &spyProcessor{
+		handler: func(ctx context.Context, job domain.Job) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+				return nil
+			}
+		},
+	}
+
+	cfg := dispatcher.Config{
+		NumWorkers: 1,
+		MaxRetries: 1,
+		JobBuffer:  1,
+		DLQBuffer:  1,
+		JobTimeout: 100 * time.Millisecond,
+	}
+	d := dispatcher.New(cfg, proc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	d.Jobs() <- makeJob("slow-poison")
+
+	select {
+	case result := <-d.DLQ():
+		if result.Err == nil {
+			t.Fatal("expected non-nil error for timed-out job")
+		}
+		close(result.Done)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for DLQ result from poison pill")
+	}
+
+	select {
+	case <-d.Acks():
+	case <-time.After(2 * time.Second):
+		t.Fatal("ack not sent after timed-out job routed to DLQ")
+	}
+
+	cancel()
+	<-done
+}
+
+func TestDispatcherJobTimeoutDoesNotAffectFastJobs(t *testing.T) {
+	proc := &spyProcessor{}
+	cfg := dispatcher.Config{
+		NumWorkers: 1,
+		MaxRetries: 1,
+		JobBuffer:  1,
+		DLQBuffer:  1,
+		JobTimeout: 5 * time.Second,
+	}
+	d := dispatcher.New(cfg, proc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	d.Jobs() <- makeJob("fast-key")
+
+	select {
+	case <-d.Acks():
+	case <-time.After(2 * time.Second):
+		t.Fatal("ack not sent for fast job with job timeout configured")
+	}
+
+	cancel()
+	<-done
+
+	if proc.CallCount() != 1 {
+		t.Fatalf("expected 1 call, got %d", proc.CallCount())
+	}
+}
+
 func TestDispatcherDrainsOnClosedChannel(t *testing.T) {
 	proc := &spyProcessor{}
 	cfg := dispatcher.Config{NumWorkers: 2, MaxRetries: 1, JobBuffer: 4, DLQBuffer: 1}

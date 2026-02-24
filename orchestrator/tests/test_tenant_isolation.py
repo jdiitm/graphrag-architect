@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+import os
+
 import pytest
 
 from orchestrator.app.tenant_isolation import (
@@ -7,8 +10,6 @@ from orchestrator.app.tenant_isolation import (
     TenantAwareDriverPool,
     TenantConfig,
     TenantRegistry,
-    build_tenant_params,
-    inject_tenant_filter,
 )
 
 
@@ -62,29 +63,6 @@ class TestTenantRegistry:
         assert registry.remove("acme") is False
 
 
-class TestTenantFilterInjection:
-
-    def test_inject_into_where_clause(self) -> None:
-        cypher = "MATCH (n:Service) WHERE n.name = $name RETURN n"
-        result = inject_tenant_filter(cypher, "acme")
-        assert "n.tenant_id = $__tenant_id" in result
-        assert result.index("n.tenant_id") < result.index("n.name")
-
-    def test_inject_without_where(self) -> None:
-        cypher = "MATCH (n:Service) RETURN n"
-        result = inject_tenant_filter(cypher, "acme")
-        assert "WHERE n.tenant_id = $__tenant_id" in result
-
-    def test_custom_alias(self) -> None:
-        cypher = "MATCH (svc:Service) WHERE svc.name = $name RETURN svc"
-        result = inject_tenant_filter(cypher, "acme", alias="svc")
-        assert "svc.tenant_id = $__tenant_id" in result
-
-    def test_build_params(self) -> None:
-        params = build_tenant_params("acme")
-        assert params == {"__tenant_id": "acme"}
-
-
 class TestTenantAwareDriverPool:
 
     def test_returns_default_for_unknown_tenant(self) -> None:
@@ -115,3 +93,53 @@ class TestTenantAwareDriverPool:
         await pool.close_all()
         assert d1.closed
         assert d2.closed
+
+
+class TestDeadCodeRemoved:
+
+    def test_inject_tenant_filter_not_exported(self) -> None:
+        import orchestrator.app.tenant_isolation as mod
+        assert not hasattr(mod, "inject_tenant_filter")
+
+    def test_build_tenant_params_not_exported(self) -> None:
+        import orchestrator.app.tenant_isolation as mod
+        assert not hasattr(mod, "build_tenant_params")
+
+
+class TestNoStringBasedCypherManipulation:
+
+    _SOURCE_DIR = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "app",
+    )
+
+    def _scan_source_for_find_calls(self, forbidden_args):
+        violations = []
+        for filename in os.listdir(self._SOURCE_DIR):
+            if not filename.endswith(".py"):
+                continue
+            filepath = os.path.join(self._SOURCE_DIR, filename)
+            with open(filepath, encoding="utf-8") as fh:
+                try:
+                    tree = ast.parse(fh.read(), filename)
+                except SyntaxError:
+                    continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if not (isinstance(func, ast.Attribute) and func.attr == "find"):
+                    continue
+                if not node.args:
+                    continue
+                arg = node.args[0]
+                if isinstance(arg, ast.Constant) and arg.value in forbidden_args:
+                    violations.append(
+                        f"{filename}:{node.lineno} .find({arg.value!r})"
+                    )
+        return violations
+
+    def test_no_string_find_where_in_source(self) -> None:
+        violations = self._scan_source_for_find_calls({"WHERE", "RETURN"})
+        assert violations == [], (
+            f"String-based Cypher manipulation detected: {violations}"
+        )

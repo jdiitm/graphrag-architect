@@ -57,6 +57,7 @@ class Neo4jConfig:
     username: str
     password: str
     query_timeout: float = 30.0
+    database: str = "neo4j"
 
     @classmethod
     def from_env(cls) -> Neo4jConfig:
@@ -65,6 +66,7 @@ class Neo4jConfig:
             username=os.environ.get("NEO4J_USERNAME", "neo4j"),
             password=os.environ["NEO4J_PASSWORD"],
             query_timeout=float(os.environ.get("NEO4J_QUERY_TIMEOUT", "30")),
+            database=os.environ.get("NEO4J_DATABASE", "neo4j"),
         )
 
 
