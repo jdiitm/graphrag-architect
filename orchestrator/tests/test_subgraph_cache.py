@@ -89,9 +89,6 @@ class TestSubgraphCacheWiredIntoQueryEngine:
         params: dict[str, str] = {}
 
         with patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
-        ), patch(
             "orchestrator.app.query_engine._get_query_timeout",
             return_value=30.0,
         ):

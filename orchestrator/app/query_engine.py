@@ -14,7 +14,6 @@ from orchestrator.app.access_control import (
 )
 from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfig, RAGEvalConfig
 from orchestrator.app.cypher_sandbox import (
-    QueryTooExpensiveError,
     SandboxedQueryExecutor,
 )
 from orchestrator.app.context_manager import TokenBudget, truncate_context
@@ -58,8 +57,6 @@ def _sandbox_inject_limit(cypher: str) -> str:
     return _SANDBOX.inject_limit(cypher)
 
 
-async def _sandbox_explain_check(session: Any, cypher: str) -> None:
-    await _SANDBOX.explain_check(session, cypher)
 
 _VECTOR_SEARCH_CYPHER = (
     "CALL db.index.vector.queryNodes('service_embedding_index', $limit, $query_embedding) "
@@ -334,15 +331,6 @@ async def _execute_sandboxed_read(
     sandboxed = _sandbox_inject_limit(cypher)
     frozen = tuple(acl_params.items())
     async with driver.session() as session:
-        try:
-            await _sandbox_explain_check(session, sandboxed)
-        except QueryTooExpensiveError:
-            _query_logger.warning(
-                "Cypher query too expensive, skipping: %s",
-                sandboxed[:120],
-            )
-            return None
-
         async def _tx(
             tx: AsyncManagedTransaction,
             _q: str = sandboxed,

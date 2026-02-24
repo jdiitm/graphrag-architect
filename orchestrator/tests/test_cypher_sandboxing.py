@@ -94,46 +94,43 @@ class TestNestedSubqueryLimitEnforcement:
             )
 
 
-class TestExplainPreFlight:
+class TestNoExplainPreCheck:
 
     @pytest.mark.asyncio
-    async def test_rejects_query_above_row_threshold(self) -> None:
-        config = CypherSandboxConfig(max_estimated_rows=100_000)
+    async def test_execute_read_does_not_run_explain(self) -> None:
+        config = CypherSandboxConfig()
         executor = SandboxedQueryExecutor(config)
 
+        queries_run: list[str] = []
         mock_session = AsyncMock()
-        mock_result = AsyncMock()
-        mock_result.data.return_value = [
-            {"Plan": {"estimatedRows": 500_000}}
-        ]
 
-        async def _explain_run(query, **kwargs):
-            return mock_result
+        async def _tx(tx):
+            return [{"n": "result"}]
 
-        mock_session.run = _explain_run
+        mock_session.execute_read = _tx
 
-        from orchestrator.app.cypher_sandbox import QueryTooExpensiveError
+        original_run = mock_session.run
 
-        with pytest.raises(QueryTooExpensiveError):
-            await executor.explain_check(mock_session, "MATCH (n) RETURN n")
+        async def _tracking_run(query, **kwargs):
+            queries_run.append(query)
+            return original_run(query, **kwargs)
 
-    @pytest.mark.asyncio
-    async def test_allows_query_below_threshold(self) -> None:
-        config = CypherSandboxConfig(max_estimated_rows=100_000)
-        executor = SandboxedQueryExecutor(config)
+        mock_session.run = _tracking_run
 
-        mock_session = AsyncMock()
-        mock_result = AsyncMock()
-        mock_result.data.return_value = [
-            {"Plan": {"estimatedRows": 500}}
-        ]
+        await executor.execute_read(
+            mock_session, "MATCH (n:Service) RETURN n", {},
+        )
 
-        async def _explain_run(query, **kwargs):
-            return mock_result
+        explain_queries = [q for q in queries_run if "EXPLAIN" in q.upper()]
+        assert len(explain_queries) == 0, (
+            "execute_read must NOT run EXPLAIN pre-checks. "
+            "Use Neo4j transaction timeout instead. "
+            f"Found EXPLAIN queries: {explain_queries}"
+        )
 
-        mock_session.run = _explain_run
-
-        await executor.explain_check(mock_session, "MATCH (n) RETURN n LIMIT 10")
+    def test_config_has_query_timeout(self) -> None:
+        config = CypherSandboxConfig(query_timeout_seconds=30.0)
+        assert config.query_timeout_seconds == 30.0
 
 
 class TestTimeoutEnforcement:

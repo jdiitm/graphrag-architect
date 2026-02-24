@@ -201,9 +201,6 @@ class TestCypherRetrieve:
             new_callable=AsyncMock,
             return_value="MATCH (s:Service)-[:CALLS*]->(t) RETURN s, t",
         ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
-        ), patch(
             "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
             return_value=None,
@@ -242,9 +239,6 @@ class TestCypherRetrieve:
             "orchestrator.app.query_engine._generate_cypher",
             generate_mock,
         ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
-        ), patch(
             "orchestrator.app.query_engine.dynamic_cypher_allowed",
             return_value=True,
         ):
@@ -281,9 +275,6 @@ class TestCypherRetrieve:
         ), patch(
             "orchestrator.app.query_engine._generate_cypher",
             generate_mock,
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
         ), patch(
             "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
@@ -337,9 +328,6 @@ class TestHybridRetrieve:
             "orchestrator.app.query_engine._generate_cypher",
             new_callable=AsyncMock,
             return_value="MATCH (s:Service)-[:CALLS*]->(t) RETURN s.name, count(t)",
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
         ):
             result = await hybrid_retrieve(state)
 
@@ -391,9 +379,6 @@ class TestHybridRetrieve:
         ), patch(
             "orchestrator.app.query_engine._generate_cypher",
             side_effect=fake_generate_cypher,
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
         ):
             await hybrid_retrieve(state)
 
@@ -538,9 +523,6 @@ class TestReadTransactions:
             "orchestrator.app.query_engine._generate_cypher",
             new_callable=AsyncMock,
             return_value="MATCH (s:Service)-[:CALLS*]->(t) RETURN s, t",
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
         ):
             await cypher_retrieve(state)
 
@@ -576,9 +558,6 @@ class TestReadTransactions:
             "orchestrator.app.query_engine._generate_cypher",
             new_callable=AsyncMock,
             return_value="MATCH (n) RETURN count(n)",
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
         ):
             await hybrid_retrieve(state)
 
@@ -734,46 +713,11 @@ class TestCypherSandboxWiring:
             "orchestrator.app.query_engine._generate_cypher",
             new_callable=AsyncMock,
             return_value="MATCH (s:Service)-[:CALLS*]->(t) RETURN s, t",
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
         ):
             result = await cypher_retrieve(state)
 
         assert len(executed_queries) >= 1
         assert "LIMIT" in executed_queries[0].upper()
-
-    @pytest.mark.asyncio
-    async def test_cypher_retrieve_returns_empty_on_expensive_query(
-        self, base_query_state
-    ):
-        from orchestrator.app.cypher_sandbox import QueryTooExpensiveError
-        from orchestrator.app.query_engine import cypher_retrieve
-
-        mock_session = _make_neo4j_session(run_return=[])
-        mock_driver = mock_neo4j_driver_with_session(mock_session)
-
-        state = _make_state(
-            base_query_state,
-            query="blast radius if auth fails?",
-            retrieval_path="cypher",
-        )
-
-        with patch(
-            "orchestrator.app.query_engine._get_neo4j_driver",
-            return_value=mock_driver,
-        ), patch(
-            "orchestrator.app.query_engine._generate_cypher",
-            new_callable=AsyncMock,
-            return_value="MATCH (n) RETURN n",
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
-            side_effect=QueryTooExpensiveError("too many rows"),
-        ):
-            result = await cypher_retrieve(state)
-
-        assert result["cypher_results"] == []
 
     @pytest.mark.asyncio
     async def test_hybrid_retrieve_injects_limit_on_aggregation(
@@ -829,9 +773,6 @@ class TestCypherSandboxWiring:
             "orchestrator.app.query_engine._generate_cypher",
             new_callable=AsyncMock,
             return_value="MATCH (s:Service)-[:CALLS*]->(t) RETURN s.name, count(t)",
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
         ):
             await hybrid_retrieve(state)
 
@@ -902,9 +843,6 @@ class TestNeo4jDriverTimeout:
         mock_driver.session = MagicMock(return_value=mock_session)
 
         with patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
-        ), patch(
             "orchestrator.app.query_engine._get_query_timeout",
             return_value=17.5,
         ):

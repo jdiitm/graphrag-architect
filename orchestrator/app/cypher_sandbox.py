@@ -62,10 +62,12 @@ class SandboxedQueryExecutor:
         params: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         sandboxed = self.inject_limit(cypher)
-        await self.explain_check(session, sandboxed)
 
         async def _tx(tx: Any) -> List[Dict[str, Any]]:
-            result = await tx.run(sandboxed, **(params or {}))
+            result = await tx.run(
+                sandboxed, **(params or {}),
+                timeout=self._config.query_timeout_seconds,
+            )
             return await result.data()
 
         return await session.execute_read(_tx)
