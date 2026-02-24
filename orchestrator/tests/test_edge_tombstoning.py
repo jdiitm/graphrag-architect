@@ -101,6 +101,87 @@ class TestPruneStaleEdges:
             f"Prune query must set tombstoned_at, got: {tombstone_query}"
         )
 
+
+class TestScopedTombstoning:
+
+    @pytest.mark.asyncio
+    async def test_tombstone_does_not_scan_all_edges(self) -> None:
+        from orchestrator.app.neo4j_client import GraphRepository
+
+        executed_queries: List[str] = []
+        mock_session = AsyncMock()
+
+        async def _capture_write(fn, **kwargs):
+            query = kwargs.get("query", "")
+            executed_queries.append(query)
+
+        mock_session.execute_write = _capture_write
+
+        mock_driver = MagicMock()
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def session_ctx(**kwargs):
+            yield mock_session
+
+        mock_driver.session = session_ctx
+
+        repo = GraphRepository(mock_driver)
+        await repo.tombstone_stale_edges("run-123")
+
+        for query in executed_queries:
+            assert "MATCH ()-[r]->()" not in query, (
+                "tombstone_stale_edges must NOT use unscoped "
+                "'MATCH ()-[r]->()' which scans ALL edges. "
+                f"Got: {query}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_tombstone_scopes_by_node_label(self) -> None:
+        from orchestrator.app.neo4j_client import GraphRepository
+
+        executed_queries: List[str] = []
+        mock_session = AsyncMock()
+
+        async def _capture_write(fn, **kwargs):
+            query = kwargs.get("query", "")
+            executed_queries.append(query)
+
+        mock_session.execute_write = _capture_write
+
+        mock_driver = MagicMock()
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def session_ctx(**kwargs):
+            yield mock_session
+
+        mock_driver.session = session_ctx
+
+        repo = GraphRepository(mock_driver)
+        await repo.tombstone_stale_edges("run-123")
+
+        all_queries = " ".join(executed_queries).upper()
+        node_labels = {"SERVICE", "DATABASE", "KAFKATOPIC", "K8SDEPLOYMENT"}
+        found_labels = {lbl for lbl in node_labels if lbl in all_queries}
+        assert len(found_labels) >= 2, (
+            "tombstone queries must scope by specific node labels "
+            f"(e.g., Service, Database). Found labels: {found_labels}. "
+            f"Queries: {executed_queries}"
+        )
+
+    def test_schema_has_relationship_ingestion_id_index(self) -> None:
+        from pathlib import Path
+        schema_path = (
+            Path(__file__).resolve().parents[2]
+            / "orchestrator" / "app" / "schema_init.cypher"
+        )
+        content = schema_path.read_text(encoding="utf-8").upper()
+        assert "INGESTION_ID" in content, (
+            "schema_init.cypher must include an index on relationship "
+            "property ingestion_id for scoped tombstone queries"
+        )
+
     @pytest.mark.asyncio
     async def test_prune_called_after_successful_commit(self) -> None:
         from orchestrator.app.graph_builder import commit_to_neo4j

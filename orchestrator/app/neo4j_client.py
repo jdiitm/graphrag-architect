@@ -340,25 +340,30 @@ class GraphRepository:
     ) -> int:
         return await self.tombstone_stale_edges(current_ingestion_id)
 
+    _TOMBSTONE_NODE_LABELS = ("Service", "Database", "KafkaTopic", "K8sDeployment")
+
     async def tombstone_stale_edges(
         self,
         current_ingestion_id: str,
     ) -> int:
-        query = (
-            "MATCH ()-[r]->() "
-            "WHERE r.ingestion_id IS NOT NULL "
-            "AND r.ingestion_id <> $current_id "
-            "AND r.tombstoned_at IS NULL "
-            "SET r.tombstoned_at = $timestamp "
-            "RETURN count(r) AS tombstoned"
-        )
         timestamp = datetime.now(timezone.utc).isoformat()
+        total = 0
         async with self._session() as session:
-            result = await session.execute_write(
-                self._run_tombstone, query=query,
-                current_id=current_ingestion_id, timestamp=timestamp,
-            )
-            return result
+            for label in self._TOMBSTONE_NODE_LABELS:
+                query = (
+                    f"MATCH (n:{label})-[r]->() "
+                    "WHERE r.ingestion_id IS NOT NULL "
+                    "AND r.ingestion_id <> $current_id "
+                    "AND r.tombstoned_at IS NULL "
+                    "SET r.tombstoned_at = $timestamp "
+                    "RETURN count(r) AS tombstoned"
+                )
+                result = await session.execute_write(
+                    self._run_tombstone, query=query,
+                    current_id=current_ingestion_id, timestamp=timestamp,
+                )
+                total += result or 0
+        return total
 
     @staticmethod
     async def _run_tombstone(
