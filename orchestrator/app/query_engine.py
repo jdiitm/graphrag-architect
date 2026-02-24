@@ -16,7 +16,11 @@ from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfi
 from orchestrator.app.cypher_sandbox import (
     SandboxedQueryExecutor,
 )
-from orchestrator.app.context_manager import TokenBudget, truncate_context
+from orchestrator.app.context_manager import (
+    TokenBudget,
+    format_context_for_prompt,
+    truncate_context,
+)
 from orchestrator.app.prompt_sanitizer import sanitize_query_input
 from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.cypher_validator import CypherValidationError, validate_cypher_readonly
@@ -172,11 +176,12 @@ async def _llm_synthesize(
 ) -> str:
     llm = _build_llm()
     sanitized = sanitize_query_input(query)
+    formatted_context = format_context_for_prompt(context)
     prompt = (
         "You are a distributed systems expert. Answer the following question "
         "using ONLY the provided graph context. Be concise and precise.\n\n"
         f"Question: {sanitized}\n\n"
-        f"Graph context:\n{context}\n\n"
+        f"Graph context:\n{formatted_context}\n\n"
         "Answer:"
     )
     response = await llm.ainvoke(prompt)
