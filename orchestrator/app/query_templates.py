@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -186,15 +187,114 @@ _INTENT_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
 ]
 
 
+ALLOWED_RELATIONSHIP_TYPES = frozenset({
+    "CALLS", "PRODUCES", "CONSUMES", "DEPLOYED_IN",
+})
+
+_ACL_NODE_FILTER = (
+    "({alias}.tenant_id = $tenant_id) "
+    "AND ($is_admin OR {alias}.team_owner = $acl_team "
+    "OR ANY(ns IN {alias}.namespace_acl WHERE ns IN $acl_namespaces))"
+)
+
+_ACL_TEMPLATES: Dict[str, QueryTemplate] = {
+    "acl_vector_search": QueryTemplate(
+        name="acl_vector_search",
+        cypher=(
+            "CALL db.index.vector.queryNodes($index_name, $k, $query_embedding) "
+            "YIELD node, score "
+            "WHERE node.tenant_id = $tenant_id "
+            "AND ($is_admin OR node.team_owner = $acl_team "
+            "OR ANY(ns IN node.namespace_acl WHERE ns IN $acl_namespaces)) "
+            "RETURN node {.*, score: score} AS result "
+            "ORDER BY score DESC "
+            "LIMIT $limit"
+        ),
+        parameters=("index_name", "k", "query_embedding", "tenant_id",
+                     "is_admin", "acl_team", "acl_namespaces", "limit"),
+        description="Vector search with mandatory tenant isolation and ACL filtering",
+    ),
+    "acl_fulltext_search": QueryTemplate(
+        name="acl_fulltext_search",
+        cypher=(
+            "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
+            "YIELD node, score "
+            "WHERE node.tenant_id = $tenant_id "
+            "AND ($is_admin OR node.team_owner = $acl_team "
+            "OR ANY(ns IN node.namespace_acl WHERE ns IN $acl_namespaces)) "
+            "RETURN node {.*, score: score} AS result "
+            "ORDER BY score DESC LIMIT $limit"
+        ),
+        parameters=("query", "tenant_id", "is_admin", "acl_team",
+                     "acl_namespaces", "limit"),
+        description="Fulltext search with mandatory tenant isolation and ACL filtering",
+    ),
+}
+
+
+def build_acl_single_hop_query(rel_type: str) -> str:
+    if rel_type not in ALLOWED_RELATIONSHIP_TYPES:
+        raise ValueError(f"Disallowed relationship type: {rel_type}")
+    return (
+        f"MATCH (source:Service {{id: $source_id, tenant_id: $tenant_id}}) "
+        f"WHERE $is_admin OR source.team_owner = $acl_team "
+        f"OR ANY(ns IN source.namespace_acl WHERE ns IN $acl_namespaces) "
+        f"MATCH (source)-[r:{rel_type}]->(target) "
+        f"WHERE target.tenant_id = $tenant_id "
+        f"AND ($is_admin OR target.team_owner = $acl_team "
+        f"OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
+        f"RETURN target {{.*}} AS result "
+        f"LIMIT $limit"
+    )
+
+
+def build_acl_multi_hop_query(max_depth: int) -> str:
+    max_depth = min(int(max_depth), 5)
+    return (
+        f"MATCH path = (source:Service {{id: $source_id, tenant_id: $tenant_id}})"
+        f"-[:CALLS*1..{max_depth}]->(target:Service) "
+        f"WHERE ALL(n IN nodes(path) WHERE "
+        f"n.tenant_id = $tenant_id "
+        f"AND ($is_admin OR n.team_owner = $acl_team "
+        f"OR ANY(ns IN n.namespace_acl WHERE ns IN $acl_namespaces))) "
+        f"RETURN target.name AS name, length(path) AS hops "
+        f"ORDER BY hops "
+        f"LIMIT $limit"
+    )
+
+
+def dynamic_cypher_allowed() -> bool:
+    return os.environ.get("ALLOW_DYNAMIC_CYPHER", "false").lower() in (
+        "true", "1", "yes",
+    )
+
+
+def build_acl_params(
+    tenant_id: str,
+    is_admin: bool,
+    team: str,
+    namespaces: List[str],
+) -> Dict[str, Any]:
+    return {
+        "tenant_id": tenant_id,
+        "is_admin": is_admin,
+        "acl_team": team,
+        "acl_namespaces": namespaces,
+    }
+
+
 class TemplateCatalog:
     def __init__(self) -> None:
-        self._templates = dict(_TEMPLATES)
+        self._templates: Dict[str, QueryTemplate] = {**_TEMPLATES, **_ACL_TEMPLATES}
 
     def get(self, name: str) -> Optional[QueryTemplate]:
         return self._templates.get(name)
 
     def all_templates(self) -> Dict[str, QueryTemplate]:
         return dict(self._templates)
+
+    def get_acl_template(self, name: str) -> Optional[QueryTemplate]:
+        return _ACL_TEMPLATES.get(name)
 
 
 def _extract_service_name(query: str) -> str:

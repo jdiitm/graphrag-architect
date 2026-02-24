@@ -17,9 +17,15 @@ from orchestrator.app.cypher_sandbox import (
     QueryTooExpensiveError,
     SandboxedQueryExecutor,
 )
+from orchestrator.app.context_manager import TokenBudget, truncate_context
 from orchestrator.app.prompt_sanitizer import sanitize_query_input
+from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.cypher_validator import CypherValidationError, validate_cypher_readonly
-from orchestrator.app.query_templates import TemplateCatalog, match_template
+from orchestrator.app.query_templates import (
+    TemplateCatalog,
+    dynamic_cypher_allowed,
+    match_template,
+)
 from orchestrator.app.subgraph_cache import SubgraphCache, normalize_cypher
 from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
@@ -384,6 +390,18 @@ async def cypher_retrieve(state: QueryState) -> dict:
                 template_result = await _try_template_match(state, driver)
                 if template_result is not None:
                     return template_result
+
+                if not dynamic_cypher_allowed():
+                    _query_logger.info(
+                        "Dynamic Cypher generation disabled (ALLOW_DYNAMIC_CYPHER=false). "
+                        "No template matched for query."
+                    )
+                    return {
+                        "cypher_query": "",
+                        "cypher_results": [],
+                        "iteration_count": 0,
+                    }
+
                 records: list = []
                 generated = ""
                 prior_attempt = ""
@@ -526,6 +544,10 @@ async def synthesize_answer(state: QueryState) -> dict:
         return result
 
 
+_DEFAULT_RERANKER = BM25Reranker()
+_DEFAULT_TOKEN_BUDGET = TokenBudget()
+
+
 async def _do_synthesize(state: QueryState) -> dict:
     context: List[Dict[str, Any]] = []
     if state.get("candidates"):
@@ -539,8 +561,12 @@ async def _do_synthesize(state: QueryState) -> dict:
             "sources": [],
         }
 
-    answer = await _llm_synthesize(state["query"], context)
-    return {"answer": answer, "sources": context}
+    reranked = _DEFAULT_RERANKER.rerank(state["query"], context)
+    ranked_context = [sc.data for sc in reranked]
+    truncated = truncate_context(ranked_context, _DEFAULT_TOKEN_BUDGET)
+
+    answer = await _llm_synthesize(state["query"], truncated)
+    return {"answer": answer, "sources": truncated}
 
 
 async def evaluate_response(state: QueryState) -> dict:

@@ -12,7 +12,11 @@ disable = [
     "R0917",  # too-many-positional-arguments: same OTel Sampler ABC constraint
     "W0613",  # unused-argument: LangGraph node stubs must accept `state` per framework contract
     "W0718",  # broad-exception-caught: OTel span processors must never crash the app on export
+    "C0415",  # import-outside-toplevel: lazy imports for optional deps (qdrant-client)
 ]
+
+[tool.pylint.imports]
+ignored-modules = ["qdrant_client", "qdrant_client.models"]
 
 [tool.pylint.basic]
 method-rgx = "[a-z_][a-z0-9_]{2,}$|visit_[A-Z][a-zA-Z]*$"

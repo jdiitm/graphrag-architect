@@ -107,6 +107,21 @@ LangGraph-based extraction pipeline.
 **Nodes:** Service, Database, KafkaTopic, K8sDeployment (all carry `team_owner`, `namespace_acl`)
 **Edges:** CALLS, PRODUCES, CONSUMES, DEPLOYED_IN (all carry `ingestion_id`, `last_seen_at`)
 
+## Planned Components (External Audit Mitigation)
+
+| FR | Component | Status | Module |
+|---|---|---|---|
+| FR-9 | Physical Tenant Isolation | Planned | `tenant_isolation.py`, `extraction_models.py` |
+| FR-10 | Parameterized Query Templates | Planned | `query_templates.py`, `query_engine.py` |
+| FR-11 | Context Token Budget + Reranking | Planned | `context_manager.py`, `reranker.py` |
+| FR-12 | Faithfulness RAG Evaluation | Planned | `rag_evaluator.py` |
+| FR-13 | Decoupled Vector Store (Qdrant) | Planned | `vector_store.py` |
+| FR-14 | Streaming Ingestion Pipeline | Planned | `graph_builder.py` |
+| FR-15 | Agentic Graph Traversal | Planned | `agentic_traversal.py` |
+| FR-16 | Tombstone Edge Cleanup | Planned | `neo4j_client.py`, `node_sink.py` |
+| FR-17 | Graph-Native Embeddings (Node2Vec) | Planned | `graph_embeddings.py` |
+| FR-18 | Semantic Graph Partitioning | Planned | `semantic_partitioner.py` |
+
 ## Test Coverage
 
 - **Python**: 952 tests (unit + integration)

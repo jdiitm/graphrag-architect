@@ -207,6 +207,9 @@ class TestCypherRetrieve:
             "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
             return_value=None,
+        ), patch(
+            "orchestrator.app.query_engine.dynamic_cypher_allowed",
+            return_value=True,
         ):
             result = await cypher_retrieve(state)
 
@@ -241,6 +244,9 @@ class TestCypherRetrieve:
         ), patch(
             "orchestrator.app.query_engine._sandbox_explain_check",
             new_callable=AsyncMock,
+        ), patch(
+            "orchestrator.app.query_engine.dynamic_cypher_allowed",
+            return_value=True,
         ):
             result = await cypher_retrieve(state)
 
@@ -282,6 +288,9 @@ class TestCypherRetrieve:
             "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
             return_value=None,
+        ), patch(
+            "orchestrator.app.query_engine.dynamic_cypher_allowed",
+            return_value=True,
         ):
             result = await cypher_retrieve(state)
 

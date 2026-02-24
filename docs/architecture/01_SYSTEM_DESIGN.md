@@ -159,10 +159,18 @@ orchestrator/
     query_classifier.py      # Keyword-based query complexity classifier
     query_engine.py          # LangGraph query DAG (6 nodes)
     query_models.py          # QueryRequest/Response/State models
+    query_templates.py       # Parameterized Cypher template catalog (FR-10)
+    context_manager.py       # Token budget management for synthesis (FR-11)
+    reranker.py              # Cross-encoder/BM25 reranking before synthesis (FR-11)
+    rag_evaluator.py         # Faithfulness/groundedness/hallucination evaluation (FR-12)
+    vector_store.py          # VectorStore protocol + Neo4j/Qdrant backends (FR-13)
+    agentic_traversal.py     # Incremental 1-hop LLM-guided traversal (FR-15)
+    graph_embeddings.py      # Node2Vec structural embeddings (FR-17)
+    semantic_partitioner.py  # Leiden community detection partitioning (FR-18)
     schema_init.cypher       # Neo4j constraints and indexes
     schema_validation.py     # Topology validation + correction loop
     workspace_loader.py      # Filesystem workspace scanner
-  tests/                     # 15 test files
+  tests/                     # 68+ test files
   requirements.txt
 ```
 
@@ -220,10 +228,31 @@ The query engine routes natural-language questions to the optimal retrieval stra
 
 | Complexity Signal | Route | Mechanism |
 |---|---|---|
-| Named entity mention, no structural keywords | **Vector** | ANN search on node name embeddings via Neo4j `SEARCH` clause |
-| Single relationship keyword ("produces", "calls") | **1-Hop Cypher** | Direct Cypher `MATCH` pattern |
-| Structural keywords ("depends on", "blast radius", "downstream") | **Agentic Cypher** | LLM generates Cypher, executes, evaluates result sufficiency, iterates (max 3 loops) |
-| Aggregation keywords ("most critical", "top N", "count") | **Hybrid DRIFT** | Vector pre-filter for candidate nodes, then Cypher aggregation on filtered subgraph |
+| Named entity mention, no structural keywords | **Vector** | ANN search via configurable vector store (Neo4j native or Qdrant). Uses parameterized template with `$tenant_id`. |
+| Single relationship keyword ("produces", "calls") | **1-Hop Template** | Parameterized Cypher template with allowlisted relationship type. Zero LLM calls. |
+| Structural keywords ("depends on", "blast radius", "downstream") | **Agentic Traversal** | Incremental 1-hop LLM-guided traversal agent. Each hop uses parameterized template. Max 5 hops, 50 visited nodes. |
+| Aggregation keywords ("most critical", "top N", "count") | **Hybrid DRIFT** | Vector pre-filter for candidate nodes, then parameterized aggregation template on filtered subgraph. |
+
+**Synthesis Pipeline:**
+
+Retrieved candidates pass through: reranker (cross-encoder or BM25) -> token budget truncation (32K default) -> LLM synthesis -> faithfulness evaluation.
+
+### 2.6 Tenant Isolation
+
+| Tier | Isolation Level | Implementation |
+|---|---|---|
+| Standard | Logical | `tenant_id` property on all nodes; mandatory `WHERE` clause in all parameterized templates; shared Neo4j database |
+| Enterprise | Physical | Dedicated Neo4j composite database per tenant; `TenantAwareDriverPool` routes to tenant-specific driver |
+| Sovereign | Infrastructure | Dedicated Neo4j cluster; dedicated Kafka topic prefix; per-tenant encryption keys |
+
+### 2.7 Vector Store
+
+| Backend | Use Case | Implementation |
+|---|---|---|
+| Neo4j native | < 50K nodes (default) | `db.index.vector.queryNodes()` |
+| Qdrant | >= 50K nodes (scale) | Dedicated Qdrant cluster, UUID-linked to Neo4j nodes |
+
+Selection via `VECTOR_STORE_BACKEND` env var. Query path: vector search -> candidate IDs -> parameterized Cypher on candidates.
 
 ---
 

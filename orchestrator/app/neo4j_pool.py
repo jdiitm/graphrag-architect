@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional, Tuple
 
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
@@ -106,3 +106,18 @@ def resolve_database_for_tenant(
     if cfg.isolation_mode == IsolationMode.PHYSICAL:
         return cfg.database_name
     return default_database
+
+
+def resolve_driver_for_tenant(
+    pool: Optional[TenantAwareDriverPool],
+    registry: Optional[TenantRegistry],
+    tenant_id: str,
+) -> Tuple[Any, str]:
+    if not tenant_id:
+        return get_driver(), get_database()
+    database = resolve_database_for_tenant(registry, tenant_id)
+    if pool is not None:
+        driver = pool.get_driver(tenant_id)
+    else:
+        driver = get_driver()
+    return driver, database

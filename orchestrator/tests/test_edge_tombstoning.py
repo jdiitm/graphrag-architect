@@ -64,7 +64,7 @@ class TestPruneStaleEdges:
         )
 
     @pytest.mark.asyncio
-    async def test_prune_executes_delete_query(self) -> None:
+    async def test_prune_executes_tombstone_query(self) -> None:
         from orchestrator.app.neo4j_client import GraphRepository
 
         executed_queries: List[str] = []
@@ -93,11 +93,11 @@ class TestPruneStaleEdges:
         )
 
         assert len(executed_queries) >= 1, (
-            "prune_stale_edges must execute at least one DELETE query"
+            "prune_stale_edges must execute at least one tombstone query"
         )
-        delete_query = executed_queries[0]
-        assert "DELETE" in delete_query.upper(), (
-            f"Prune query must contain DELETE, got: {delete_query}"
+        tombstone_query = executed_queries[0]
+        assert "TOMBSTONED_AT" in tombstone_query.upper(), (
+            f"Prune query must set tombstoned_at, got: {tombstone_query}"
         )
 
     @pytest.mark.asyncio
