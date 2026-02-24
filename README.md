@@ -110,8 +110,7 @@ graphrag-architect/
 │       ├── alerting.yaml
 │       └── neo4j-schema-job.yaml
 ├── architecture_state.md                # System design document
-├── CLAUDE.md                            # AI agent invariants
-└── claude-progress.txt                  # Development progress log
+└── CLAUDE.md                            # AI agent invariants
 ```
 
 ## Prerequisites
@@ -181,4 +180,4 @@ cd workers/ingestion && go test ./... -v
 
 ## Development
 
-This project follows strict TDD (Red-Green-Refactor). See `CLAUDE.md` for the agentic execution loop and coding invariants. Progress is tracked in `claude-progress.txt`.
+This project follows strict TDD (Red-Green-Refactor). See `CLAUDE.md` for the agentic execution loop and coding invariants.

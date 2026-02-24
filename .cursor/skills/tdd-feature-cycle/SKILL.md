@@ -90,7 +90,6 @@ The subagent will produce `audit-report.md` on disk. Wait for it to complete, th
 2. Read these files for context:
    - `docs/prd/02_SYSTEM_REQUIREMENTS.md`
    - `docs/architecture/01_SYSTEM_DESIGN.md`
-   - `claude-progress.txt`
 3. Explore the codebase to confirm what exists vs. what is stubbed.
 4. Formulate a concrete plan: new files, modified files, test plan, Cypher/query templates if applicable.
 5. Create a branch:
@@ -99,8 +98,6 @@ The subagent will produce `audit-report.md` on disk. Wait for it to complete, th
 git checkout main && git pull origin main
 git checkout -b feat/<feature-name>
 ```
-
-6. Log the plan in `claude-progress.txt` before writing any code.
 
 ## Phase 2: Strict TDD (Red-Green-Refactor)
 
@@ -172,8 +169,7 @@ Report results as: `Pylint: X/10, Python tests: A/B passed, Go tests: C/D passed
 
 ## Phase 4: Git-Ops & PR
 
-1. Update `claude-progress.txt` with completed work, test counts, architecture decisions, and next steps.
-2. Stage, commit, push:
+1. Stage, commit, push:
 
 ```bash
 git add .
@@ -234,7 +230,7 @@ Then STOP. Do not write another word or call another tool.
 |------|-----------|
 | Branch naming | `feat/<kebab-case-feature>` |
 | Commit messages | Conventional commits: `feat:`, `fix:`, `refactor:`, `test:` |
-| Progress log | Prepend new entries to top of `claude-progress.txt` |
+| Progress tracking | Via git commit history and PR descriptions |
 | Test file naming | Python: `test_<module>.py` in `orchestrator/tests/`; Go: `<pkg>_test.go` alongside source |
 | Config pattern | Frozen dataclass with `from_env()` classmethod |
 | Error handling | Catch specific exceptions, never bare `except:` |
