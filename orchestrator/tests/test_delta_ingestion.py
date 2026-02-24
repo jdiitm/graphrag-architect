@@ -21,6 +21,7 @@ class TestComputeContentHash:
             language="go",
             framework="gin",
             opentelemetry_enabled=True,
+            tenant_id="test-tenant",
         )
         hash_a = compute_content_hash(entity)
         hash_b = compute_content_hash(entity)
@@ -35,6 +36,7 @@ class TestComputeContentHash:
             language="go",
             framework="gin",
             opentelemetry_enabled=True,
+            tenant_id="test-tenant",
         )
         entity_b = ServiceNode(
             id="svc-2",
@@ -42,6 +44,7 @@ class TestComputeContentHash:
             language="python",
             framework="fastapi",
             opentelemetry_enabled=False,
+            tenant_id="test-tenant",
         )
         assert compute_content_hash(entity_a) != compute_content_hash(entity_b)
 
@@ -52,13 +55,14 @@ class TestComputeContentHash:
             language="py",
             framework="flask",
             opentelemetry_enabled=False,
+            tenant_id="test-tenant",
         )
         assert node.content_hash == ""
-        node = DatabaseNode(id="db-1", type="postgresql")
+        node = DatabaseNode(id="db-1", type="postgresql", tenant_id="test-tenant")
         assert node.content_hash == ""
-        node = KafkaTopicNode(name="t", partitions=3, retention_ms=1000)
+        node = KafkaTopicNode(name="t", partitions=3, retention_ms=1000, tenant_id="test-tenant")
         assert node.content_hash == ""
-        node = K8sDeploymentNode(id="d", namespace="ns", replicas=1)
+        node = K8sDeploymentNode(id="d", namespace="ns", replicas=1, tenant_id="test-tenant")
         assert node.content_hash == ""
 
     def test_hash_excludes_content_hash_field_no_circular_reference(
@@ -71,6 +75,7 @@ class TestComputeContentHash:
             framework="gin",
             opentelemetry_enabled=True,
             content_hash="",
+            tenant_id="test-tenant",
         )
         entity_b = ServiceNode(
             id="svc",
@@ -79,6 +84,7 @@ class TestComputeContentHash:
             framework="gin",
             opentelemetry_enabled=True,
             content_hash="different-value",
+            tenant_id="test-tenant",
         )
         assert compute_content_hash(entity_a) == compute_content_hash(entity_b)
 
@@ -93,8 +99,9 @@ class TestComputeHashes:
                 language="go",
                 framework="gin",
                 opentelemetry_enabled=True,
+                tenant_id="test-tenant",
             ),
-            DatabaseNode(id="d1", type="postgresql"),
+            DatabaseNode(id="d1", type="postgresql", tenant_id="test-tenant"),
         ]
         result = compute_hashes(entities)
         assert result[0].content_hash != ""

@@ -292,6 +292,7 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                 hop_cypher, hop_acl = _apply_acl(
                     "MATCH (n)-[r]-(m) "
                     "WHERE n.name IN $names "
+                    "AND r.tombstoned_at IS NULL "
                     "RETURN n.name AS source, type(r) AS rel, "
                     "m.name AS target",
                     state, alias="m",
@@ -368,7 +369,8 @@ async def _try_template_match(
     if template is None:
         return None
     acl_cypher, acl_params = _apply_acl(template.cypher, state)
-    merged_params = {**tmatch.params, **acl_params}
+    tenant_id = state.get("tenant_id", "")
+    merged_params = {**tmatch.params, **acl_params, "tenant_id": tenant_id}
     records = await _execute_sandboxed_read(
         driver, acl_cypher, merged_params,
     )

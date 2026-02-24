@@ -385,6 +385,7 @@ class TestDagNodeIntegration:
             language="go",
             framework="gin",
             opentelemetry_enabled=False,
+            tenant_id="test-tenant",
         )
         state = {
             "directory_path": "",
@@ -403,6 +404,7 @@ class TestDagNodeIntegration:
             "extraction_errors": [],
             "validation_retries": 0,
             "commit_status": "",
+            "tenant_id": "test-tenant",
         }
         result = await parse_k8s_and_kafka_manifests(state)
         nodes = result["extracted_nodes"]
@@ -418,6 +420,7 @@ class TestDagNodeIntegration:
         svc = ServiceNode(
             id="svc-a", name="svc-a", language="python",
             framework="fastapi", opentelemetry_enabled=True,
+            tenant_id="test-tenant",
         )
         edge = CallsEdge(
             source_service_id="svc-a", target_service_id="svc-b", protocol="grpc",
@@ -429,6 +432,7 @@ class TestDagNodeIntegration:
             "extraction_errors": [],
             "validation_retries": 0,
             "commit_status": "",
+            "tenant_id": "test-tenant",
         }
         result = await parse_k8s_and_kafka_manifests(state)
         assert result["extracted_nodes"] == [svc, edge]
@@ -444,6 +448,7 @@ class TestDagNodeIntegration:
             "extraction_errors": [],
             "validation_retries": 0,
             "commit_status": "",
+            "tenant_id": "test-tenant",
         }
         result = await parse_k8s_and_kafka_manifests(state)
         assert result["extracted_nodes"] == []

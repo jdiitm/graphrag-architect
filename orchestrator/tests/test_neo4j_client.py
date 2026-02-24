@@ -24,13 +24,14 @@ SAMPLE_SERVICE = ServiceNode(
     language="go",
     framework="gin",
     opentelemetry_enabled=True,
+    tenant_id="test-tenant",
 )
 
-SAMPLE_DATABASE = DatabaseNode(id="orders-db", type="postgresql")
+SAMPLE_DATABASE = DatabaseNode(id="orders-db", type="postgresql", tenant_id="test-tenant")
 
-SAMPLE_TOPIC = KafkaTopicNode(name="order-events", partitions=6, retention_ms=604800000)
+SAMPLE_TOPIC = KafkaTopicNode(name="order-events", partitions=6, retention_ms=604800000, tenant_id="test-tenant")
 
-SAMPLE_K8S = K8sDeploymentNode(id="order-deploy", namespace="production", replicas=3)
+SAMPLE_K8S = K8sDeploymentNode(id="order-deploy", namespace="production", replicas=3, tenant_id="test-tenant")
 
 SAMPLE_CALLS = CallsEdge(
     source_service_id="user-service",
@@ -194,6 +195,7 @@ class TestCommitTopologyMixed:
                 language="python",
                 framework="fastapi",
                 opentelemetry_enabled=False,
+                tenant_id="test-tenant",
             ),
         ]
 

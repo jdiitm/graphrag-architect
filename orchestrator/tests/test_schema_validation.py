@@ -24,6 +24,7 @@ AUTH_SERVICE = ServiceNode(
     language="go",
     framework="gin",
     opentelemetry_enabled=True,
+    tenant_id="test-tenant",
 )
 
 ORDER_SERVICE = ServiceNode(
@@ -32,16 +33,17 @@ ORDER_SERVICE = ServiceNode(
     language="python",
     framework="fastapi",
     opentelemetry_enabled=False,
+    tenant_id="test-tenant",
 )
 
-ORDERS_DB = DatabaseNode(id="orders-db", type="postgresql")
+ORDERS_DB = DatabaseNode(id="orders-db", type="postgresql", tenant_id="test-tenant")
 
 ORDER_EVENTS_TOPIC = KafkaTopicNode(
-    name="order-events", partitions=6, retention_ms=604800000
+    name="order-events", partitions=6, retention_ms=604800000, tenant_id="test-tenant",
 )
 
 ORDER_DEPLOY = K8sDeploymentNode(
-    id="order-deploy", namespace="production", replicas=3
+    id="order-deploy", namespace="production", replicas=3, tenant_id="test-tenant",
 )
 
 VALID_CALLS = CallsEdge(
@@ -385,6 +387,7 @@ class TestFixExtractionErrorsNode:
             framework="actix",
             opentelemetry_enabled=False,
             confidence=0.7,
+            tenant_id="test-tenant",
         )
         state = {
             "raw_files": [

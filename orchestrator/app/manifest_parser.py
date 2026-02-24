@@ -63,7 +63,9 @@ def _extract_namespace_acl(
     return acl_namespaces
 
 
-def _extract_deployment(doc: Dict[str, Any]) -> Optional[K8sDeploymentNode]:
+def _extract_deployment(
+    doc: Dict[str, Any], tenant_id: str = "default",
+) -> Optional[K8sDeploymentNode]:
     if doc.get("kind") != "Deployment":
         return None
     metadata: Dict[str, Any] = doc.get("metadata", {})
@@ -95,12 +97,15 @@ def _extract_deployment(doc: Dict[str, Any]) -> Optional[K8sDeploymentNode]:
         id=str(name),
         namespace=str(namespace),
         replicas=int(replicas),
+        tenant_id=tenant_id,
         team_owner=team_owner,
         namespace_acl=namespace_acl,
     )
 
 
-def _extract_kafka_topic(doc: Dict[str, Any]) -> Optional[KafkaTopicNode]:
+def _extract_kafka_topic(
+    doc: Dict[str, Any], tenant_id: str = "default",
+) -> Optional[KafkaTopicNode]:
     if doc.get("kind") != "KafkaTopic":
         return None
     metadata: Dict[str, Any] = doc.get("metadata", {})
@@ -136,30 +141,33 @@ def _extract_kafka_topic(doc: Dict[str, Any]) -> Optional[KafkaTopicNode]:
         name=str(name),
         partitions=int(partitions),
         retention_ms=int(retention_raw),
+        tenant_id=tenant_id,
         team_owner=team_owner,
         namespace_acl=namespace_acl,
     )
 
 
-def parse_k8s_manifests(content: str) -> List[K8sDeploymentNode]:
+def parse_k8s_manifests(content: str, tenant_id: str = "default") -> List[K8sDeploymentNode]:
     results: List[K8sDeploymentNode] = []
     for doc in _safe_load_all(content):
-        node = _extract_deployment(doc)
+        node = _extract_deployment(doc, tenant_id=tenant_id)
         if node is not None:
             results.append(node)
     return results
 
 
-def parse_kafka_topics(content: str) -> List[KafkaTopicNode]:
+def parse_kafka_topics(content: str, tenant_id: str = "default") -> List[KafkaTopicNode]:
     results: List[KafkaTopicNode] = []
     for doc in _safe_load_all(content):
-        topic = _extract_kafka_topic(doc)
+        topic = _extract_kafka_topic(doc, tenant_id=tenant_id)
         if topic is not None:
             results.append(topic)
     return results
 
 
-def parse_all_manifests(files: List[Dict[str, str]]) -> List[Any]:
+def parse_all_manifests(
+    files: List[Dict[str, str]], tenant_id: str = "default",
+) -> List[Any]:
     entities: List[Any] = []
     for file_entry in files:
         path = file_entry.get("path", "")
@@ -167,6 +175,6 @@ def parse_all_manifests(files: List[Dict[str, str]]) -> List[Any]:
         if ext not in YAML_EXTENSIONS:
             continue
         content = file_entry.get("content", "")
-        entities.extend(parse_k8s_manifests(content))
-        entities.extend(parse_kafka_topics(content))
+        entities.extend(parse_k8s_manifests(content, tenant_id=tenant_id))
+        entities.extend(parse_kafka_topics(content, tenant_id=tenant_id))
     return entities

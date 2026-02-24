@@ -24,6 +24,7 @@ def _make_services(count: int) -> List[ServiceNode]:
             framework="gin",
             opentelemetry_enabled=False,
             confidence=1.0,
+            tenant_id="test-tenant",
         )
         for i in range(count)
     ]

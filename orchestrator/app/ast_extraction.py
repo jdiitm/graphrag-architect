@@ -79,7 +79,7 @@ class ASTExtractionResult:
     topics_consumed: List[str] = field(default_factory=list)
     topics_produced: List[str] = field(default_factory=list)
 
-    def to_extraction_result(self) -> ServiceExtractionResult:
+    def to_extraction_result(self, tenant_id: str = "default") -> ServiceExtractionResult:
         services = [
             ServiceNode(
                 id=s.service_id,
@@ -87,6 +87,7 @@ class ASTExtractionResult:
                 language=s.language,
                 framework=s.framework or "unknown",
                 opentelemetry_enabled=s.opentelemetry_enabled,
+                tenant_id=tenant_id,
             )
             for s in self.services
         ]

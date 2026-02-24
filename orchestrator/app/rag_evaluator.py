@@ -111,6 +111,38 @@ def _compute_faithfulness(
     return max(0.0, coverage), ungrounded
 
 
+def _compute_groundedness(
+    answer: str,
+    sources: List[Dict[str, Any]],
+) -> float:
+    if not answer or not sources:
+        return 1.0
+
+    answer_entities = _extract_entity_names_from_text(answer)
+    context_entities = _extract_entity_names_from_context(sources)
+
+    stop_words = {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been",
+        "being", "have", "has", "had", "do", "does", "did", "will",
+        "would", "could", "should", "may", "might", "shall", "can",
+        "not", "no", "and", "or", "but", "if", "then", "else",
+        "when", "where", "how", "what", "which", "who", "whom",
+        "this", "that", "these", "those", "it", "its", "to", "of",
+        "in", "for", "on", "with", "at", "by", "from", "as", "into",
+        "through", "during", "before", "after", "above", "below",
+        "between", "out", "off", "over", "under", "again", "further",
+        "all", "each", "every", "both", "few", "more", "most",
+        "other", "some", "such", "only", "very",
+    }
+
+    meaningful = {e for e in answer_entities if e not in stop_words and len(e) > 2}
+    if not meaningful:
+        return 1.0
+
+    verified = sum(1 for e in meaningful if e in context_entities)
+    return verified / len(meaningful)
+
+
 class RAGEvaluator:
     def __init__(self, low_relevance_threshold: float = 0.3) -> None:
         self._threshold = low_relevance_threshold
@@ -143,7 +175,7 @@ class RAGEvaluator:
             query_embedding, context_embeddings,
         )
         faithfulness_score, ungrounded = _compute_faithfulness(answer, sources)
-        groundedness = faithfulness_score
+        groundedness = _compute_groundedness(answer, sources)
 
         return EvaluationResult(
             context_relevance=context_relevance,

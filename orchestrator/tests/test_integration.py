@@ -27,6 +27,7 @@ class TestGraphRepositoryWithCircuitBreaker:
             ServiceNode(
                 id="svc-1", name="auth", language="python",
                 framework="fastapi", opentelemetry_enabled=True,
+                tenant_id="test-tenant",
             ),
         ]
         await repo.commit_topology(entities)
@@ -44,6 +45,7 @@ class TestGraphRepositoryWithCircuitBreaker:
             ServiceNode(
                 id="svc-1", name="auth", language="python",
                 framework="fastapi", opentelemetry_enabled=True,
+                tenant_id="test-tenant",
             ),
         ]
 
@@ -81,6 +83,7 @@ class TestIngestionDAGFlow:
             ServiceNode(
                 id="svc-1", name="auth", language="python",
                 framework="fastapi", opentelemetry_enabled=True,
+                tenant_id="test-tenant",
             ),
         ]
         mock_topology.calls = [
@@ -111,6 +114,7 @@ class TestIngestionDAGFlow:
                 "extraction_errors": [],
                 "validation_retries": 0,
                 "commit_status": "",
+                "tenant_id": "test-tenant",
             })
 
             assert result["commit_status"] == "success"
@@ -144,6 +148,7 @@ class TestIngestionDAGFlow:
                 "extraction_errors": [],
                 "validation_retries": 0,
                 "commit_status": "",
+                "tenant_id": "test-tenant",
             })
 
             assert result["commit_status"] == "failed"
@@ -164,6 +169,7 @@ class TestHTTPThroughDAGIntegration:
             ServiceNode(
                 id="svc-1", name="auth", language="python",
                 framework="fastapi", opentelemetry_enabled=True,
+                tenant_id="test-tenant",
             ),
         ]
         mock_topology.calls = [

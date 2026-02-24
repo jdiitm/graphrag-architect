@@ -74,6 +74,7 @@ class IngestionState(TypedDict, total=False):
     commit_status: str
     extraction_checkpoint: Dict[str, str]
     skipped_files: List[str]
+    tenant_id: str
 
 
 def _get_workspace_max_bytes() -> int:
@@ -157,6 +158,7 @@ async def parse_source_ast(state: IngestionState) -> dict:
             + [f["path"] for f in pending if f["path"].endswith(".py")]
         )
         checkpoint.mark(extracted_paths, FileStatus.EXTRACTED)
+        tenant_id = state.get("tenant_id", "default")
         nodes: List[Any] = []
         for ast_svc in go_result.services + py_result.services:
             nodes.append(ServiceNode(
@@ -166,6 +168,7 @@ async def parse_source_ast(state: IngestionState) -> dict:
                 framework=ast_svc.framework,
                 opentelemetry_enabled=ast_svc.opentelemetry_enabled,
                 confidence=1.0,
+                tenant_id=tenant_id,
             ))
         for ast_call in go_result.calls + py_result.calls:
             nodes.append(CallsEdge(
@@ -235,8 +238,9 @@ async def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
         start = time.monotonic()
         raw_files = state.get("raw_files", [])
         existing = list(state.get("extracted_nodes", []))
+        tenant_id = state.get("tenant_id", "default")
         manifest_entities = await asyncio.to_thread(
-            parse_all_manifests, raw_files,
+            parse_all_manifests, raw_files, tenant_id,
         )
         checkpoint = _load_or_create_checkpoint(state, raw_files)
         yaml_paths = [

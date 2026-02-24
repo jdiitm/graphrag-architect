@@ -63,6 +63,7 @@ async def _kafka_ingest_callback(raw_files: List[Dict[str, str]]) -> Dict[str, A
         "extraction_errors": [],
         "validation_retries": 0,
         "commit_status": "",
+        "tenant_id": "default",
     }
     result = await ingestion_graph.ainvoke(initial_state)
     return {
@@ -242,6 +243,7 @@ async def _run_ingestion(request: IngestRequest) -> IngestResponse:
         "extraction_errors": [],
         "validation_retries": 0,
         "commit_status": "",
+        "tenant_id": "default",
     }
     try:
         result = await ingestion_graph.ainvoke(initial_state)
@@ -273,8 +275,10 @@ def _resolve_tenant_context(authorization: Optional[str]) -> TenantContext:
             authorization, token_secret=auth.token_secret,
         )
         return TenantContext.default(tenant_id=principal.team)
-    except (InvalidTokenError, AuthConfigurationError):
-        return TenantContext.default()
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except AuthConfigurationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 def _build_query_state(

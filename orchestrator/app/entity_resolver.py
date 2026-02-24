@@ -194,6 +194,7 @@ class EntityResolver:
                         language=entity.language,
                         framework=entity.framework,
                         opentelemetry_enabled=entity.opentelemetry_enabled,
+                        tenant_id=entity.tenant_id,
                         team_owner=entity.team_owner,
                         namespace_acl=entity.namespace_acl,
                         confidence=entity.confidence,

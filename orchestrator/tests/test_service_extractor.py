@@ -71,6 +71,7 @@ EXPECTED_ORDER_SERVICE = ServiceNode(
     language="go",
     framework="gin",
     opentelemetry_enabled=True,
+    tenant_id="test-tenant",
 )
 
 EXPECTED_USER_SERVICE = ServiceNode(
@@ -79,6 +80,7 @@ EXPECTED_USER_SERVICE = ServiceNode(
     language="python",
     framework="fastapi",
     opentelemetry_enabled=True,
+    tenant_id="test-tenant",
 )
 
 EXPECTED_HTTP_CALL = CallsEdge(

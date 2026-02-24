@@ -222,6 +222,7 @@ class TestResolveEntities:
                 language="go",
                 framework="gin",
                 opentelemetry_enabled=True,
+                tenant_id="test-tenant",
             ),
             ServiceNode(
                 id="payment_api",
@@ -229,6 +230,7 @@ class TestResolveEntities:
                 language="go",
                 framework="gin",
                 opentelemetry_enabled=False,
+                tenant_id="test-tenant",
             ),
         ]
         resolver = EntityResolver(threshold=0.85, name_similarity_threshold=1.0)
@@ -246,6 +248,7 @@ class TestResolveEntities:
                 language="python",
                 framework="fastapi",
                 opentelemetry_enabled=True,
+                tenant_id="test-tenant",
             ),
             ServiceNode(
                 id="billing-engine",
@@ -253,6 +256,7 @@ class TestResolveEntities:
                 language="go",
                 framework="gin",
                 opentelemetry_enabled=True,
+                tenant_id="test-tenant",
             ),
         ]
         resolver = EntityResolver(threshold=0.85, name_similarity_threshold=0.80)
