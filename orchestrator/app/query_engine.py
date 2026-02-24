@@ -29,7 +29,11 @@ from orchestrator.app.query_templates import (
     dynamic_cypher_allowed,
     match_template,
 )
-from orchestrator.app.subgraph_cache import SubgraphCache, normalize_cypher
+from orchestrator.app.subgraph_cache import (
+    SubgraphCache,
+    default_cache_maxsize,
+    normalize_cypher,
+)
 from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
@@ -54,7 +58,7 @@ MAX_CYPHER_ITERATIONS = 3
 
 _SANDBOX = SandboxedQueryExecutor()
 _TEMPLATE_CATALOG = TemplateCatalog()
-_SUBGRAPH_CACHE = SubgraphCache(maxsize=256)
+_SUBGRAPH_CACHE = SubgraphCache(maxsize=default_cache_maxsize())
 
 
 def _sandbox_inject_limit(cypher: str) -> str:

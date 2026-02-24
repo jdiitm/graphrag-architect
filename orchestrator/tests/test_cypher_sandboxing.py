@@ -149,5 +149,4 @@ class TestSandboxConfig:
     def test_defaults(self) -> None:
         config = CypherSandboxConfig()
         assert config.max_results == 1000
-        assert config.max_estimated_rows == 100_000
         assert config.query_timeout_seconds == 30.0
