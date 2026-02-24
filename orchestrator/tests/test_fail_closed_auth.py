@@ -4,6 +4,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 
 class TestAuthDefaultsFailClosed:
@@ -53,6 +54,86 @@ class TestAuthDefaultsFailClosed:
         config = AuthConfig.from_env()
         assert config.require_tokens is True
         assert config.token_secret == ""
+
+
+class TestResolveTenantContextFailClosed:
+
+    def test_no_secret_with_require_tokens_raises_503(self) -> None:
+        from orchestrator.app.main import _resolve_tenant_context
+
+        env = {
+            "DEPLOYMENT_MODE": "dev",
+            "AUTH_REQUIRE_TOKENS": "true",
+        }
+        with patch.dict("os.environ", env, clear=False):
+            os.environ.pop("AUTH_TOKEN_SECRET", None)
+            with pytest.raises(HTTPException) as exc_info:
+                _resolve_tenant_context("Bearer some-token")
+            assert exc_info.value.status_code == 503
+
+    def test_no_secret_with_require_tokens_default_raises_503(self) -> None:
+        from orchestrator.app.main import _resolve_tenant_context
+
+        for key in ("AUTH_TOKEN_SECRET", "AUTH_REQUIRE_TOKENS"):
+            os.environ.pop(key, None)
+        env = {"DEPLOYMENT_MODE": "dev"}
+        with patch.dict("os.environ", env, clear=False):
+            with pytest.raises(HTTPException) as exc_info:
+                _resolve_tenant_context("Bearer some-token")
+            assert exc_info.value.status_code == 503
+
+    def test_no_secret_no_require_allows_default_tenant(self) -> None:
+        from orchestrator.app.main import _resolve_tenant_context
+        from orchestrator.app.tenant_isolation import TenantContext
+
+        env = {
+            "DEPLOYMENT_MODE": "dev",
+            "AUTH_REQUIRE_TOKENS": "false",
+        }
+        with patch.dict("os.environ", env, clear=False):
+            os.environ.pop("AUTH_TOKEN_SECRET", None)
+            result = _resolve_tenant_context(None)
+            assert result.tenant_id == TenantContext.default().tenant_id
+
+    def test_no_auth_header_with_require_tokens_returns_default(self) -> None:
+        from orchestrator.app.main import _resolve_tenant_context
+        from orchestrator.app.tenant_isolation import TenantContext
+
+        env = {
+            "DEPLOYMENT_MODE": "dev",
+            "AUTH_REQUIRE_TOKENS": "true",
+        }
+        with patch.dict("os.environ", env, clear=False):
+            os.environ.pop("AUTH_TOKEN_SECRET", None)
+            result = _resolve_tenant_context(None)
+            assert result.tenant_id == TenantContext.default().tenant_id
+
+
+class TestVerifyIngestAuthFailClosed:
+
+    def test_no_secret_with_require_tokens_raises_503(self) -> None:
+        from orchestrator.app.main import _verify_ingest_auth
+
+        env = {
+            "DEPLOYMENT_MODE": "dev",
+            "AUTH_REQUIRE_TOKENS": "true",
+        }
+        with patch.dict("os.environ", env, clear=False):
+            os.environ.pop("AUTH_TOKEN_SECRET", None)
+            with pytest.raises(HTTPException) as exc_info:
+                _verify_ingest_auth("Bearer some-token")
+            assert exc_info.value.status_code == 503
+
+    def test_no_secret_no_require_allows_through(self) -> None:
+        from orchestrator.app.main import _verify_ingest_auth
+
+        env = {
+            "DEPLOYMENT_MODE": "dev",
+            "AUTH_REQUIRE_TOKENS": "false",
+        }
+        with patch.dict("os.environ", env, clear=False):
+            os.environ.pop("AUTH_TOKEN_SECRET", None)
+            _verify_ingest_auth("Bearer some-token")
 
 
 class TestStartupHealthCheck:

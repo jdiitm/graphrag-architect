@@ -269,6 +269,11 @@ def _resolve_tenant_context(authorization: Optional[str]) -> TenantContext:
         return TenantContext.default()
     auth = AuthConfig.from_env()
     if not auth.token_secret:
+        if auth.require_tokens:
+            raise HTTPException(
+                status_code=503,
+                detail="server misconfigured: token verification required but no secret set",
+            )
         return TenantContext.default()
     try:
         principal = SecurityPrincipal.from_header(
