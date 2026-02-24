@@ -31,7 +31,10 @@ from orchestrator.app.observability import (
 )
 from orchestrator.app.schema_validation import validate_topology
 from orchestrator.app.checkpoint_store import get_checkpointer
+from orchestrator.app.node_sink import IncrementalNodeSink
 from orchestrator.app.workspace_loader import load_directory_chunked
+
+SINK_BATCH_SIZE = 500
 
 logger = logging.getLogger(__name__)
 
@@ -322,11 +325,16 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
     with tracer.start_as_current_span("ingestion.commit_neo4j") as span:
         start = time.monotonic()
         try:
+            entities = state.get("extracted_nodes", [])
             driver = get_driver()
             repo = GraphRepository(
                 driver, circuit_breaker=get_container().circuit_breaker
             )
-            await repo.commit_topology(state.get("extracted_nodes", []))
+            sink = IncrementalNodeSink(repo, batch_size=SINK_BATCH_SIZE)
+            await sink.ingest(entities)
+            await sink.flush()
+            span.set_attribute("entity_count", sink.total_entities)
+            span.set_attribute("flush_count", sink.flush_count)
             return {"commit_status": "success"}
         except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:
             span.set_status(StatusCode.ERROR, str(exc))
@@ -375,21 +383,21 @@ async def run_streaming_pipeline(state: IngestionState) -> dict:
 
         max_bytes = _get_workspace_max_bytes()
         skipped: List[str] = []
-        all_nodes: List[Any] = []
         commit_status = "success"
         chunk_count = 0
+        total_entities = 0
 
         for chunk in load_directory_chunked(
             directory_path, max_total_bytes=max_bytes, skipped=skipped,
         ):
             chunk_nodes, chunk_status, _ = await _process_chunk(chunk)
-            all_nodes.extend(chunk_nodes)
+            total_entities += len(chunk_nodes)
             if chunk_status == "failed":
                 commit_status = "failed"
             chunk_count += 1
 
         span.set_attribute("chunk_count", chunk_count)
-        span.set_attribute("total_entities", len(all_nodes))
+        span.set_attribute("total_entities", total_entities)
         if skipped:
             span.set_attribute("skipped_count", len(skipped))
             logger.warning(
@@ -399,7 +407,7 @@ async def run_streaming_pipeline(state: IngestionState) -> dict:
             )
 
         return {
-            "extracted_nodes": all_nodes,
+            "extracted_nodes": [],
             "commit_status": commit_status,
             "extraction_errors": [],
             "skipped_files": skipped,
