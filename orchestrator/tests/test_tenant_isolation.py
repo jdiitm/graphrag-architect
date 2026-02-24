@@ -143,6 +143,20 @@ class TestTenantPoolLRUEviction:
         assert pool.get_driver("t0") is not default
         assert pool.get_driver("t1") is default
 
+    def test_eviction_without_event_loop_logs_warning(self, caplog) -> None:
+        import logging
+
+        class FakeDriver:
+            async def close(self) -> None:
+                pass
+
+        default = object()
+        pool = TenantAwareDriverPool(default, max_tenants=1)
+        pool.register_driver("t0", FakeDriver())
+        with caplog.at_level(logging.WARNING, logger="orchestrator.app.tenant_isolation"):
+            pool.register_driver("t1", FakeDriver())
+        assert any("evicted tenant driver" in r.message.lower() for r in caplog.records)
+
     def test_max_tenants_configurable_via_env(self) -> None:
         from orchestrator.app.tenant_isolation import default_max_tenant_pools
         with pytest.MonkeyPatch.context() as mp:

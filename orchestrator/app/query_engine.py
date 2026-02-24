@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -75,13 +76,6 @@ def _sandbox_inject_limit(cypher: str) -> str:
 
 
 
-_VECTOR_SEARCH_CYPHER = (
-    "CALL db.index.vector.queryNodes('service_embedding_index', $limit, $query_embedding) "
-    "YIELD node, score "
-    "RETURN node {.*, score: score} AS result "
-    "ORDER BY score DESC"
-)
-
 _FULLTEXT_FALLBACK_CYPHER = (
     "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
     "YIELD node, score "
@@ -130,7 +124,6 @@ def _get_query_timeout() -> float:
 
 
 def _get_hop_edge_limit() -> int:
-    import os
     raw = os.environ.get("HOP_EDGE_LIMIT", "500")
     try:
         return int(raw)

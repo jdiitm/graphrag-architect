@@ -910,18 +910,6 @@ class TestAsyncEvaluation:
     async def test_evaluate_response_returns_immediately(self, base_query_state):
         from orchestrator.app.query_engine import evaluate_response
 
-        eval_started = False
-
-        original_evaluate = None
-
-        def slow_evaluate(**kwargs):
-            nonlocal eval_started
-            eval_started = True
-            import time
-            time.sleep(0)
-            from orchestrator.app.rag_evaluator import RelevanceScore
-            return RelevanceScore(query="q", score=0.5, context_count=1, retrieval_path="vector")
-
         state = _make_state(
             base_query_state,
             query="test query",

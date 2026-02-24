@@ -339,7 +339,7 @@ class GraphRepository:
             )
 
         for chunk in _chunk_list(records, self._batch_size):
-            async with self._session() as session:
+            async with self._write_session() as session:
                 await session.execute_write(
                     self._run_unwind, query=unwind_query, batch=chunk,
                 )
@@ -376,7 +376,7 @@ class GraphRepository:
     ) -> int:
         timestamp = datetime.now(timezone.utc).isoformat()
         total = 0
-        async with self._session() as session:
+        async with self._write_session() as session:
             for label in self._TOMBSTONE_NODE_LABELS:
                 query = (
                     f"MATCH (n:{label})-[r]->() "

@@ -100,7 +100,10 @@ class TenantAwareDriverPool:
                     loop = asyncio.get_running_loop()
                     loop.create_task(evicted.close())
                 except RuntimeError:
-                    pass
+                    logger.warning(
+                        "Could not schedule close for evicted tenant driver %s",
+                        tenant_id,
+                    )
         self._drivers[tenant_id] = driver
 
     def get_driver(self, tenant_id: str) -> Any:
