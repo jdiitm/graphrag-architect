@@ -55,7 +55,8 @@ class TestConfigureTelemetry:
 
 
 class TestIngestionSpans:
-    def test_load_workspace_creates_span(self, telemetry):
+    @pytest.mark.asyncio
+    async def test_load_workspace_creates_span(self, telemetry):
         from orchestrator.app.graph_builder import load_workspace_files
 
         state = {
@@ -66,7 +67,7 @@ class TestIngestionSpans:
             "validation_retries": 0,
             "commit_status": "",
         }
-        load_workspace_files(state)
+        await load_workspace_files(state)
         span_names = [s.name for s in telemetry.get_finished_spans()]
         assert "ingestion.load_workspace" in span_names
 
@@ -97,7 +98,8 @@ class TestIngestionSpans:
         span_names = [s.name for s in telemetry.get_finished_spans()]
         assert "ingestion.enrich_with_llm" in span_names
 
-    def test_validate_schema_creates_span(self, telemetry):
+    @pytest.mark.asyncio
+    async def test_validate_schema_creates_span(self, telemetry):
         from orchestrator.app.graph_builder import validate_extracted_schema
 
         state = {
@@ -108,7 +110,7 @@ class TestIngestionSpans:
             "validation_retries": 0,
             "commit_status": "",
         }
-        validate_extracted_schema(state)
+        await validate_extracted_schema(state)
         span_names = [s.name for s in telemetry.get_finished_spans()]
         assert "ingestion.validate_schema" in span_names
 
@@ -132,7 +134,10 @@ class TestIngestionSpans:
         mock_session.execute_write = AsyncMock()
         mock_driver.session.return_value = mock_session
 
-        with patch(
+        with patch.dict(
+            "os.environ",
+            {"NEO4J_PASSWORD": "test", "GOOGLE_API_KEY": "test-key"},
+        ), patch(
             "orchestrator.app.graph_builder.get_driver",
             return_value=mock_driver,
         ):
@@ -190,7 +195,8 @@ class TestQuerySpans:
 
 
 class TestSpanAttributes:
-    def test_load_workspace_records_file_count(self, telemetry):
+    @pytest.mark.asyncio
+    async def test_load_workspace_records_file_count(self, telemetry):
         from orchestrator.app.graph_builder import load_workspace_files
 
         state = {
@@ -204,7 +210,7 @@ class TestSpanAttributes:
             "validation_retries": 0,
             "commit_status": "",
         }
-        load_workspace_files(state)
+        await load_workspace_files(state)
         spans = telemetry.get_finished_spans()
         workspace_span = next(s for s in spans if s.name == "ingestion.load_workspace")
         assert workspace_span.attributes.get("file_count") == 2
@@ -231,7 +237,8 @@ class TestSpanAttributes:
 
 
 class TestMissingIngestionSpans:
-    def test_parse_manifests_creates_span(self, telemetry):
+    @pytest.mark.asyncio
+    async def test_parse_manifests_creates_span(self, telemetry):
         from orchestrator.app.graph_builder import parse_k8s_and_kafka_manifests
 
         state = {
@@ -242,7 +249,7 @@ class TestMissingIngestionSpans:
             "validation_retries": 0,
             "commit_status": "",
         }
-        parse_k8s_and_kafka_manifests(state)
+        await parse_k8s_and_kafka_manifests(state)
         span_names = [s.name for s in telemetry.get_finished_spans()]
         assert "ingestion.parse_manifests" in span_names
 
@@ -421,7 +428,8 @@ class TestMissingQuerySpans:
 
 
 class TestMetricsRecording:
-    def test_load_workspace_records_ingestion_duration(self, telemetry):
+    @pytest.mark.asyncio
+    async def test_load_workspace_records_ingestion_duration(self, telemetry):
         from orchestrator.app.graph_builder import load_workspace_files
 
         state = {
@@ -435,7 +443,7 @@ class TestMetricsRecording:
         with patch(
             "orchestrator.app.graph_builder.INGESTION_DURATION"
         ) as mock_metric:
-            load_workspace_files(state)
+            await load_workspace_files(state)
             mock_metric.record.assert_called_once()
             elapsed_ms = mock_metric.record.call_args[0][0]
             assert elapsed_ms >= 0
@@ -489,7 +497,10 @@ class TestMetricsRecording:
         mock_session.execute_write = AsyncMock()
         mock_driver.session.return_value = mock_session
 
-        with patch(
+        with patch.dict(
+            "os.environ",
+            {"NEO4J_PASSWORD": "test", "GOOGLE_API_KEY": "test-key"},
+        ), patch(
             "orchestrator.app.graph_builder.get_driver",
             return_value=mock_driver,
         ), patch(

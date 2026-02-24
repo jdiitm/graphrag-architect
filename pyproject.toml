@@ -3,6 +3,7 @@ ignore-patterns = ["test_.*\\.py", "conftest\\.py"]
 
 [tool.pylint."messages control"]
 disable = [
+    "R0902",  # too-many-instance-attributes: ExtractionConfig has 8 fields
     "C0114",  # missing-module-docstring: self-documenting names per CLAUDE.md
     "C0115",  # missing-class-docstring: Pydantic models and TypedDicts are self-describing
     "C0116",  # missing-function-docstring: self-documenting names per CLAUDE.md

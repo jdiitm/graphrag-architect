@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+import jwt
 
 from orchestrator.app.cypher_tokenizer import (
     CypherToken,
@@ -15,6 +15,7 @@ from orchestrator.app.cypher_tokenizer import (
 )
 
 DEFAULT_TOKEN_TTL_SECONDS = 3600
+JWT_ALGORITHM = "HS256"
 
 
 class InvalidTokenError(Exception):
@@ -26,48 +27,26 @@ class AuthConfigurationError(Exception):
 
 
 def sign_token(
-    payload: str,
+    claims: Dict[str, Any],
     secret: str,
     ttl_seconds: int = DEFAULT_TOKEN_TTL_SECONDS,
 ) -> str:
     now = int(time.time())
-    payload_with_claims = f"{payload},iat={now},exp={now + ttl_seconds}"
-    signature = hmac.new(
-        secret.encode(), payload_with_claims.encode(), hashlib.sha256
-    ).hexdigest()
-    return f"{payload_with_claims}.{signature}"
+    payload = {
+        **claims,
+        "iat": now,
+        "exp": now + ttl_seconds,
+    }
+    return jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
 
 
-def _verify_signature(token: str, secret: str) -> str:
-    dot_pos = token.rfind(".")
-    if dot_pos < 0:
-        raise InvalidTokenError("token missing signature")
-    payload = token[:dot_pos]
-    provided_sig = token[dot_pos + 1:]
-    expected_sig = hmac.new(
-        secret.encode(), payload.encode(), hashlib.sha256
-    ).hexdigest()
-    if not hmac.compare_digest(provided_sig, expected_sig):
-        raise InvalidTokenError("token signature invalid")
-    _check_expiration(payload)
-    return payload
-
-
-def _check_expiration(payload: str) -> None:
-    fields: Dict[str, str] = {}
-    for pair in payload.split(","):
-        if "=" in pair:
-            key, value = pair.split("=", 1)
-            fields[key.strip()] = value.strip()
-    exp_str = fields.get("exp")
-    if exp_str is None:
-        raise InvalidTokenError("token missing expiration")
+def _verify_token(token: str, secret: str) -> Dict[str, Any]:
     try:
-        exp = int(exp_str)
-    except ValueError as exc:
-        raise InvalidTokenError("token expiration is not a valid integer") from exc
-    if time.time() >= exp:
-        raise InvalidTokenError("token expired")
+        return jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError as exc:
+        raise InvalidTokenError("token expired") from exc
+    except jwt.InvalidTokenError as exc:
+        raise InvalidTokenError(f"token invalid: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -85,6 +64,7 @@ class SecurityPrincipal:
         cls,
         header: Optional[str],
         token_secret: str = "",
+        require_verification: bool = True,
     ) -> SecurityPrincipal:
         if not header or not header.strip():
             return cls(team="*", namespace="*", role="anonymous")
@@ -92,20 +72,18 @@ class SecurityPrincipal:
         token = header.removeprefix("Bearer ").strip()
 
         if token_secret:
-            payload = _verify_signature(token, token_secret)
+            claims = _verify_token(token, token_secret)
+        elif require_verification:
+            raise InvalidTokenError(
+                "token provided but no secret configured for verification"
+            )
         else:
-            payload = token
-
-        fields: Dict[str, str] = {}
-        for pair in payload.split(","):
-            if "=" in pair:
-                key, value = pair.split("=", 1)
-                fields[key.strip()] = value.strip()
+            return cls(team="*", namespace="*", role="anonymous")
 
         return cls(
-            team=fields.get("team", "*"),
-            namespace=fields.get("namespace", "*"),
-            role=fields.get("role", "viewer"),
+            team=claims.get("team", "*"),
+            namespace=claims.get("namespace", "*"),
+            role=claims.get("role", "viewer"),
         )
 
 
@@ -220,8 +198,13 @@ def _skip_union_keyword(tokens: List[CypherToken], union_idx: int) -> int:
 
 
 class CypherPermissionFilter:
-    def __init__(self, principal: SecurityPrincipal) -> None:
+    def __init__(
+        self,
+        principal: SecurityPrincipal,
+        default_deny_untagged: bool = True,
+    ) -> None:
         self._principal = principal
+        self._deny_untagged = default_deny_untagged
 
     def node_filter(self, alias: str) -> Tuple[str, Dict[str, str]]:
         if self._principal.is_admin:
@@ -231,22 +214,35 @@ class CypherPermissionFilter:
         params: Dict[str, str] = {}
 
         if self._principal.team != "*":
-            clauses.append(
-                f"({alias}.team_owner = $acl_team OR {alias}.team_owner IS NULL)"
-            )
+            if self._deny_untagged:
+                clauses.append(f"({alias}.team_owner = $acl_team)")
+            else:
+                clauses.append(
+                    f"({alias}.team_owner = $acl_team "
+                    f"OR {alias}.team_owner IS NULL)"
+                )
             params["acl_team"] = self._principal.team
 
         if self._principal.namespace != "*":
-            clauses.append(
-                f"($acl_namespace IN {alias}.namespace_acl "
-                f"OR {alias}.namespace_acl IS NULL)"
-            )
+            if self._deny_untagged:
+                clauses.append(
+                    f"($acl_namespace IN {alias}.namespace_acl)"
+                )
+            else:
+                clauses.append(
+                    f"($acl_namespace IN {alias}.namespace_acl "
+                    f"OR {alias}.namespace_acl IS NULL)"
+                )
             params["acl_namespace"] = self._principal.namespace
 
         if not clauses:
-            clauses.append(
-                f"({alias}.team_owner = $acl_team OR {alias}.team_owner IS NULL)"
-            )
+            if self._deny_untagged:
+                clauses.append(f"({alias}.team_owner = $acl_team)")
+            else:
+                clauses.append(
+                    f"({alias}.team_owner = $acl_team "
+                    f"OR {alias}.team_owner IS NULL)"
+                )
             params["acl_team"] = "public"
 
         return " AND ".join(clauses), params

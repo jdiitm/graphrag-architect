@@ -95,7 +95,8 @@ class TestCypherIncludesConfidence:
 
 
 class TestParseSourceASTNode:
-    def test_ast_node_extracts_go_services(self):
+    @pytest.mark.asyncio
+    async def test_ast_node_extracts_go_services(self):
         from orchestrator.app.graph_builder import parse_source_ast
 
         go_source = '''package main
@@ -114,12 +115,13 @@ func main() {
             "validation_retries": 0,
             "commit_status": "",
         }
-        result = parse_source_ast(state)
+        result = await parse_source_ast(state)
         services = [n for n in result["extracted_nodes"] if isinstance(n, ServiceNode)]
         assert len(services) >= 1
         assert services[0].confidence == 1.0
 
-    def test_ast_node_extracts_python_services(self):
+    @pytest.mark.asyncio
+    async def test_ast_node_extracts_python_services(self):
         from orchestrator.app.graph_builder import parse_source_ast
 
         py_source = '''
@@ -134,12 +136,13 @@ app = FastAPI()
             "validation_retries": 0,
             "commit_status": "",
         }
-        result = parse_source_ast(state)
+        result = await parse_source_ast(state)
         services = [n for n in result["extracted_nodes"] if isinstance(n, ServiceNode)]
         assert len(services) >= 1
         assert services[0].language == "python"
 
-    def test_ast_node_produces_calls_with_confidence_one(self):
+    @pytest.mark.asyncio
+    async def test_ast_node_produces_calls_with_confidence_one(self):
         from orchestrator.app.graph_builder import parse_source_ast
 
         go_source = '''package processor
@@ -169,7 +172,7 @@ func (f *FP) Process(ctx context.Context) error {
             "validation_retries": 0,
             "commit_status": "",
         }
-        result = parse_source_ast(state)
+        result = await parse_source_ast(state)
         calls = [n for n in result["extracted_nodes"] if isinstance(n, CallsEdge)]
         assert len(calls) >= 1
         assert all(c.confidence == 1.0 for c in calls)
@@ -443,7 +446,8 @@ app = FastAPI()
         assert len(result.services) == 1
         assert result.services[0].opentelemetry_enabled is False
 
-    def test_parse_source_ast_passes_otel_through(self):
+    @pytest.mark.asyncio
+    async def test_parse_source_ast_passes_otel_through(self):
         from orchestrator.app.graph_builder import parse_source_ast
 
         go_source = '''package main
@@ -466,7 +470,7 @@ func main() {
             "validation_retries": 0,
             "commit_status": "",
         }
-        result = parse_source_ast(state)
+        result = await parse_source_ast(state)
         services = [
             n for n in result["extracted_nodes"]
             if isinstance(n, ServiceNode)

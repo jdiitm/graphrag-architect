@@ -374,7 +374,8 @@ class TestParseAllManifests:
 
 
 class TestDagNodeIntegration:
-    def test_parse_manifests_appends_to_existing_nodes(self):
+    @pytest.mark.asyncio
+    async def test_parse_manifests_appends_to_existing_nodes(self):
         from orchestrator.app.extraction_models import ServiceNode
         from orchestrator.app.graph_builder import parse_k8s_and_kafka_manifests
 
@@ -403,13 +404,14 @@ class TestDagNodeIntegration:
             "validation_retries": 0,
             "commit_status": "",
         }
-        result = parse_k8s_and_kafka_manifests(state)
+        result = await parse_k8s_and_kafka_manifests(state)
         nodes = result["extracted_nodes"]
         assert len(nodes) == 2
         assert nodes[0] is existing_service
         assert isinstance(nodes[1], K8sDeploymentNode)
 
-    def test_parse_manifests_no_yaml_preserves_existing(self):
+    @pytest.mark.asyncio
+    async def test_parse_manifests_no_yaml_preserves_existing(self):
         from orchestrator.app.extraction_models import CallsEdge, ServiceNode
         from orchestrator.app.graph_builder import parse_k8s_and_kafka_manifests
 
@@ -428,10 +430,11 @@ class TestDagNodeIntegration:
             "validation_retries": 0,
             "commit_status": "",
         }
-        result = parse_k8s_and_kafka_manifests(state)
+        result = await parse_k8s_and_kafka_manifests(state)
         assert result["extracted_nodes"] == [svc, edge]
 
-    def test_parse_manifests_empty_state(self):
+    @pytest.mark.asyncio
+    async def test_parse_manifests_empty_state(self):
         from orchestrator.app.graph_builder import parse_k8s_and_kafka_manifests
 
         state = {
@@ -442,7 +445,7 @@ class TestDagNodeIntegration:
             "validation_retries": 0,
             "commit_status": "",
         }
-        result = parse_k8s_and_kafka_manifests(state)
+        result = await parse_k8s_and_kafka_manifests(state)
         assert result["extracted_nodes"] == []
 
 
@@ -479,20 +482,20 @@ class TestManifestACLExtraction:
         assert len(result) == 1
         assert result[0].namespace_acl == ["production", "staging"]
 
-    def test_deployment_without_acl_labels_defaults(self):
+    def test_deployment_without_acl_labels_falls_back_to_namespace(self):
         content = textwrap.dedent("""\
             apiVersion: apps/v1
             kind: Deployment
             metadata:
               name: plain-deploy
-              namespace: default
+              namespace: staging
             spec:
               replicas: 1
         """)
         result = parse_k8s_manifests(content)
         assert len(result) == 1
         assert result[0].team_owner is None
-        assert result[0].namespace_acl == []
+        assert result[0].namespace_acl == ["staging"]
 
     def test_kafka_topic_extracts_team_owner_from_label(self):
         content = textwrap.dedent("""\
@@ -528,19 +531,85 @@ class TestManifestACLExtraction:
         assert len(result) == 1
         assert result[0].namespace_acl == ["production"]
 
-    def test_kafka_topic_without_acl_labels_defaults(self):
+    def test_kafka_topic_without_acl_labels_falls_back_to_namespace(self):
         content = textwrap.dedent("""\
             apiVersion: kafka.strimzi.io/v1beta2
             kind: KafkaTopic
             metadata:
               name: plain-topic
+              namespace: production
             spec:
               partitions: 1
         """)
         result = parse_kafka_topics(content)
         assert len(result) == 1
         assert result[0].team_owner is None
-        assert result[0].namespace_acl == []
+        assert result[0].namespace_acl == ["production"]
+
+    def test_deployment_team_owner_from_standard_team_label(self):
+        content = textwrap.dedent("""\
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: std-label-deploy
+              namespace: production
+              labels:
+                team: backend-team
+            spec:
+              replicas: 1
+        """)
+        result = parse_k8s_manifests(content)
+        assert len(result) == 1
+        assert result[0].team_owner == "backend-team"
+
+    def test_deployment_team_owner_from_owner_label(self):
+        content = textwrap.dedent("""\
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: owner-deploy
+              namespace: production
+              labels:
+                owner: sre-team
+            spec:
+              replicas: 1
+        """)
+        result = parse_k8s_manifests(content)
+        assert len(result) == 1
+        assert result[0].team_owner == "sre-team"
+
+    def test_deployment_team_owner_from_managed_by_label(self):
+        content = textwrap.dedent("""\
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: helm-deploy
+              namespace: production
+              labels:
+                app.kubernetes.io/managed-by: helm
+            spec:
+              replicas: 1
+        """)
+        result = parse_k8s_manifests(content)
+        assert len(result) == 1
+        assert result[0].team_owner == "helm"
+
+    def test_deployment_graphrag_label_takes_precedence(self):
+        content = textwrap.dedent("""\
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: multi-label-deploy
+              namespace: production
+              labels:
+                graphrag.io/team-owner: platform
+                team: generic-team
+            spec:
+              replicas: 1
+        """)
+        result = parse_k8s_manifests(content)
+        assert len(result) == 1
+        assert result[0].team_owner == "platform"
 
     def test_deployment_both_team_and_namespace_acl(self):
         content = textwrap.dedent("""\

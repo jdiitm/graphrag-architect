@@ -202,3 +202,48 @@ class TestAllowsReadKeywords:
     def test_returns_stripped_input(self):
         result = validate_cypher_readonly("  MATCH (n) RETURN n  ")
         assert result == "MATCH (n) RETURN n"
+
+
+class TestStringLiteralsNotFalsePositive:
+    def test_allows_delete_keyword_inside_string_literal(self):
+        result = validate_cypher_readonly(
+            "MATCH (n) WHERE n.desc = 'DELETE WHERE RETURN' RETURN n"
+        )
+        assert "'DELETE WHERE RETURN'" in result
+
+    def test_allows_create_keyword_inside_double_quoted_string(self):
+        result = validate_cypher_readonly(
+            'MATCH (n) WHERE n.desc = "CREATE TABLE users" RETURN n'
+        )
+        assert '"CREATE TABLE users"' in result
+
+    def test_allows_set_keyword_inside_string_literal(self):
+        result = validate_cypher_readonly(
+            "MATCH (n) WHERE n.name = 'SET_HANDLER' RETURN n"
+        )
+        assert "'SET_HANDLER'" in result
+
+    def test_allows_merge_keyword_inside_string_literal(self):
+        result = validate_cypher_readonly(
+            "MATCH (n) WHERE n.operation = 'MERGE sort' RETURN n"
+        )
+        assert "'MERGE sort'" in result
+
+    def test_allows_case_expression_with_set_in_branch(self):
+        result = validate_cypher_readonly(
+            "MATCH (n:Service) "
+            "RETURN CASE WHEN n.language = 'Go' THEN 'backend' ELSE 'other' END"
+        )
+        assert "CASE WHEN" in result
+
+    def test_rejects_real_create_not_fooled_by_string(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "CREATE (n:Evil {name: 'injected'}) RETURN n"
+            )
+
+    def test_allows_drop_keyword_inside_string_property(self):
+        result = validate_cypher_readonly(
+            "MATCH (n) WHERE n.action = 'DROP TABLE' RETURN n"
+        )
+        assert "'DROP TABLE'" in result

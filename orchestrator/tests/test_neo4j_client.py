@@ -200,11 +200,13 @@ class TestCommitTopologyMixed:
         await repo.commit_topology(entities)
 
         run_calls = tx.run.call_args_list
-        assert len(run_calls) == 3
-        for c in run_calls[:2]:
-            assert "MERGE" in c.args[0]
-            assert ":Service" in c.args[0]
-        assert ":CALLS" in run_calls[2].args[0]
+        assert len(run_calls) == 2
+        node_call = run_calls[0]
+        assert "UNWIND" in node_call.args[0]
+        assert ":Service" in node_call.args[0]
+        assert len(node_call.kwargs["batch"]) == 2
+        edge_call = run_calls[1]
+        assert ":CALLS" in edge_call.args[0]
 
     @pytest.mark.asyncio
     async def test_commits_all_entity_types(self) -> None:
@@ -224,6 +226,8 @@ class TestCommitTopologyMixed:
         await repo.commit_topology(entities)
 
         assert tx.run.call_count == 8
+        for c in tx.run.call_args_list:
+            assert "UNWIND" in c.args[0]
 
 
 class TestCommitTopologyEmpty:
@@ -252,6 +256,81 @@ class TestCommitTopologyRollback:
             await repo.commit_topology([SAMPLE_SERVICE])
 
 
+class TestWriteBatchesUnknownEntityType:
+
+    @pytest.mark.asyncio
+    async def test_raises_on_missing_unwind_query(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        with pytest.raises(TypeError, match="No UNWIND query registered"):
+            await repo._write_batches(dict, [{"id": "bogus"}])
+
+
+class TestCypherIdentifierValidation:
+
+    @pytest.mark.asyncio
+    async def test_create_vector_index_rejects_injection_in_label(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        with pytest.raises(ValueError, match="Invalid Cypher identifier"):
+            await repo.create_vector_index(label="Service DETACH DELETE n //")
+
+    @pytest.mark.asyncio
+    async def test_create_vector_index_rejects_injection_in_index_name(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        with pytest.raises(ValueError, match="Invalid Cypher identifier"):
+            await repo.create_vector_index(index_name="idx; DROP INDEX")
+
+    @pytest.mark.asyncio
+    async def test_create_vector_index_rejects_injection_in_property(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        with pytest.raises(ValueError, match="Invalid Cypher identifier"):
+            await repo.create_vector_index(property_name="emb}) RETURN n //")
+
+    @pytest.mark.asyncio
+    async def test_upsert_embeddings_rejects_injection_in_label(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        with pytest.raises(ValueError, match="Invalid Cypher identifier"):
+            await repo.upsert_embeddings(
+                label="Service}) DETACH DELETE n //",
+                id_field="id",
+                embeddings=[{"id": "x", "embedding": [0.1]}],
+            )
+
+    @pytest.mark.asyncio
+    async def test_upsert_embeddings_rejects_injection_in_id_field(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        with pytest.raises(ValueError, match="Invalid Cypher identifier"):
+            await repo.upsert_embeddings(
+                label="Service",
+                id_field="id: 'x'}) SET n.hacked = true //",
+                embeddings=[{"id": "x", "embedding": [0.1]}],
+            )
+
+    @pytest.mark.asyncio
+    async def test_valid_identifiers_accepted(self) -> None:
+        driver, session, tx = _mock_driver()
+        mock_session_obj = AsyncMock()
+        mock_session_obj.run = AsyncMock()
+        mock_session_obj.execute_write = AsyncMock(
+            side_effect=lambda fn, **kw: fn(tx, **kw)
+        )
+        mock_session_obj.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_obj.__aexit__ = AsyncMock(return_value=False)
+        driver.session.return_value = mock_session_obj
+
+        repo = GraphRepository(driver)
+        await repo.create_vector_index(
+            index_name="my_index", label="Service",
+            property_name="embedding", dimensions=1536,
+        )
+        mock_session_obj.run.assert_called_once()
+
+
 class TestCommitTopologyIdempotent:
 
     @pytest.mark.asyncio
@@ -261,4 +340,6 @@ class TestCommitTopologyIdempotent:
 
         await repo.commit_topology([SAMPLE_SERVICE, SAMPLE_SERVICE])
 
-        assert tx.run.call_count == 2
+        assert tx.run.call_count == 1
+        batch = tx.run.call_args.kwargs["batch"]
+        assert len(batch) == 2

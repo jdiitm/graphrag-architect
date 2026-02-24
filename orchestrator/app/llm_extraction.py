@@ -19,6 +19,7 @@ from orchestrator.app.extraction_models import (
     ServiceExtractionResult,
     ServiceNode,
 )
+from orchestrator.app.prompt_sanitizer import sanitize_source_content
 
 SYSTEM_PROMPT = (
     "You are a distributed-systems code analyst. Given source files from a "
@@ -101,7 +102,9 @@ class ServiceExtractor:
         self, files: List[Dict[str, str]]
     ) -> ServiceExtractionResult:
         file_contents = "\n".join(
-            f"--- FILE: {f['path']} ---\n{f['content']}" for f in files
+            f"--- FILE: {f['path']} ---\n"
+            f"{sanitize_source_content(f['content'], f['path'])}"
+            for f in files
         )
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),

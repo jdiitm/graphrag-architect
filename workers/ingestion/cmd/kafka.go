@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/consumer"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
@@ -22,6 +23,9 @@ func NewKafkaJobSource(brokers, topic, group string) *KafkaJobSource {
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topic),
 		kgo.DisableAutoCommit(),
+		kgo.SessionTimeout(30*time.Second),
+		kgo.RebalanceTimeout(60*time.Second),
+		kgo.HeartbeatInterval(3*time.Second),
 	)
 	if err != nil {
 		log.Fatalf("create kafka client: %v", err)
