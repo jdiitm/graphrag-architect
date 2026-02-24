@@ -170,6 +170,40 @@ class TestLoadDirectoryErrorHandling:
         assert result == []
 
 
+class TestLoadDirectoryByteCap:
+
+    def test_load_directory_enforces_max_total_bytes(self, tmp_path: Path):
+        for i in range(10):
+            (tmp_path / f"file_{i}.go").write_text("x" * 1000)
+        result = load_directory(str(tmp_path), max_total_bytes=3000)
+        assert len(result) == 3, (
+            f"load_directory(max_total_bytes=3000) should cap at 3 files "
+            f"of 1000 bytes each, got {len(result)}"
+        )
+
+    def test_load_directory_default_uses_env_cap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        for i in range(10):
+            (tmp_path / f"file_{i}.go").write_text("x" * 500)
+        monkeypatch.setenv("WORKSPACE_MAX_BYTES", "2000")
+        result = load_directory(str(tmp_path))
+        assert len(result) <= 4, (
+            f"load_directory must respect WORKSPACE_MAX_BYTES env var, "
+            f"got {len(result)} files with 2000 byte cap"
+        )
+
+    def test_load_directory_reports_skipped_files(self, tmp_path: Path):
+        for i in range(10):
+            (tmp_path / f"file_{i}.go").write_text("x" * 1000)
+        skipped: list[str] = []
+        result = load_directory(
+            str(tmp_path), max_total_bytes=3000, skipped=skipped,
+        )
+        assert len(result) == 3
+        assert len(skipped) == 7
+
+
 class TestLoadDirectoryConstants:
 
     def test_excluded_dirs_contains_expected(self):
