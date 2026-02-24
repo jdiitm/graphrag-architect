@@ -69,6 +69,40 @@ class TestSubgraphCacheStats:
         assert stats.maxsize == 256
 
 
+class TestSubgraphCacheWiredIntoQueryEngine:
+
+    @pytest.mark.asyncio
+    async def test_cached_result_skips_neo4j_execution(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from orchestrator.app.query_engine import _execute_sandboxed_read
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(return_value=[{"x": 1}])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = MagicMock()
+        mock_driver.session = MagicMock(return_value=mock_session)
+
+        cypher = "MATCH (n:Service) RETURN n"
+        params: dict[str, str] = {}
+
+        with patch(
+            "orchestrator.app.query_engine._sandbox_explain_check",
+            new_callable=AsyncMock,
+        ), patch(
+            "orchestrator.app.query_engine._get_query_timeout",
+            return_value=30.0,
+        ):
+            result1 = await _execute_sandboxed_read(mock_driver, cypher, params)
+            result2 = await _execute_sandboxed_read(mock_driver, cypher, params)
+
+        assert result1 == [{"x": 1}]
+        assert result2 == [{"x": 1}]
+        assert mock_session.execute_read.await_count == 1, (
+            "Second call should be served from cache, not Neo4j"
+        )
+
+
 class TestNormalizeCypher:
     def test_normalize_cypher_produces_consistent_keys(self) -> None:
         q1 = "MATCH (n:Service) RETURN n"

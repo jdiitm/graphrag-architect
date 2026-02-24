@@ -1,6 +1,6 @@
 import os
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -17,6 +17,23 @@ def _reset_graph_builder_container() -> None:
 def _default_auth_open_for_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     if "AUTH_REQUIRE_TOKENS" not in os.environ:
         monkeypatch.setenv("AUTH_REQUIRE_TOKENS", "false")
+
+
+@pytest.fixture(autouse=True)
+def _default_query_timeout():
+    with patch(
+        "orchestrator.app.query_engine._get_query_timeout",
+        return_value=30.0,
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_subgraph_cache():
+    from orchestrator.app.query_engine import _SUBGRAPH_CACHE
+    _SUBGRAPH_CACHE.invalidate_all()
+    yield
+    _SUBGRAPH_CACHE.invalidate_all()
 
 
 @pytest.fixture

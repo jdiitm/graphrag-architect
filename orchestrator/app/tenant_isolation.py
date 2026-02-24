@@ -50,42 +50,6 @@ class TenantRegistry:
         return False
 
 
-def inject_tenant_filter(
-    cypher: str, tenant_id: str, alias: str = "n",
-) -> str:
-    tenant_clause = f"{alias}.tenant_id = $__tenant_id"
-    upper = cypher.upper()
-    where_pos = upper.find("WHERE")
-    if where_pos != -1:
-        insert_at = where_pos + len("WHERE")
-        return (
-            cypher[:insert_at]
-            + f" {tenant_clause} AND"
-            + cypher[insert_at:]
-        )
-    match_end = _find_match_clause_end(cypher)
-    if match_end != -1:
-        return (
-            cypher[:match_end]
-            + f" WHERE {tenant_clause}"
-            + cypher[match_end:]
-        )
-    return cypher
-
-
-def _find_match_clause_end(cypher: str) -> int:
-    upper = cypher.upper()
-    for keyword in ("RETURN", "WITH", "SET", "CREATE", "DELETE", "MERGE", "ORDER"):
-        pos = upper.find(keyword)
-        if pos != -1:
-            return pos
-    return -1
-
-
-def build_tenant_params(tenant_id: str) -> Dict[str, str]:
-    return {"__tenant_id": tenant_id}
-
-
 class TenantAwareDriverPool:
     def __init__(self, default_driver: Any) -> None:
         self._default_driver = default_driver

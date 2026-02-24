@@ -242,6 +242,7 @@ def inject_acl_all_scopes(cypher: str, acl_condition: str) -> str:
 
 
 def _inject_into_clauses(clauses: List[Any], acl_condition: str) -> None:
+    injected = False
     i = 0
     while i < len(clauses):
         clause = clauses[i]
@@ -254,13 +255,16 @@ def _inject_into_clauses(clauses: List[Any], acl_condition: str) -> None:
                 _inject_into_clauses(branch, acl_condition)
 
         if isinstance(clause, MatchClause):
+            injected = True
             next_idx = i + 1
             if (next_idx < len(clauses)
                     and isinstance(clauses[next_idx], WhereClause)):
                 where = clauses[next_idx]
                 where_text = _tokens_text(where.tokens)
+                body = _strip_where_keyword(where_text)
                 new_text = (
-                    where_text.rstrip() + " AND " + acl_condition + " "
+                    " WHERE " + acl_condition
+                    + " AND (" + body.strip() + ") "
                 )
                 where.tokens = tokenize_cypher(new_text)
             else:
@@ -269,3 +273,30 @@ def _inject_into_clauses(clauses: List[Any], acl_condition: str) -> None:
                 )
                 clauses.insert(next_idx, WhereClause(tokens=where_tokens))
         i += 1
+
+    if not injected:
+        has_procedure_call = any(
+            isinstance(c, CallSubquery) and not c.body
+            for c in clauses
+        )
+        if has_procedure_call:
+            _inject_before_return(clauses, acl_condition)
+
+
+def _inject_before_return(
+    clauses: List[Any], acl_condition: str,
+) -> None:
+    for i, clause in enumerate(clauses):
+        if isinstance(clause, ReturnClause):
+            where_tokens = tokenize_cypher(
+                " WHERE " + acl_condition + " "
+            )
+            clauses.insert(i, WhereClause(tokens=where_tokens))
+            return
+
+
+def _strip_where_keyword(text: str) -> str:
+    stripped = text.lstrip()
+    if stripped.upper().startswith("WHERE"):
+        return stripped[5:]
+    return text

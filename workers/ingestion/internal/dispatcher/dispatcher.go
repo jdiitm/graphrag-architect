@@ -21,6 +21,7 @@ type Config struct {
 	BaseBackoff    time.Duration
 	MaxBackoff     time.Duration
 	DLQAckTimeout  time.Duration
+	JobTimeout     time.Duration
 }
 
 type Dispatcher struct {
@@ -88,16 +89,23 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			}
 			jobCtx := telemetry.ExtractTraceContext(ctx, job.Headers)
 			processCtx, processSpan := telemetry.StartProcessSpan(jobCtx, job)
+			var jobCancel context.CancelFunc
+			if d.cfg.JobTimeout > 0 {
+				processCtx, jobCancel = context.WithTimeout(processCtx, d.cfg.JobTimeout)
+			}
 			result := d.processWithRetry(processCtx, job)
-		if result.Err != nil {
-			_, dlqSpan := telemetry.StartDLQSpan(processCtx, result)
-			result.Done = make(chan struct{})
-			d.dlq <- result
-			d.awaitDLQDone(ctx, result)
-			dlqSpan.End()
-			d.observer.RecordDLQRouted()
-			d.observer.RecordJobProcessed("dlq")
-		} else {
+			if jobCancel != nil {
+				jobCancel()
+			}
+			if result.Err != nil {
+				_, dlqSpan := telemetry.StartDLQSpan(processCtx, result)
+				result.Done = make(chan struct{})
+				d.dlq <- result
+				d.awaitDLQDone(ctx, result)
+				dlqSpan.End()
+				d.observer.RecordDLQRouted()
+				d.observer.RecordJobProcessed("dlq")
+			} else {
 				d.observer.RecordJobProcessed("success")
 			}
 			processSpan.End()

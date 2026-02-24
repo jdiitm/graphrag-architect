@@ -47,10 +47,7 @@ class TestScopedEntityIdInMergeOps:
 
 class TestCallIsolationWiredIntoACL:
 
-    def test_inject_cypher_logs_warning_for_unfiltered_call_subqueries(
-        self, caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        import logging
+    def test_ast_injection_covers_call_subquery_match(self) -> None:
         from orchestrator.app.access_control import CypherPermissionFilter, SecurityPrincipal
 
         principal = SecurityPrincipal(
@@ -59,20 +56,17 @@ class TestCallIsolationWiredIntoACL:
             role="viewer",
         )
         pf = CypherPermissionFilter(principal)
-        cypher_with_unfiltered_call = (
+        cypher_with_call = (
             "MATCH (n:Service) WHERE n.team_owner = 'team-a' "
             "CALL { MATCH (m:Service) RETURN m } RETURN n"
         )
-        with caplog.at_level(logging.WARNING, logger="orchestrator.app.access_control"):
-            result, params = pf.inject_into_cypher(cypher_with_unfiltered_call)
+        result, params = pf.inject_into_cypher(cypher_with_call)
 
-        acl_warnings = [
-            r.message for r in caplog.records
-            if "CALL subquery ACL gap" in r.message
-        ]
-        assert len(acl_warnings) >= 1, (
-            "inject_into_cypher must call validate_call_subquery_acl and log "
-            "a warning for unfiltered CALL subqueries."
+        subquery_start = result.find("CALL")
+        subquery_end = result.find("}", subquery_start)
+        subquery_body = result[subquery_start:subquery_end]
+        assert "n.team_owner" in subquery_body, (
+            "AST-level injection must cover MATCH clauses inside CALL subqueries"
         )
 
 

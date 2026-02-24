@@ -160,6 +160,57 @@ _ENV_VARS = {
 }
 
 
+class TestKafkaCallbackUsesStreamingPipeline:
+    @pytest.mark.asyncio
+    async def test_kafka_callback_delegates_to_streaming_for_directory(self):
+        from orchestrator.app.main import _kafka_ingest_callback
+
+        mock_invoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "commit_status": "success",
+            "extraction_errors": [],
+            "extraction_checkpoint": {},
+            "skipped_files": [],
+        })
+
+        with (
+            patch.dict("os.environ", _ENV_VARS),
+            patch(
+                "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+                mock_invoke,
+            ),
+        ):
+            result = await _kafka_ingest_callback(
+                [{"path": "svc.go", "content": "package main"}]
+            )
+
+        assert result["commit_status"] == "success"
+        assert mock_invoke.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_ingest_run_uses_streaming_for_directory(self):
+        from orchestrator.app.main import _run_streaming_ingestion
+
+        mock_streaming = AsyncMock(return_value={
+            "extracted_nodes": [{"id": "svc-1"}],
+            "commit_status": "success",
+            "extraction_errors": [],
+            "skipped_files": [],
+        })
+
+        with (
+            patch.dict("os.environ", _ENV_VARS),
+            patch(
+                "orchestrator.app.main.run_streaming_pipeline",
+                mock_streaming,
+            ),
+        ):
+            result = await _run_streaming_ingestion("/some/workspace")
+
+        mock_streaming.assert_called_once()
+        assert result.status == "success"
+
+
 
 class TestStreamingPipelinePerChunkCommit:
     @pytest.mark.asyncio

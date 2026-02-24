@@ -70,7 +70,7 @@ class TestACLInjectionCommentBypass:
 
 
 class TestACLInjectionNestedSubquery:
-    def test_call_subquery_acl_not_injected_inside_braces(self):
+    def test_call_subquery_acl_injected_inside_braces(self):
         filt = _viewer_filter()
         cypher = (
             "MATCH (n:Service) "
@@ -81,10 +81,12 @@ class TestACLInjectionNestedSubquery:
         assert params["acl_team"] == "platform"
         brace_start = filtered.find("{")
         brace_end = filtered.find("}")
-        acl_pos = filtered.find("n.team_owner")
-        assert acl_pos > brace_end, "ACL must be outside the subquery braces"
+        inner_acl = filtered.find("n.team_owner", brace_start)
+        assert inner_acl < brace_end, (
+            "AST-level ACL must inject inside CALL subquery MATCH clauses"
+        )
 
-    def test_deeply_nested_call_subqueries(self):
+    def test_deeply_nested_call_subqueries_covered(self):
         filt = _viewer_filter()
         cypher = (
             "MATCH (n:Service) "
@@ -93,9 +95,12 @@ class TestACLInjectionNestedSubquery:
         )
         filtered, params = filt.inject_into_cypher(cypher)
         assert params["acl_team"] == "platform"
-        last_brace = filtered.rfind("}")
-        acl_pos = filtered.find("n.team_owner")
-        assert acl_pos > last_brace
+        inner_brace = filtered.find("{", filtered.find("{") + 1)
+        inner_brace_end = filtered.find("}")
+        inner_acl = filtered.find("n.team_owner", inner_brace)
+        assert inner_acl < inner_brace_end, (
+            "AST-level ACL must inject into deeply nested MATCH clauses"
+        )
 
 
 class TestACLInjectionMultiStatement:
