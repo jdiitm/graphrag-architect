@@ -98,3 +98,86 @@ class TestIncrementalNodeSink:
         asyncio.run(_run())
         assert sink.total_entities == 1000
         assert len(sink._buffer) == 0
+
+
+class _FakeEntity:
+    def __init__(self, name: str, namespace_acl: list | None = None, team_owner: str | None = None):
+        self.name = name
+        self.namespace_acl = namespace_acl
+        self.team_owner = team_owner
+
+
+class TestPartitionedWrites:
+
+    def test_parallel_partitions_splits_by_namespace(self, repo: FakeRepository) -> None:
+        sink = IncrementalNodeSink(repo, batch_size=4, parallel_partitions=True)
+        entities = [
+            _FakeEntity("svc-a", namespace_acl=["ns-alpha"]),
+            _FakeEntity("svc-b", namespace_acl=["ns-beta"]),
+            _FakeEntity("svc-c", namespace_acl=["ns-alpha"]),
+            _FakeEntity("svc-d", namespace_acl=["ns-beta"]),
+        ]
+
+        asyncio.run(sink.ingest(entities))
+
+        assert len(repo.committed_batches) == 2
+        all_committed = [e for batch in repo.committed_batches for e in batch]
+        names = {e.name for e in all_committed}
+        assert names == {"svc-a", "svc-b", "svc-c", "svc-d"}
+
+    def test_single_partition_does_not_split(self, repo: FakeRepository) -> None:
+        sink = IncrementalNodeSink(repo, batch_size=3, parallel_partitions=True)
+        entities = [
+            _FakeEntity("svc-a", namespace_acl=["ns-alpha"]),
+            _FakeEntity("svc-b", namespace_acl=["ns-alpha"]),
+            _FakeEntity("svc-c", namespace_acl=["ns-alpha"]),
+        ]
+        asyncio.run(sink.ingest(entities))
+        assert len(repo.committed_batches) == 1
+
+    def test_fallback_to_team_owner(self, repo: FakeRepository) -> None:
+        sink = IncrementalNodeSink(repo, batch_size=4, parallel_partitions=True)
+        entities = [
+            _FakeEntity("svc-a", team_owner="team-x"),
+            _FakeEntity("svc-b", team_owner="team-y"),
+            _FakeEntity("svc-c", team_owner="team-x"),
+            _FakeEntity("svc-d", team_owner="team-y"),
+        ]
+        asyncio.run(sink.ingest(entities))
+        assert len(repo.committed_batches) == 2
+
+    def test_default_partition_key_groups_together(self, repo: FakeRepository) -> None:
+        sink = IncrementalNodeSink(repo, batch_size=3, parallel_partitions=True)
+        entities = [
+            _FakeEntity("svc-a"),
+            _FakeEntity("svc-b"),
+            _FakeEntity("svc-c"),
+        ]
+        asyncio.run(sink.ingest(entities))
+        assert len(repo.committed_batches) == 1
+
+    def test_parallel_false_does_sequential(self, repo: FakeRepository) -> None:
+        sink = IncrementalNodeSink(repo, batch_size=4, parallel_partitions=False)
+        entities = [
+            _FakeEntity("svc-a", namespace_acl=["ns-alpha"]),
+            _FakeEntity("svc-b", namespace_acl=["ns-beta"]),
+            _FakeEntity("svc-c", namespace_acl=["ns-alpha"]),
+            _FakeEntity("svc-d", namespace_acl=["ns-beta"]),
+        ]
+        asyncio.run(sink.ingest(entities))
+        assert len(repo.committed_batches) == 1
+
+    def test_flush_with_partitions(self, repo: FakeRepository) -> None:
+        sink = IncrementalNodeSink(repo, batch_size=100, parallel_partitions=True)
+        entities = [
+            _FakeEntity("svc-a", namespace_acl=["ns-alpha"]),
+            _FakeEntity("svc-b", namespace_acl=["ns-beta"]),
+        ]
+
+        async def _run():
+            await sink.ingest(entities)
+            await sink.flush()
+
+        asyncio.run(_run())
+        assert len(repo.committed_batches) == 2
+        assert sink.total_entities == 2

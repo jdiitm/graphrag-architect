@@ -129,27 +129,45 @@ func TestConsumer_StopsOnSourceClosed(t *testing.T) {
 	}
 }
 
-func TestConsumer_AckTimeoutPreventsIndefiniteBlock(t *testing.T) {
-	src := &stubSource{
+func TestConsumer_AckTimeoutContinuesWithoutCommit(t *testing.T) {
+	src := &commitTrackingSource{
 		batches: [][]domain.Job{
 			{sampleJob("slow")},
+			{sampleJob("fast")},
 		},
 	}
+
+	var mu sync.Mutex
+	commitCount := 0
+	src.onCommit = func() {
+		mu.Lock()
+		commitCount++
+		mu.Unlock()
+	}
+
 	jobs := make(chan domain.Job, 10)
 	acks := make(chan struct{}, 10)
 
-	c := consumer.New(src, jobs, acks, consumer.WithAckTimeout(100*time.Millisecond))
+	c := consumer.New(src, jobs, acks, consumer.WithAckTimeout(50*time.Millisecond))
 
 	go func() {
 		<-jobs
+		// first batch: no ack sent (simulates stalled processing)
+
+		j := <-jobs
+		_ = j
+		acks <- struct{}{} // second batch: acked promptly
 	}()
 
 	err := c.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected ack timeout error, got nil")
+	if err != nil {
+		t.Fatalf("expected nil (consumer should continue past timeout), got %v", err)
 	}
-	if !errors.Is(err, consumer.ErrAckTimeout) {
-		t.Fatalf("expected ErrAckTimeout, got %v", err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if commitCount != 1 {
+		t.Fatalf("expected 1 commit (only for the fast batch), got %d", commitCount)
 	}
 }
 

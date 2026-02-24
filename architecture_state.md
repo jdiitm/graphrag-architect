@@ -26,10 +26,16 @@ hybrid Vector + Cypher retrieval over Neo4j.
               │  Dispatcher (worker pool)  │
               │       │          │         │
               │  Processor    DLQ Handler──┘
-              │       │
-              └───────┼────────────────────┘
-                      │ HTTP POST
-                      ▼
+              │   │      │
+              └───┼──────┼───────────────────┘
+                  │      │ PROCESSOR_MODE=kafka
+                  │      ▼
+                  │  ┌──────────────┐
+                  │  │parsed-docs   │ (Kafka topic)
+                  │  └──────┬───────┘
+                  │         │
+                  │ HTTP    │ Consume
+                  ▼  POST  ▼
               ┌────────────────────────────┐
               │   Python Orchestrator      │
               │   (FastAPI + LangGraph)    │
@@ -58,10 +64,10 @@ hybrid Vector + Cypher retrieval over Neo4j.
 
 High-throughput Kafka consumer with a concurrent worker pool.
 
-- **Consumer**: Reads from `raw-documents` topic via franz-go.
+- **Consumer**: Reads from `raw-documents` topic via franz-go. Ack timeouts are non-fatal (consumer stays alive).
 - **Dispatcher**: Manages N goroutines, channels, and retry logic.
-- **DocumentProcessor**: Interface for processing each job. `ForwardingProcessor` HTTP POSTs base64-encoded payloads to the Python orchestrator's `/ingest` endpoint.
-- **DLQ Handler**: Routes permanently failed jobs to `raw-documents.dlq`.
+- **DocumentProcessor**: Interface with three implementations: `ForwardingProcessor` (HTTP POST), `KafkaForwardingProcessor` (writes to parsed-documents topic), and `BlobForwardingProcessor` (blob store + event). Controlled by `PROCESSOR_MODE` env var.
+- **DLQ Handler**: Routes permanently failed jobs to `raw-documents.dlq` with file fallback.
 - **Shutdown**: Graceful via `context.Context` + `sync.WaitGroup`. No message loss.
 
 ### 2. Python Orchestrator (`orchestrator/`)
@@ -69,25 +75,40 @@ High-throughput Kafka consumer with a concurrent worker pool.
 LangGraph-based extraction pipeline.
 
 - **ServiceExtractor**: Async LLM extraction (Gemini) of ServiceNode and CallsEdge from .go/.py files.
-- **Graph Builder**: LangGraph ingestion DAG: load → parse_services → parse_manifests → validate → commit. All nodes instrumented with OpenTelemetry spans.
-- **Query Engine**: LangGraph query DAG: classify → route → [vector|single_hop|cypher|hybrid] → synthesize. Agentic Cypher iteration (max 3), DRIFT-inspired hybrid retrieval.
-- **Access Control**: SecurityPrincipal resolution from Authorization header. CypherPermissionFilter injects ACL WHERE clauses into Cypher queries.
+- **Graph Builder**: LangGraph ingestion DAG: load → parse_services → parse_manifests → validate → entity_resolution → commit. Streaming chunked loading with configurable max bytes.
+- **Entity Resolver**: Fuzzy cross-repo name matching (Levenshtein-based) to deduplicate services across repositories before commit.
+- **Query Engine**: LangGraph query DAG: classify → route → [vector|single_hop|cypher|hybrid] → synthesize. Agentic Cypher iteration (max 3), DRIFT-inspired hybrid retrieval. Async job-based execution via `POST /query?async_mode=true` + `GET /query/{job_id}`.
+- **Query Cost Estimation**: Pre-execution Cypher complexity analysis — rejects unbounded variable-length paths, enforces max depth.
+- **Access Control**: Fail-closed authentication (token verification mandatory when token provided). AST-based ACL injection into ALL MATCH clauses (including subqueries and unions). Post-injection `validate_acl_coverage` confirms every MATCH has ACL.
+- **Tenant Isolation**: `TenantAwareDriverPool` with LOGICAL (WHERE clause) and PHYSICAL (separate Neo4j database per tenant) modes. `GraphRepository` passes tenant database to session creation.
+- **Circuit Breaker**: Supports `InMemoryStateStore` (dev) and `RedisStateStore` (production) for cross-pod state sharing.
+- **Caching**: `RedisSubgraphCache` with L1 (process-local) / L2 (Redis) tiering. `SemanticQueryCache` for embedding similarity.
+- **Node Sink**: `IncrementalNodeSink` with namespace-partitioned parallel writes for reduced lock contention.
+- **Query Templates**: 9 parameterized Cypher templates (blast_radius, dependency_count, service_neighbors, topic_consumers, topic_producers, service_deployments, namespace_services, service_databases, cross_team_dependencies).
 - **Observability**: TracerProvider with OTLP gRPC exporter, FastAPI auto-instrumentation, 4 metric histograms.
-- **Config**: ExtractionConfig (model, concurrency, token budget, retry), Neo4jConfig.
+- **Config**: ExtractionConfig, Neo4jConfig, RedisConfig, RateLimitConfig, VectorStoreConfig, EmbeddingConfig.
 
 ### 3. Infrastructure (`infrastructure/`)
 
-- **Neo4j 5.26**: Knowledge graph store (ports 7474/7687).
-- **Apache Kafka 3.9**: Event bus, KRaft mode (port 9092).
+- **Neo4j 5.26**: Knowledge graph store (ports 7474/7687). Multi-database support for physical tenant isolation.
+- **Apache Kafka 3.9**: Event bus, KRaft mode (port 9092). Topics: `raw-documents`, `raw-documents.dlq`, `graphrag.parsed`.
+- **Redis**: Distributed state store for circuit breaker, subgraph cache, and rate limiting (optional; in-memory fallback in dev).
+- **K8s**: StatefulSets for Kafka (Downward API for `POD_NAME`), Deployments for orchestrator (HPA-ready), NetworkPolicies for ingress/egress control.
 
 ## Data Flow
 
 1. Raw documents (source files, manifests) are published to `raw-documents` Kafka topic.
-2. Go worker pool consumes, deserializes, and forwards to Python orchestrator.
-3. Orchestrator runs LLM extraction → Pydantic models → Cypher → Neo4j.
-4. Failed ingestions route to DLQ (`raw-documents.dlq`) for inspection.
+2. Go worker pool consumes, deserializes, and forwards via HTTP POST or Kafka `parsed-documents` topic (configurable).
+3. Orchestrator runs LLM extraction → entity resolution → Pydantic models → namespace-partitioned Cypher → Neo4j.
+4. Failed ingestions route to DLQ (`raw-documents.dlq`) with file-based fallback.
 
 ## Graph Schema
 
-**Nodes:** Service, Database, KafkaTopic, K8sDeployment
-**Edges:** CALLS, PRODUCES, CONSUMES, DEPLOYED_IN
+**Nodes:** Service, Database, KafkaTopic, K8sDeployment (all carry `team_owner`, `namespace_acl`)
+**Edges:** CALLS, PRODUCES, CONSUMES, DEPLOYED_IN (all carry `ingestion_id`, `last_seen_at`)
+
+## Test Coverage
+
+- **Python**: 952 tests (unit + integration)
+- **Go**: 100 tests across 10 packages
+- **Quality gates**: Pylint 9.98/10, all Python tests, all Go tests

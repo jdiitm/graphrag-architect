@@ -26,11 +26,17 @@ from orchestrator.app.checkpoint_store import close_checkpointer, init_checkpoin
 from orchestrator.app.neo4j_pool import close_driver, init_driver
 from orchestrator.app.observability import configure_metrics, configure_telemetry
 from orchestrator.app.query_engine import query_graph
-from orchestrator.app.query_models import QueryRequest, QueryResponse
+from orchestrator.app.query_models import (
+    QueryJobResponse,
+    QueryJobStore,
+    QueryRequest,
+    QueryResponse,
+)
 
 logger = logging.getLogger(__name__)
 
 _STATE: Dict[str, Any] = {"semaphore": None, "kafka_consumer": None, "kafka_task": None}
+_JOB_STORE = QueryJobStore(ttl_seconds=300.0)
 
 
 def get_ingestion_semaphore() -> asyncio.Semaphore:
@@ -255,12 +261,10 @@ async def _run_ingestion(request: IngestRequest) -> IngestResponse:
     return response
 
 
-@app.post("/query", response_model=QueryResponse)
-async def query(
-    request: QueryRequest,
-    authorization: Optional[str] = Header(default=None),
-) -> QueryResponse:
-    initial_state: Dict[str, Any] = {
+def _build_query_state(
+    request: QueryRequest, authorization: str,
+) -> Dict[str, Any]:
+    return {
         "query": request.query,
         "max_results": request.max_results,
         "complexity": "",
@@ -271,10 +275,41 @@ async def query(
         "iteration_count": 0,
         "answer": "",
         "sources": [],
-        "authorization": authorization or "",
+        "authorization": authorization,
         "evaluation_score": -1.0,
         "retrieval_quality": "skipped",
     }
+
+
+def _result_to_response(result: Dict[str, Any]) -> QueryResponse:
+    return QueryResponse(
+        answer=result.get("answer", ""),
+        sources=result.get("sources", []),
+        complexity=result.get("complexity", "entity_lookup"),
+        retrieval_path=result.get("retrieval_path", "vector"),
+        evaluation_score=result.get("evaluation_score", -1.0),
+        retrieval_quality=result.get("retrieval_quality", "skipped"),
+    )
+
+
+@app.post("/query", response_model=QueryResponse)
+async def query(
+    request: QueryRequest,
+    authorization: Optional[str] = Header(default=None),
+    async_mode: bool = False,
+) -> JSONResponse:
+    if async_mode:
+        job = _JOB_STORE.create()
+        initial_state = _build_query_state(request, authorization or "")
+        asyncio.create_task(
+            _run_query_job(job.job_id, initial_state)
+        )
+        return JSONResponse(
+            status_code=202,
+            content={"job_id": job.job_id, "status": job.status.value},
+        )
+
+    initial_state = _build_query_state(request, authorization or "")
     try:
         result = await query_graph.ainvoke(initial_state)
     except AuthConfigurationError as exc:
@@ -286,11 +321,24 @@ async def query(
         raise HTTPException(
             status_code=500, detail="Internal query error"
         ) from exc
-    return QueryResponse(
-        answer=result.get("answer", ""),
-        sources=result.get("sources", []),
-        complexity=result.get("complexity", "entity_lookup"),
-        retrieval_path=result.get("retrieval_path", "vector"),
-        evaluation_score=result.get("evaluation_score", -1.0),
-        retrieval_quality=result.get("retrieval_quality", "skipped"),
-    )
+    response = _result_to_response(result)
+    return JSONResponse(content=response.model_dump(), status_code=200)
+
+
+async def _run_query_job(job_id: str, initial_state: Dict[str, Any]) -> None:
+    _JOB_STORE.mark_running(job_id)
+    try:
+        result = await query_graph.ainvoke(initial_state)
+        response = _result_to_response(result)
+        _JOB_STORE.complete(job_id, response)
+    except Exception as exc:
+        logger.exception("Background query job %s failed", job_id)
+        _JOB_STORE.fail(job_id, str(exc))
+
+
+@app.get("/query/{job_id}", response_model=QueryJobResponse)
+async def get_query_job(job_id: str) -> JSONResponse:
+    job = _JOB_STORE.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JSONResponse(content=job.model_dump(), status_code=200)

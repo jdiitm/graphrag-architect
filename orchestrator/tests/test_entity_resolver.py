@@ -6,6 +6,8 @@ from orchestrator.app.entity_resolver import (
     EntityResolver,
     ScopedEntityId,
     compute_similarity,
+    name_similarity,
+    normalize_name,
     resolve_entity_id,
 )
 
@@ -139,3 +141,121 @@ class TestEntityResolver:
             attributes={"language": "python"},
         )
         assert result.resolved_from is not None
+
+
+class TestNormalizeName:
+    def test_strips_hyphens_and_lowercases(self) -> None:
+        assert normalize_name("payment-api") == "paymentapi"
+
+    def test_strips_underscores(self) -> None:
+        assert normalize_name("payments_service") == "paymentsservice"
+
+    def test_strips_dots(self) -> None:
+        assert normalize_name("payments.service") == "paymentsservice"
+
+    def test_empty_string(self) -> None:
+        assert normalize_name("") == ""
+
+
+class TestNameSimilarity:
+    def test_identical_names(self) -> None:
+        assert name_similarity("auth-service", "auth-service") == 1.0
+
+    def test_hyphen_vs_underscore_equivalent(self) -> None:
+        assert name_similarity("payment-api", "payment_api") == 1.0
+
+    def test_similar_names_high_score(self) -> None:
+        score = name_similarity("payment-api", "payments-api")
+        assert score > 0.80
+
+    def test_different_names_low_score(self) -> None:
+        score = name_similarity("auth-service", "billing-engine")
+        assert score < 0.5
+
+
+class TestCrossRepoResolution:
+    def test_fuzzy_match_across_repos(self) -> None:
+        resolver = EntityResolver(threshold=0.75, name_similarity_threshold=0.80)
+        r1 = resolver.resolve(
+            name="payment-api",
+            repository="team-a/payments",
+            namespace="prod",
+            attributes={"language": "go"},
+        )
+        assert r1.is_new is True
+
+        r2 = resolver.resolve(
+            name="payment_api",
+            repository="team-b/checkout",
+            namespace="prod",
+            attributes={"language": "go"},
+        )
+        assert r2.is_new is False
+        assert r2.resolved_id == r1.resolved_id
+
+    def test_no_false_positives_different_services(self) -> None:
+        resolver = EntityResolver(threshold=0.85, name_similarity_threshold=0.80)
+        r1 = resolver.resolve(
+            name="auth-service",
+            repository="team-a/auth",
+            namespace="prod",
+            attributes={"language": "python", "framework": "fastapi"},
+        )
+        r2 = resolver.resolve(
+            name="billing-engine",
+            repository="team-b/billing",
+            namespace="prod",
+            attributes={"language": "go", "framework": "gin"},
+        )
+        assert r2.is_new is True
+        assert r2.resolved_id != r1.resolved_id
+
+
+class TestResolveEntities:
+    def test_deduplicates_similar_service_nodes(self) -> None:
+        from orchestrator.app.extraction_models import ServiceNode
+
+        entities = [
+            ServiceNode(
+                id="payment-api",
+                name="payment-api",
+                language="go",
+                framework="gin",
+                opentelemetry_enabled=True,
+            ),
+            ServiceNode(
+                id="payment_api",
+                name="payment_api",
+                language="go",
+                framework="gin",
+                opentelemetry_enabled=False,
+            ),
+        ]
+        resolver = EntityResolver(threshold=0.85, name_similarity_threshold=1.0)
+        resolved = resolver.resolve_entities(entities)
+        service_nodes = [e for e in resolved if isinstance(e, ServiceNode)]
+        assert len(service_nodes) == 1
+
+    def test_preserves_distinct_services(self) -> None:
+        from orchestrator.app.extraction_models import ServiceNode
+
+        entities = [
+            ServiceNode(
+                id="auth-service",
+                name="auth-service",
+                language="python",
+                framework="fastapi",
+                opentelemetry_enabled=True,
+            ),
+            ServiceNode(
+                id="billing-engine",
+                name="billing-engine",
+                language="go",
+                framework="gin",
+                opentelemetry_enabled=True,
+            ),
+        ]
+        resolver = EntityResolver(threshold=0.85, name_similarity_threshold=0.80)
+        resolved = resolver.resolve_entities(entities)
+        service_nodes = [e for e in resolved if isinstance(e, ServiceNode)]
+        assert len(service_nodes) == 2

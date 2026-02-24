@@ -125,7 +125,6 @@ def _build_acl_filter(
     principal = SecurityPrincipal.from_header(
         state.get("authorization", ""),
         token_secret=auth_config.token_secret,
-        require_verification=auth_config.require_tokens,
     )
     return CypherPermissionFilter(
         principal,

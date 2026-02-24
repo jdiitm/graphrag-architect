@@ -473,15 +473,13 @@ class TestRequireVerificationFlag:
                 require_verification=True,
             )
 
-    def test_token_without_require_and_no_secret_returns_anonymous(self):
-        principal = SecurityPrincipal.from_header(
-            "Bearer some-unverifiable-token",
-            token_secret="",
-            require_verification=False,
-        )
-        assert principal.role == "anonymous"
-        assert principal.team == "*"
-        assert principal.namespace == "*"
+    def test_token_without_require_and_no_secret_rejects_fail_closed(self):
+        with pytest.raises(InvalidTokenError, match="no secret configured"):
+            SecurityPrincipal.from_header(
+                "Bearer some-unverifiable-token",
+                token_secret="",
+                require_verification=False,
+            )
 
 
 class TestNodeMetadataOnIngestion:

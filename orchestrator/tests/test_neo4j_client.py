@@ -331,6 +331,23 @@ class TestCypherIdentifierValidation:
         mock_session_obj.run.assert_called_once()
 
 
+class TestGraphRepositoryTenantDatabase:
+
+    @pytest.mark.asyncio
+    async def test_session_uses_specified_database(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver, database="acme_db")
+        await repo.commit_topology([SAMPLE_SERVICE])
+        driver.session.assert_called_with(database="acme_db")
+
+    @pytest.mark.asyncio
+    async def test_session_omits_database_when_none(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        await repo.commit_topology([SAMPLE_SERVICE])
+        driver.session.assert_called_with()
+
+
 class TestCommitTopologyIdempotent:
 
     @pytest.mark.asyncio

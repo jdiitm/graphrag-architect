@@ -26,6 +26,7 @@ from orchestrator.app.extraction_models import (
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.manifest_parser import parse_all_manifests
 from orchestrator.app.circuit_breaker import CircuitOpenError
+from orchestrator.app.entity_resolver import EntityResolver
 from orchestrator.app.neo4j_client import GraphRepository
 from orchestrator.app.neo4j_pool import get_driver
 from orchestrator.app.observability import (
@@ -346,6 +347,8 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
         start = time.monotonic()
         try:
             entities = state.get("extracted_nodes", [])
+            resolver = EntityResolver()
+            entities = resolver.resolve_entities(entities)
             ingestion_id = str(uuid.uuid4())
             _stamp_ingestion_metadata(entities, ingestion_id)
             driver = get_driver()

@@ -21,7 +21,8 @@ class TemplateMatch:
 
 _SERVICE_NAME_PATTERN = re.compile(
     r"(?:of|if|for|from|does|about)\s+(?:the\s+)?"
-    r"([a-zA-Z][\w-]*(?:-[a-zA-Z][\w-]*)*)(?:\s+(?:service|svc))?",
+    r"([a-zA-Z][\w-]*(?:-[a-zA-Z][\w-]*)*)(?:\s+(?:service|svc))?"
+    r"|(?:is)\s+([a-zA-Z][\w-]*-[a-zA-Z][\w-]*)(?:\s+(?:service|svc))?",
     re.IGNORECASE,
 )
 
@@ -75,7 +76,65 @@ _TEMPLATES: Dict[str, QueryTemplate] = {
         parameters=("topic_name",),
         description="Services consuming from a Kafka topic",
     ),
+    "topic_producers": QueryTemplate(
+        name="topic_producers",
+        cypher=(
+            "MATCH (producer:Service)-[:PRODUCES]->(t:KafkaTopic {name: $topic_name}) "
+            "RETURN producer.name AS producer_service, t.name AS topic "
+            "ORDER BY producer_service"
+        ),
+        parameters=("topic_name",),
+        description="Services producing to a Kafka topic",
+    ),
+    "service_deployments": QueryTemplate(
+        name="service_deployments",
+        cypher=(
+            "MATCH (s:Service {name: $name})-[:DEPLOYED_IN]->(d:K8sDeployment) "
+            "RETURN s.name AS service, d.namespace AS namespace, "
+            "d.replicas AS replicas "
+            "ORDER BY namespace"
+        ),
+        parameters=("name",),
+        description="K8s deployments hosting a service",
+    ),
+    "namespace_services": QueryTemplate(
+        name="namespace_services",
+        cypher=(
+            "MATCH (s:Service)-[:DEPLOYED_IN]->(d:K8sDeployment {namespace: $namespace}) "
+            "RETURN DISTINCT s.name AS service, d.namespace AS namespace "
+            "ORDER BY service"
+        ),
+        parameters=("namespace",),
+        description="All services deployed in a K8s namespace",
+    ),
+    "service_databases": QueryTemplate(
+        name="service_databases",
+        cypher=(
+            "MATCH (s:Service {name: $name})-[:WRITES_TO|READS_FROM]->(db:Database) "
+            "RETURN s.name AS service, db.id AS database, db.type AS db_type "
+            "ORDER BY database"
+        ),
+        parameters=("name",),
+        description="Databases used by a service",
+    ),
+    "cross_team_dependencies": QueryTemplate(
+        name="cross_team_dependencies",
+        cypher=(
+            "MATCH (a:Service)-[:CALLS]->(b:Service) "
+            "WHERE a.team_owner <> b.team_owner "
+            "RETURN a.name AS caller, a.team_owner AS caller_team, "
+            "b.name AS callee, b.team_owner AS callee_team "
+            "ORDER BY caller_team, callee_team"
+        ),
+        parameters=(),
+        description="Service calls that cross team boundaries",
+    ),
 }
+
+_NAMESPACE_PATTERN = re.compile(
+    r"(?:in|within|namespace)\s+(?:the\s+)?([a-zA-Z][\w-]*)",
+    re.IGNORECASE,
+)
 
 _INTENT_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
     (re.compile(
@@ -97,6 +156,33 @@ _INTENT_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
         r"|subscribers?\s+(?:of|to|for)",
         re.IGNORECASE,
     ), "topic_consumers"),
+    (re.compile(
+        r"produc(?:e|es|ers?|ing)\s+(?:to|on|the)"
+        r"|publish(?:es|ers?|ing)\s+(?:to|on|the)",
+        re.IGNORECASE,
+    ), "topic_producers"),
+    (re.compile(
+        r"deploy(?:ed|ments?)\s+(?:of|for|hosting)"
+        r"|(?:where|how)\s+is\s+\S+\s+deployed"
+        r"|k8s.*(?:pods?|replicas?)\s+(?:of|for)"
+        r"|\bdeployed\b",
+        re.IGNORECASE,
+    ), "service_deployments"),
+    (re.compile(
+        r"services?\s+(?:in|within|deployed\s+in)\s+(?:the\s+)?(?:namespace|ns)"
+        r"|namespace\s+\S+\s+services?",
+        re.IGNORECASE,
+    ), "namespace_services"),
+    (re.compile(
+        r"databas(?:e|es)\s+(?:used|accessed|of|for)\s+"
+        r"|(?:reads?|writes?)\s+(?:to|from)\s+(?:which|what)\s+databas",
+        re.IGNORECASE,
+    ), "service_databases"),
+    (re.compile(
+        r"cross[\s-]?team\s+dep|inter[\s-]?team\s+call"
+        r"|calls?\s+across\s+teams?",
+        re.IGNORECASE,
+    ), "cross_team_dependencies"),
 ]
 
 
@@ -114,12 +200,19 @@ class TemplateCatalog:
 def _extract_service_name(query: str) -> str:
     match = _SERVICE_NAME_PATTERN.search(query)
     if match:
-        return match.group(1)
+        return match.group(1) or match.group(2) or ""
     return ""
 
 
 def _extract_topic_name(query: str) -> str:
     match = _TOPIC_NAME_PATTERN.search(query)
+    if match:
+        return match.group(1)
+    return ""
+
+
+def _extract_namespace(query: str) -> str:
+    match = _NAMESPACE_PATTERN.search(query)
     if match:
         return match.group(1)
     return ""
@@ -148,6 +241,10 @@ def match_template(query: str) -> Optional[TemplateMatch]:
         topic_name = _extract_topic_name(query)
         if topic_name:
             params["topic_name"] = topic_name
+    if "namespace" in template.parameters:
+        ns = _extract_namespace(query)
+        if ns:
+            params["namespace"] = ns
     if "limit" in template.parameters:
         params["limit"] = "10"
 
