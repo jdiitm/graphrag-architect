@@ -199,6 +199,58 @@ class TestEvaluateFaithfulness:
         assert result.retrieval_path == "vector"
 
 
+class TestLLMEvaluator:
+
+    @pytest.mark.asyncio
+    async def test_llm_evaluator_returns_scores_in_range(self) -> None:
+        from orchestrator.app.rag_evaluator import LLMEvaluator
+
+        async def _fake_judge(prompt: str) -> str:
+            return '{"faithfulness": 0.85, "groundedness": 0.9}'
+
+        evaluator = LLMEvaluator(judge_fn=_fake_judge)
+        result = await evaluator.evaluate(
+            query="What services depend on auth?",
+            answer="The payment service depends on auth-service.",
+            sources=[{"name": "auth-service"}, {"name": "payment"}],
+        )
+        assert 0.0 <= result.faithfulness <= 1.0
+        assert 0.0 <= result.groundedness <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_llm_evaluator_scores_unfaithful_answer_low(self) -> None:
+        from orchestrator.app.rag_evaluator import LLMEvaluator
+
+        async def _fake_judge(prompt: str) -> str:
+            if "fabricated" in prompt.lower() or "answer" in prompt.lower():
+                return '{"faithfulness": 0.1, "groundedness": 0.05}'
+            return '{"faithfulness": 0.5, "groundedness": 0.5}'
+
+        evaluator = LLMEvaluator(judge_fn=_fake_judge)
+        result = await evaluator.evaluate(
+            query="What services exist?",
+            answer="The fabricated-service handles everything.",
+            sources=[{"name": "auth-service"}],
+        )
+        assert result.faithfulness <= 0.5
+
+    @pytest.mark.asyncio
+    async def test_llm_evaluator_handles_malformed_response(self) -> None:
+        from orchestrator.app.rag_evaluator import LLMEvaluator
+
+        async def _broken_judge(prompt: str) -> str:
+            return "not valid json"
+
+        evaluator = LLMEvaluator(judge_fn=_broken_judge)
+        result = await evaluator.evaluate(
+            query="test",
+            answer="test answer",
+            sources=[{"name": "svc"}],
+        )
+        assert 0.0 <= result.faithfulness <= 1.0
+        assert 0.0 <= result.groundedness <= 1.0
+
+
 class TestRAGEvalConfig:
     def test_from_env_defaults(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
