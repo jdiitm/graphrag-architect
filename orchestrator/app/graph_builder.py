@@ -335,7 +335,7 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
             await sink.flush()
             span.set_attribute("entity_count", sink.total_entities)
             span.set_attribute("flush_count", sink.flush_count)
-            return {"commit_status": "success"}
+            return {"commit_status": "success", "completion_tracked": True}
         except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:
             span.set_status(StatusCode.ERROR, str(exc))
             span.record_exception(exc)

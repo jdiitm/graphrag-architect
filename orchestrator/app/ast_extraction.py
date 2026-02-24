@@ -8,6 +8,7 @@ from typing import Dict, List
 import tree_sitter_go
 from tree_sitter import Language, Parser, Node
 
+from orchestrator.app.entity_resolver import resolve_entity_id
 from orchestrator.app.extraction_models import (
     CallsEdge,
     ServiceExtractionResult,
@@ -103,9 +104,11 @@ class ASTExtractionResult:
 def _derive_service_id(file_path: str) -> str:
     parts = file_path.replace("\\", "/").split("/")
     if len(parts) >= 2:
-        return parts[-2]
+        name = parts[-2]
+        namespace = "/".join(parts[:-2]) if len(parts) > 2 else ""
+        return resolve_entity_id(name, namespace=namespace)
     name = os.path.splitext(parts[-1])[0]
-    return name
+    return resolve_entity_id(name)
 
 
 def _get_package_name(tree: Node) -> str:

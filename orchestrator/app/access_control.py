@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import jwt
 
+from orchestrator.app.call_isolation import (
+    UnfilteredCallMatchError,
+    validate_call_subquery_acl,
+)
 from orchestrator.app.cypher_tokenizer import (
     CypherToken,
     TokenType,
@@ -13,6 +18,8 @@ from orchestrator.app.cypher_tokenizer import (
     reconstruct_cypher,
     tokenize_cypher,
 )
+
+_acl_logger = logging.getLogger(__name__)
 
 DEFAULT_TOKEN_TTL_SECONDS = 3600
 JWT_ALGORITHM = "HS256"
@@ -271,7 +278,12 @@ class CypherPermissionFilter:
 
         if not union_indices:
             result_tokens = _inject_acl_into_clause(tokens, node_clause)
-            return reconstruct_cypher(result_tokens), params
+        else:
+            result_tokens = _inject_acl_into_union(tokens, union_indices, node_clause)
 
-        result_tokens = _inject_acl_into_union(tokens, union_indices, node_clause)
-        return reconstruct_cypher(result_tokens), params
+        injected_cypher = reconstruct_cypher(result_tokens)
+        try:
+            validate_call_subquery_acl(injected_cypher)
+        except UnfilteredCallMatchError as exc:
+            _acl_logger.warning("CALL subquery ACL gap detected: %s", exc)
+        return injected_cypher, params
