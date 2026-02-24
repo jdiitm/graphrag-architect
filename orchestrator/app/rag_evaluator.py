@@ -6,9 +6,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Set
 
-logger = logging.getLogger(__name__)
-
 from orchestrator.app.vector_store import _cosine_similarity
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
