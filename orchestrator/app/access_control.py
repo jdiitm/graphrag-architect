@@ -58,7 +58,6 @@ class SecurityPrincipal:
         cls,
         header: Optional[str],
         token_secret: str = "",
-        require_verification: bool = True,
     ) -> SecurityPrincipal:
         if not header or not header.strip():
             return cls(team="*", namespace="*", role="anonymous")

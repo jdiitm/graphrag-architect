@@ -63,6 +63,7 @@ class QueryState(TypedDict):
 class QueryJobStore:
     def __init__(self, ttl_seconds: float = 300.0) -> None:
         self._jobs: Dict[str, QueryJobResponse] = {}
+        self._mono: Dict[str, float] = {}
         self._ttl = ttl_seconds
 
     def create(self) -> QueryJobResponse:
@@ -70,9 +71,10 @@ class QueryJobStore:
         job = QueryJobResponse(
             job_id=str(uuid.uuid4()),
             status=JobStatus.PENDING,
-            created_at=time.monotonic(),
+            created_at=time.time(),
         )
         self._jobs[job.job_id] = job
+        self._mono[job.job_id] = time.monotonic()
         return job
 
     def get(self, job_id: str) -> Optional[QueryJobResponse]:
@@ -88,20 +90,21 @@ class QueryJobStore:
         if job:
             job.status = JobStatus.COMPLETED
             job.result = result
-            job.completed_at = time.monotonic()
+            job.completed_at = time.time()
 
     def fail(self, job_id: str, error: str) -> None:
         job = self._jobs.get(job_id)
         if job:
             job.status = JobStatus.FAILED
             job.error = error
-            job.completed_at = time.monotonic()
+            job.completed_at = time.time()
 
     def _evict_expired(self) -> None:
         now = time.monotonic()
         expired = [
-            jid for jid, job in self._jobs.items()
-            if (now - job.created_at) > self._ttl
+            jid for jid, mono_ts in self._mono.items()
+            if (now - mono_ts) > self._ttl
         ]
         for jid in expired:
-            del self._jobs[jid]
+            self._jobs.pop(jid, None)
+            self._mono.pop(jid, None)
