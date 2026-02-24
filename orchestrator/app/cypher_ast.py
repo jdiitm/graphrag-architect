@@ -97,40 +97,42 @@ class CypherParser:
         clauses = self._parse_clauses(top_level=True)
         return CypherAST(clauses=clauses, raw_tokens=self._tokens)
 
+    def _dispatch_keyword(
+        self, upper: str, clauses: List[Any],
+    ) -> Any:
+        dispatch = {
+            "MATCH": self._parse_match,
+            "OPTIONAL": self._parse_match,
+            "WHERE": self._parse_where,
+            "RETURN": self._parse_return,
+            "WITH": self._parse_with,
+            "CALL": self._parse_call,
+        }
+        parser = dispatch.get(upper)
+        if parser is not None:
+            return parser()
+        if upper == "UNION":
+            return self._parse_union(clauses)
+        return self._parse_generic()
+
     def _parse_clauses(self, top_level: bool = False) -> List[Any]:
         clauses: List[Any] = []
         while self._pos < len(self._tokens):
             tok = self._current()
             if tok is None:
                 break
-
             if tok.token_type == TokenType.WHITESPACE:
                 self._advance()
                 continue
-
             if (tok.token_type == TokenType.PUNCTUATION
                     and tok.value == "}" and not top_level):
                 break
-
             if tok.token_type == TokenType.KEYWORD:
-                upper = tok.value.upper()
-                if upper in ("MATCH", "OPTIONAL"):
-                    clauses.append(self._parse_match())
-                elif upper == "WHERE":
-                    clauses.append(self._parse_where())
-                elif upper == "RETURN":
-                    clauses.append(self._parse_return())
-                elif upper == "WITH":
-                    clauses.append(self._parse_with())
-                elif upper == "CALL":
-                    clauses.append(self._parse_call())
-                elif upper == "UNION":
-                    clauses.append(self._parse_union(clauses))
-                else:
-                    clauses.append(self._parse_generic())
+                clauses.append(
+                    self._dispatch_keyword(tok.value.upper(), clauses)
+                )
             else:
                 clauses.append(self._parse_generic())
-
         return clauses
 
     def _collect_until_clause_keyword(self) -> List[CypherToken]:
