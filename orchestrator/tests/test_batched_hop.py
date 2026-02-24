@@ -112,3 +112,35 @@ class TestBatchedHopExecutor:
 
         result = asyncio.run(executor.execute([]))
         assert result == []
+
+
+class TestHashBasedDedup:
+
+    def test_no_json_dumps_in_dedup(self) -> None:
+        import inspect
+        from orchestrator.app.batched_hop import BatchedHopExecutor as BHE
+        source = inspect.getsource(BHE.execute)
+        assert "json.dumps" not in source, (
+            "Deduplication must NOT use json.dumps (CPU-bound). "
+            "Use hash-based dedup on identity fields instead."
+        )
+
+    def test_dedup_by_identity_fields(self) -> None:
+        data = {
+            "a": [
+                {"source": "a", "rel": "CALLS", "target": "shared", "extra": 1},
+            ],
+            "b": [
+                {"source": "a", "rel": "CALLS", "target": "shared", "extra": 2},
+            ],
+        }
+        runner = FakeHopRunner(data)
+        executor = BatchedHopExecutor(
+            runner, candidate_limit=50, batch_size=1,
+        )
+        candidates = [{"name": "a"}, {"name": "b"}]
+        result = asyncio.run(executor.execute(candidates))
+        assert len(result) == 1, (
+            "Records with same identity fields (source, rel, target) "
+            "but different extra fields must be deduplicated"
+        )

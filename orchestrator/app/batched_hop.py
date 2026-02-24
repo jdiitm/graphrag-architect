@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any, Dict, List, Protocol
+
+_IDENTITY_FIELDS = ("source", "rel", "target", "id", "name")
+
+
+def _dedup_key(record: Dict[str, Any]) -> tuple:
+    return tuple(record.get(f) for f in _IDENTITY_FIELDS)
 
 
 class HopRunner(Protocol):
@@ -54,11 +59,11 @@ class BatchedHopExecutor:
         tasks = [self._runner.run_hop(batch) for batch in batches]
         batch_results = await asyncio.gather(*tasks)
 
-        seen: set[str] = set()
+        seen: set[tuple] = set()
         deduped: List[Dict[str, Any]] = []
         for batch_result in batch_results:
             for record in batch_result:
-                key = json.dumps(record, sort_keys=True, default=str)
+                key = _dedup_key(record)
                 if key not in seen:
                     seen.add(key)
                     deduped.append(record)
