@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any, Dict, List, Protocol
 
 _IDENTITY_FIELDS = ("source", "rel", "target", "id", "name")
@@ -10,6 +11,14 @@ def _dedup_key(record: Dict[str, Any]) -> tuple:
     return tuple(record.get(f) for f in _IDENTITY_FIELDS)
 
 
+def default_candidate_limit() -> int:
+    raw = os.environ.get("CANDIDATE_LIMIT", "50")
+    try:
+        return int(raw)
+    except ValueError:
+        return 50
+
+
 class HopRunner(Protocol):
     async def run_hop(self, names: List[str]) -> List[Dict[str, Any]]: ...
 
@@ -17,6 +26,10 @@ class HopRunner(Protocol):
 def cap_candidates(
     candidates: List[Dict[str, Any]], limit: int = 50,
 ) -> List[Dict[str, Any]]:
+    scored = [c for c in candidates if "score" in c]
+    if scored:
+        ranked = sorted(candidates, key=lambda c: c.get("score", 0.0), reverse=True)
+        return ranked[:limit]
     return candidates[:limit]
 
 

@@ -27,6 +27,47 @@ class TestCapCandidates:
         assert cap_candidates([], limit=50) == []
 
 
+class TestScoreRankedCapping:
+
+    def test_highest_scores_survive_cap(self) -> None:
+        candidates = [
+            {"name": f"svc-{i}", "score": float(i)} for i in range(10)
+        ]
+        result = cap_candidates(candidates, limit=3)
+        assert len(result) == 3
+        scores = [c["score"] for c in result]
+        assert scores == sorted(scores, reverse=True), (
+            "cap_candidates must return highest-scored candidates, "
+            f"got scores: {scores}"
+        )
+
+    def test_score_ranked_cap_preserves_top(self) -> None:
+        candidates = [
+            {"name": "low", "score": 0.1},
+            {"name": "high", "score": 0.9},
+            {"name": "mid", "score": 0.5},
+        ]
+        result = cap_candidates(candidates, limit=2)
+        names = [c["name"] for c in result]
+        assert "high" in names
+        assert "mid" in names
+        assert "low" not in names
+
+    def test_candidates_without_score_still_capped(self) -> None:
+        candidates = [{"name": f"svc-{i}"} for i in range(10)]
+        result = cap_candidates(candidates, limit=5)
+        assert len(result) == 5
+
+    def test_configurable_limit_via_env(self) -> None:
+        import os
+        os.environ["CANDIDATE_LIMIT"] = "7"
+        try:
+            from orchestrator.app.batched_hop import default_candidate_limit
+            assert default_candidate_limit() == 7
+        finally:
+            del os.environ["CANDIDATE_LIMIT"]
+
+
 class TestPartitionNames:
     def test_partitions_evenly(self) -> None:
         names = [f"svc-{i}" for i in range(10)]
