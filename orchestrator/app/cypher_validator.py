@@ -76,6 +76,7 @@ def validate_cypher_readonly(cypher: str) -> str:
             _validate_call_token(tokens, i, stripped)
 
     _check_multi_statement(tokens, stripped)
+    _check_cartesian_product(tokens, stripped)
 
     return stripped
 
@@ -122,6 +123,34 @@ def _check_multi_statement(tokens: list, raw: str) -> None:
             raise CypherValidationError(
                 f"Cypher contains multiple statements: {raw[:80]}"
             )
+
+
+def _check_cartesian_product(tokens: list, raw: str) -> None:
+    match_indices = [
+        i for i, t in enumerate(tokens)
+        if t.token_type == TokenType.KEYWORD
+        and t.value.upper() == "MATCH"
+        and t.brace_depth == 0
+    ]
+    for mi in match_indices:
+        depth = 0
+        j = mi + 1
+        while j < len(tokens):
+            token = tokens[j]
+            if token.token_type == TokenType.KEYWORD and token.brace_depth == 0:
+                break
+            if token.token_type == TokenType.PUNCTUATION and token.value == "(":
+                depth += 1
+            elif token.token_type == TokenType.PUNCTUATION and token.value == ")":
+                depth -= 1
+            elif (token.token_type == TokenType.PUNCTUATION
+                  and token.value == ","
+                  and depth == 0):
+                raise CypherValidationError(
+                    f"Cartesian product detected (comma-separated patterns "
+                    f"in MATCH): {raw[:80]}"
+                )
+            j += 1
 
 
 MAX_VARIABLE_PATH_DEPTH = 5

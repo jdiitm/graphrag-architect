@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from neo4j import AsyncDriver, AsyncManagedTransaction
+from neo4j import AsyncDriver, AsyncManagedTransaction, READ_ACCESS, WRITE_ACCESS
 
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from orchestrator.app.extraction_models import (
@@ -282,11 +282,30 @@ class GraphRepository:
         self._batch_size = batch_size
         self._database = database
 
-    def _session(self) -> Any:
+    def _session(self, access_mode: Optional[str] = None) -> Any:
         kwargs: Dict[str, Any] = {}
         if self._database:
             kwargs["database"] = self._database
+        if access_mode is not None:
+            kwargs["default_access_mode"] = access_mode
         return self._driver.session(**kwargs)
+
+    def _read_session(self) -> Any:
+        return self._session(access_mode=READ_ACCESS)
+
+    def _write_session(self) -> Any:
+        return self._session(access_mode=WRITE_ACCESS)
+
+    async def read_topology(self, label: str = "Service") -> List[Dict[str, Any]]:
+        _validate_cypher_identifier(label)
+        cypher = f"MATCH (n:{label}) RETURN n"
+
+        async def _tx(tx: AsyncManagedTransaction) -> list:
+            result = await tx.run(cypher)
+            return await result.data()
+
+        async with self._read_session() as session:
+            return await session.execute_read(_tx)
 
     async def commit_topology(self, entities: List[Any]) -> None:
         if not entities:

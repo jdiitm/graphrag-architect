@@ -97,6 +97,19 @@ def cache_key(cypher: str, acl_params: Dict[str, str]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def create_subgraph_cache() -> Any:
+    from orchestrator.app.config import RedisConfig
+    redis_cfg = RedisConfig.from_env()
+    if redis_cfg.url:
+        return RedisSubgraphCache(
+            redis_url=redis_cfg.url,
+            password=redis_cfg.password,
+            db=redis_cfg.db,
+            key_prefix=redis_cfg.key_prefix,
+        )
+    return SubgraphCache(maxsize=default_cache_maxsize())
+
+
 class RedisSubgraphCache:
     def __init__(
         self,

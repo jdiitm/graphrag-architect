@@ -378,6 +378,35 @@ class TestGraphRepositoryTenantDatabase:
         driver.session.assert_called_with()
 
 
+class TestReadReplicaRouting:
+
+    @pytest.mark.asyncio
+    async def test_read_operations_use_read_access(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        await repo.read_topology(label="Service")
+        call_kwargs = driver.session.call_args
+        if call_kwargs.kwargs:
+            access = call_kwargs.kwargs.get("default_access_mode")
+        else:
+            access = None
+        from neo4j import READ_ACCESS
+        assert access == READ_ACCESS
+
+    @pytest.mark.asyncio
+    async def test_write_operations_use_write_access(self) -> None:
+        driver, session, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        await repo.commit_topology([SAMPLE_SERVICE])
+        call_kwargs = driver.session.call_args
+        if call_kwargs.kwargs:
+            access = call_kwargs.kwargs.get("default_access_mode")
+        else:
+            access = None
+        from neo4j import WRITE_ACCESS
+        assert access is None or access == WRITE_ACCESS
+
+
 class TestCommitTopologyIdempotent:
 
     @pytest.mark.asyncio

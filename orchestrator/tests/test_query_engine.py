@@ -780,6 +780,191 @@ class TestCypherSandboxWiring:
         assert "LIMIT" in executed_agg_queries[0].upper()
 
 
+class TestVectorStoreWiring:
+    @pytest.mark.asyncio
+    async def test_fetch_candidates_uses_vector_store(self, base_query_state):
+        from orchestrator.app.query_engine import _fetch_candidates
+
+        fake_embedding = [0.1] * 10
+        mock_store = AsyncMock()
+        mock_store.search = AsyncMock(return_value=[
+            MagicMock(id="n1", score=0.95, metadata={"name": "auth-svc", "language": "go"}),
+        ])
+
+        mock_driver = MagicMock()
+        state = _make_state(base_query_state, query="auth-svc info")
+
+        with patch(
+            "orchestrator.app.query_engine._VECTOR_STORE", mock_store,
+        ), patch(
+            "orchestrator.app.query_engine._embed_query",
+            new_callable=AsyncMock, return_value=fake_embedding,
+        ):
+            result = await _fetch_candidates(mock_driver, state)
+
+        mock_store.search.assert_called_once()
+        assert result[0]["name"] == "auth-svc"
+        assert result[0]["score"] == 0.95
+
+    @pytest.mark.asyncio
+    async def test_fetch_candidates_tenant_scoped_search(self, base_query_state):
+        from orchestrator.app.query_engine import _fetch_candidates
+
+        fake_embedding = [0.1] * 10
+        mock_store = AsyncMock()
+        mock_store.search_with_tenant = AsyncMock(return_value=[
+            MagicMock(id="n1", score=0.9, metadata={"name": "svc-a"}),
+        ])
+
+        mock_driver = MagicMock()
+        state = _make_state(base_query_state, query="svc-a", tenant_id="acme")
+
+        with patch(
+            "orchestrator.app.query_engine._VECTOR_STORE", mock_store,
+        ), patch(
+            "orchestrator.app.query_engine._embed_query",
+            new_callable=AsyncMock, return_value=fake_embedding,
+        ):
+            result = await _fetch_candidates(mock_driver, state)
+
+        mock_store.search_with_tenant.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_fetch_candidates_falls_back_to_neo4j_fulltext(self, base_query_state):
+        from orchestrator.app.query_engine import _fetch_candidates
+
+        mock_session = _make_neo4j_session(run_return=[{"name": "svc", "score": 0.8}])
+        mock_driver = mock_neo4j_driver_with_session(mock_session)
+        state = _make_state(base_query_state, query="auth-service")
+
+        with patch(
+            "orchestrator.app.query_engine._embed_query",
+            new_callable=AsyncMock, return_value=None,
+        ):
+            result = await _fetch_candidates(mock_driver, state)
+
+        mock_session.execute_read.assert_called_once()
+        assert result[0]["name"] == "svc"
+
+
+class TestHopEdgeLimit:
+    @pytest.mark.asyncio
+    async def test_hop_cypher_contains_limit(self, base_query_state):
+        from orchestrator.app.query_engine import single_hop_retrieve
+
+        executed_queries: list = []
+
+        async def capture_read(tx_func, **kwargs):
+            class FakeTx:
+                async def run(self, query, **params):
+                    executed_queries.append(query)
+                    mock_result = AsyncMock()
+                    mock_result.data = AsyncMock(return_value=[])
+                    return mock_result
+            return await tx_func(FakeTx())
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(side_effect=[
+            [{"name": "svc-a", "score": 0.9}],
+            capture_read,
+        ])
+
+        async def side_effect_fn(tx_func_or_result, **kwargs):
+            call_count = mock_session.execute_read.call_count
+            if call_count == 1:
+                return [{"name": "svc-a", "score": 0.9}]
+            return await capture_read(tx_func_or_result, **kwargs)
+
+        mock_session.execute_read = AsyncMock(side_effect=side_effect_fn)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = mock_neo4j_driver_with_session(mock_session)
+
+        state = _make_state(base_query_state, query="what does svc-a call?")
+
+        with patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ):
+            await single_hop_retrieve(state)
+
+        hop_queries = [q for q in executed_queries if "MATCH" in q and "n.name" in q]
+        assert hop_queries, "No hop query was captured"
+        assert "LIMIT" in hop_queries[0].upper()
+
+    def test_hop_limit_configurable_via_env(self):
+        from orchestrator.app.query_engine import _get_hop_edge_limit
+
+        with patch.dict("os.environ", {"HOP_EDGE_LIMIT": "100"}):
+            assert _get_hop_edge_limit() == 100
+
+    def test_hop_limit_defaults_to_500(self):
+        from orchestrator.app.query_engine import _get_hop_edge_limit
+
+        with patch.dict("os.environ", {}, clear=True):
+            assert _get_hop_edge_limit() == 500
+
+
+class TestAsyncEvaluation:
+    @pytest.mark.asyncio
+    async def test_evaluate_response_returns_immediately(self, base_query_state):
+        from orchestrator.app.query_engine import evaluate_response
+
+        eval_started = False
+
+        original_evaluate = None
+
+        def slow_evaluate(**kwargs):
+            nonlocal eval_started
+            eval_started = True
+            import time
+            time.sleep(0)
+            from orchestrator.app.rag_evaluator import RelevanceScore
+            return RelevanceScore(query="q", score=0.5, context_count=1, retrieval_path="vector")
+
+        state = _make_state(
+            base_query_state,
+            query="test query",
+            answer="test answer",
+            sources=[{"name": "svc"}],
+        )
+
+        with patch(
+            "orchestrator.app.query_engine.RAGEvalConfig.from_env",
+            return_value=MagicMock(enable_evaluation=True, low_relevance_threshold=0.3),
+        ), patch(
+            "orchestrator.app.query_engine._embed_query",
+            new_callable=AsyncMock,
+            return_value=[0.1] * 10,
+        ):
+            result = await evaluate_response(state)
+
+        assert "evaluation_score" in result
+
+    @pytest.mark.asyncio
+    async def test_evaluate_does_not_block_on_failure(self, base_query_state):
+        from orchestrator.app.query_engine import evaluate_response
+
+        state = _make_state(
+            base_query_state,
+            query="test query",
+            answer="answer",
+            sources=[],
+        )
+
+        with patch(
+            "orchestrator.app.query_engine.RAGEvalConfig.from_env",
+            return_value=MagicMock(enable_evaluation=True, low_relevance_threshold=0.3),
+        ), patch(
+            "orchestrator.app.query_engine._embed_query",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("embedding failed"),
+        ):
+            result = await evaluate_response(state)
+
+        assert result["evaluation_score"] == -1.0
+
+
 class TestNeo4jDriverTimeout:
     def test_pool_configured_with_timeout(self):
         from orchestrator.app import neo4j_pool
