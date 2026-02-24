@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
@@ -21,6 +22,17 @@ from orchestrator.app.extraction_models import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_BATCH_SIZE = 100
+
+_VALID_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_cypher_identifier(value: str, label: str = "identifier") -> str:
+    if not _VALID_IDENTIFIER.match(value):
+        raise ValueError(
+            f"Invalid Cypher identifier for {label}: {value!r}"
+        )
+    return value
+
 
 CypherOp = Tuple[str, Dict[str, Any]]
 
@@ -269,11 +281,10 @@ class GraphRepository:
     ) -> None:
         unwind_query = _UNWIND_QUERIES.get(entity_type)
         if unwind_query is None:
-            logger.warning(
-                "No UNWIND query for %s, falling back to per-entity",
-                entity_type.__name__,
+            raise TypeError(
+                f"No UNWIND query registered for {entity_type.__name__}; "
+                f"{len(records)} records would be dropped"
             )
-            return
 
         for chunk in _chunk_list(records, self._batch_size):
             async with self._driver.session() as session:
@@ -296,6 +307,9 @@ class GraphRepository:
         property_name: str = "embedding",
         dimensions: int = 1536,
     ) -> None:
+        _validate_cypher_identifier(index_name, "index_name")
+        _validate_cypher_identifier(label, "label")
+        _validate_cypher_identifier(property_name, "property_name")
         cypher = (
             f"CREATE VECTOR INDEX {index_name} IF NOT EXISTS "
             f"FOR (n:{label}) ON (n.{property_name}) "
@@ -315,6 +329,8 @@ class GraphRepository:
     ) -> None:
         if not embeddings:
             return
+        _validate_cypher_identifier(label, "label")
+        _validate_cypher_identifier(id_field, "id_field")
         cypher = (
             f"UNWIND $batch AS item "
             f"MATCH (n:{label} {{{id_field}: item.id}}) "

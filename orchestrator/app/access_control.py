@@ -64,7 +64,7 @@ class SecurityPrincipal:
         cls,
         header: Optional[str],
         token_secret: str = "",
-        require_verification: bool = False,
+        require_verification: bool = True,
     ) -> SecurityPrincipal:
         if not header or not header.strip():
             return cls(team="*", namespace="*", role="anonymous")
@@ -73,10 +73,12 @@ class SecurityPrincipal:
 
         if token_secret:
             claims = _verify_token(token, token_secret)
-        else:
+        elif require_verification:
             raise InvalidTokenError(
                 "token provided but no secret configured for verification"
             )
+        else:
+            return cls(team="*", namespace="*", role="anonymous")
 
         return cls(
             team=claims.get("team", "*"),

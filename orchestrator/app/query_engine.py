@@ -52,17 +52,34 @@ _FULLTEXT_FALLBACK_CYPHER = (
 )
 
 
+_EMBEDDING_STATE: Dict[str, Any] = {"cfg": None, "client": None}
+
+
+def _get_embedding_resources() -> Tuple[Optional[EmbeddingConfig], Any]:
+    if _EMBEDDING_STATE["cfg"] is None:
+        _EMBEDDING_STATE["cfg"] = EmbeddingConfig.from_env()
+    cfg = _EMBEDDING_STATE["cfg"]
+    if (
+        _EMBEDDING_STATE["client"] is None
+        and cfg.provider == "openai"
+        and _openai_module is not None
+    ):
+        _EMBEDDING_STATE["client"] = _openai_module.AsyncOpenAI()
+    return cfg, _EMBEDDING_STATE["client"]
+
+
 async def _embed_query(text: str) -> Optional[List[float]]:
     try:
-        cfg = EmbeddingConfig.from_env()
-        if cfg.provider == "openai" and _openai_module is not None:
-            client = _openai_module.AsyncOpenAI()
+        cfg, client = _get_embedding_resources()
+        if cfg is not None and cfg.provider == "openai" and client is not None:
             response = await client.embeddings.create(
                 input=[text], model=cfg.model_name
             )
             return response.data[0].embedding
     except Exception:
-        _query_logger.debug("Embedding unavailable, falling back to fulltext")
+        _query_logger.warning(
+            "Embedding unavailable, falling back to fulltext", exc_info=True,
+        )
     return None
 
 
@@ -472,7 +489,9 @@ async def evaluate_response(state: QueryState) -> dict:
             )
             return {"evaluation_score": result.score, "retrieval_quality": quality}
         except Exception:
-            _query_logger.debug("RAG evaluation failed, continuing without score")
+            _query_logger.warning(
+                "RAG evaluation failed, continuing without score", exc_info=True,
+            )
             return {"evaluation_score": -1.0, "retrieval_quality": "error"}
         finally:
             QUERY_DURATION.record(

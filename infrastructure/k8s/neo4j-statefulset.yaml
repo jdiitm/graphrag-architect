@@ -40,11 +40,11 @@ spec:
               value: "yes"
             - name: NEO4J_PLUGINS
               value: '["apoc"]'
-            - name: NEO4J_dbms_mode
-              value: CORE
-            - name: NEO4J_causal__clustering_minimum__core__cluster__size__at__formation
-              value: "3"
-            - name: NEO4J_causal__clustering_initial__discovery__members
+            - name: NEO4J_initial_server_mode__constraint
+              value: PRIMARY
+            - name: NEO4J_server_cluster_system__database__mode
+              value: PRIMARY
+            - name: NEO4J_dbms_cluster_discovery_endpoints
               value: "neo4j-0.neo4j.graphrag.svc.cluster.local:5000,neo4j-1.neo4j.graphrag.svc.cluster.local:5000,neo4j-2.neo4j.graphrag.svc.cluster.local:5000"
             - name: NEO4J_dbms_memory_heap_initial__size
               value: "512m"
