@@ -77,6 +77,41 @@ func (s *KafkaJobSource) Close() {
 	s.client.Close()
 }
 
+type KafkaProducerClient struct {
+	client *kgo.Client
+}
+
+func NewKafkaProducerClient(brokers, topic string) (*KafkaProducerClient, error) {
+	seeds := strings.Split(brokers, ",")
+	client, err := kgo.NewClient(
+		kgo.SeedBrokers(seeds...),
+		kgo.DefaultProduceTopic(topic),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create kafka producer: %w", err)
+	}
+	return &KafkaProducerClient{client: client}, nil
+}
+
+func (p *KafkaProducerClient) Produce(ctx context.Context, topic string, key, value []byte, headers map[string]string) error {
+	var kgoHeaders []kgo.RecordHeader
+	for k, v := range headers {
+		kgoHeaders = append(kgoHeaders, kgo.RecordHeader{Key: k, Value: []byte(v)})
+	}
+	record := &kgo.Record{
+		Topic:   topic,
+		Key:     key,
+		Value:   value,
+		Headers: kgoHeaders,
+	}
+	result := p.client.ProduceSync(ctx, record)
+	return result.FirstErr()
+}
+
+func (p *KafkaProducerClient) Close() {
+	p.client.Close()
+}
+
 type LogDLQSink struct{}
 
 func (l *LogDLQSink) Send(_ context.Context, r domain.Result) error {

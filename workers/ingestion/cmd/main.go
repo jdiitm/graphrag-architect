@@ -61,12 +61,27 @@ func main() {
 		}
 	}()
 
-	var fpOpts []processor.ForwardingOption
-	if authToken := os.Getenv("AUTH_TOKEN"); authToken != "" {
-		fpOpts = append(fpOpts, processor.WithAuthToken(authToken))
-		log.Println("auth token configured for orchestrator requests")
+	processorMode := envOrDefault("PROCESSOR_MODE", "http")
+
+	var fp processor.DocumentProcessor
+	if processorMode == "kafka" {
+		parsedTopic := envOrDefault("KAFKA_PARSED_TOPIC", "graphrag.parsed")
+		producer, prodErr := NewKafkaProducerClient(kafkaBrokers, parsedTopic)
+		if prodErr != nil {
+			log.Fatalf("create kafka producer for parsed topic: %v", prodErr)
+		}
+		defer producer.Close()
+		fp = processor.NewKafkaForwardingProcessor(producer, parsedTopic)
+		log.Printf("processor mode: kafka (topic=%s)", parsedTopic)
+	} else {
+		var fpOpts []processor.ForwardingOption
+		if authToken := os.Getenv("AUTH_TOKEN"); authToken != "" {
+			fpOpts = append(fpOpts, processor.WithAuthToken(authToken))
+			log.Println("auth token configured for orchestrator requests")
+		}
+		fp = processor.NewForwardingProcessor(orchestratorURL, &http.Client{Timeout: 30 * time.Second}, fpOpts...)
+		log.Println("processor mode: http")
 	}
-	fp := processor.NewForwardingProcessor(orchestratorURL, &http.Client{Timeout: 30 * time.Second}, fpOpts...)
 
 	cfg := dispatcher.Config{
 		NumWorkers: numWorkers,

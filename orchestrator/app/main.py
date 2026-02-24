@@ -17,10 +17,11 @@ from orchestrator.app.access_control import (
     InvalidTokenError,
     SecurityPrincipal,
 )
-from orchestrator.app.config import AuthConfig, RateLimitConfig
+from orchestrator.app.config import AuthConfig, KafkaConsumerConfig, RateLimitConfig
 from orchestrator.app.executor import shutdown_pool
 from orchestrator.app.graph_builder import ingestion_graph
 from orchestrator.app.ingest_models import IngestRequest, IngestResponse
+from orchestrator.app.kafka_consumer import AsyncKafkaConsumer
 from orchestrator.app.checkpoint_store import close_checkpointer, init_checkpointer
 from orchestrator.app.neo4j_pool import close_driver, init_driver
 from orchestrator.app.observability import configure_metrics, configure_telemetry
@@ -29,7 +30,7 @@ from orchestrator.app.query_models import QueryRequest, QueryResponse
 
 logger = logging.getLogger(__name__)
 
-_STATE: Dict[str, Any] = {"semaphore": None}
+_STATE: Dict[str, Any] = {"semaphore": None, "kafka_consumer": None, "kafka_task": None}
 
 
 def get_ingestion_semaphore() -> asyncio.Semaphore:
@@ -43,6 +44,26 @@ def set_ingestion_semaphore(sem: Optional[asyncio.Semaphore]) -> None:
     _STATE["semaphore"] = sem
 
 
+def _kafka_consumer_enabled() -> bool:
+    return os.environ.get("KAFKA_CONSUMER_ENABLED", "false").lower() == "true"
+
+
+async def _kafka_ingest_callback(raw_files: List[Dict[str, str]]) -> Dict[str, Any]:
+    initial_state: Dict[str, Any] = {
+        "directory_path": "",
+        "raw_files": raw_files,
+        "extracted_nodes": [],
+        "extraction_errors": [],
+        "validation_retries": 0,
+        "commit_status": "",
+    }
+    result = await ingestion_graph.ainvoke(initial_state)
+    return {
+        "commit_status": result.get("commit_status", "unknown"),
+        "entities_extracted": len(result.get("extracted_nodes", [])),
+    }
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     auth = _validate_startup_security()
@@ -54,9 +75,24 @@ async def lifespan(_app: FastAPI):
         asyncio.Semaphore(RateLimitConfig.from_env().max_concurrent_ingestions)
     )
     _warn_insecure_auth(auth)
+    if _kafka_consumer_enabled():
+        kafka_config = KafkaConsumerConfig.from_env()
+        consumer = AsyncKafkaConsumer(kafka_config, _kafka_ingest_callback)
+        _STATE["kafka_consumer"] = consumer
+        _STATE["kafka_task"] = asyncio.create_task(consumer.start())
+        logger.info(
+            "Kafka consumer started: brokers=%s topic=%s",
+            kafka_config.brokers, kafka_config.topic,
+        )
     try:
         yield
     finally:
+        if _STATE.get("kafka_consumer") is not None:
+            await _STATE["kafka_consumer"].stop()
+            if _STATE.get("kafka_task") is not None:
+                _STATE["kafka_task"].cancel()
+            _STATE["kafka_consumer"] = None
+            _STATE["kafka_task"] = None
         shutdown_pool()
         await close_driver()
         close_checkpointer()
@@ -149,7 +185,7 @@ def _verify_ingest_auth(authorization: Optional[str]) -> None:
 async def ingest(
     request: IngestRequest,
     authorization: Optional[str] = Header(default=None),
-) -> IngestResponse:
+) -> JSONResponse:
     _verify_ingest_auth(authorization)
     sem = get_ingestion_semaphore()
     if sem.locked():
@@ -159,7 +195,15 @@ async def ingest(
         )
     await sem.acquire()
     try:
-        return await _run_ingestion(request)
+        result = await _run_ingestion(request)
+        if isinstance(result, JSONResponse):
+            result.headers["Deprecation"] = "true"
+            return result
+        status_code = 200
+        body = result.model_dump()
+        response = JSONResponse(content=body, status_code=status_code)
+        response.headers["Deprecation"] = "true"
+        return response
     finally:
         sem.release()
 
