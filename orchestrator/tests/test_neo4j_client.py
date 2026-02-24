@@ -200,11 +200,13 @@ class TestCommitTopologyMixed:
         await repo.commit_topology(entities)
 
         run_calls = tx.run.call_args_list
-        assert len(run_calls) == 3
-        for c in run_calls[:2]:
-            assert "MERGE" in c.args[0]
-            assert ":Service" in c.args[0]
-        assert ":CALLS" in run_calls[2].args[0]
+        assert len(run_calls) == 2
+        node_call = run_calls[0]
+        assert "UNWIND" in node_call.args[0]
+        assert ":Service" in node_call.args[0]
+        assert len(node_call.kwargs["batch"]) == 2
+        edge_call = run_calls[1]
+        assert ":CALLS" in edge_call.args[0]
 
     @pytest.mark.asyncio
     async def test_commits_all_entity_types(self) -> None:
@@ -224,6 +226,8 @@ class TestCommitTopologyMixed:
         await repo.commit_topology(entities)
 
         assert tx.run.call_count == 8
+        for c in tx.run.call_args_list:
+            assert "UNWIND" in c.args[0]
 
 
 class TestCommitTopologyEmpty:
@@ -261,4 +265,6 @@ class TestCommitTopologyIdempotent:
 
         await repo.commit_topology([SAMPLE_SERVICE, SAMPLE_SERVICE])
 
-        assert tx.run.call_count == 2
+        assert tx.run.call_count == 1
+        batch = tx.run.call_args.kwargs["batch"]
+        assert len(batch) == 2

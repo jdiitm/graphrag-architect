@@ -7,7 +7,7 @@ metadata:
     app: neo4j
 spec:
   serviceName: neo4j
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: neo4j
@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: neo4j
-          image: neo4j:5.26-community
+          image: neo4j:5.26-enterprise
           ports:
             - name: bolt
               containerPort: 7687
@@ -36,8 +36,16 @@ spec:
                   key: NEO4J_PASSWORD
             - name: NEO4J_AUTH
               value: "neo4j/$(NEO4J_PASSWORD)"
+            - name: NEO4J_ACCEPT_LICENSE_AGREEMENT
+              value: "yes"
             - name: NEO4J_PLUGINS
               value: '["apoc"]'
+            - name: NEO4J_dbms_mode
+              value: CORE
+            - name: NEO4J_causal__clustering_minimum__core__cluster__size__at__formation
+              value: "3"
+            - name: NEO4J_causal__clustering_initial__discovery__members
+              value: "neo4j-0.neo4j.graphrag.svc.cluster.local:5000,neo4j-1.neo4j.graphrag.svc.cluster.local:5000,neo4j-2.neo4j.graphrag.svc.cluster.local:5000"
             - name: NEO4J_dbms_memory_heap_initial__size
               value: "512m"
             - name: NEO4J_dbms_memory_heap_max__size

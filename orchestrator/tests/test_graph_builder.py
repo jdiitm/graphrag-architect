@@ -217,7 +217,8 @@ class TestCommitToNeo4jErrorLogging:
 
 class TestYAMLCheckpointMarking:
 
-    def test_yaml_files_marked_extracted_after_manifest_parsing(self) -> None:
+    @pytest.mark.asyncio
+    async def test_yaml_files_marked_extracted_after_manifest_parsing(self) -> None:
         from orchestrator.app.graph_builder import parse_k8s_and_kafka_manifests
 
         state = {
@@ -240,13 +241,14 @@ class TestYAMLCheckpointMarking:
             },
         }
 
-        result = parse_k8s_and_kafka_manifests(state)
+        result = await parse_k8s_and_kafka_manifests(state)
         cp = result["extraction_checkpoint"]
         assert cp["deploy.yaml"] == "extracted"
         assert cp["topics.yml"] == "extracted"
         assert cp["main.go"] == "extracted"
 
-    def test_yaml_not_re_pending_on_retry_cycle(self) -> None:
+    @pytest.mark.asyncio
+    async def test_yaml_not_re_pending_on_retry_cycle(self) -> None:
         from orchestrator.app.graph_builder import parse_k8s_and_kafka_manifests
 
         state = {
@@ -261,5 +263,5 @@ class TestYAMLCheckpointMarking:
             },
         }
 
-        result = parse_k8s_and_kafka_manifests(state)
+        result = await parse_k8s_and_kafka_manifests(state)
         assert result["extraction_checkpoint"]["deploy.yaml"] == "extracted"

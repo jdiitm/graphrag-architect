@@ -219,7 +219,7 @@ class TestIngestAuth:
             "extraction_errors": [],
             "commit_status": "success",
         })
-        token = sign_token("team=ops,role=admin", "test-secret")
+        token = sign_token({"team": "ops", "role": "admin"}, "test-secret")
         response = client.post(
             "/ingest",
             json={
@@ -325,7 +325,7 @@ class TestAuthRequireTokensFailClosed:
             "extraction_errors": [],
             "commit_status": "success",
         })
-        token = sign_token("team=ops,role=admin", "prod-secret")
+        token = sign_token({"team": "ops", "role": "admin"}, "prod-secret")
         response = client.post(
             "/ingest",
             json={
@@ -366,7 +366,8 @@ class TestAuthRequireTokensFailClosed:
 
 
 class TestLoadWorkspacePreservesRawFiles:
-    def test_empty_directory_preserves_existing_raw_files(self):
+    @pytest.mark.asyncio
+    async def test_empty_directory_preserves_existing_raw_files(self):
         from orchestrator.app.graph_builder import load_workspace_files
 
         existing_files = [
@@ -381,10 +382,11 @@ class TestLoadWorkspacePreservesRawFiles:
             "validation_retries": 0,
             "commit_status": "",
         }
-        result = load_workspace_files(state)
+        result = await load_workspace_files(state)
         assert result["raw_files"] == existing_files
 
-    def test_missing_directory_path_preserves_raw_files(self):
+    @pytest.mark.asyncio
+    async def test_missing_directory_path_preserves_raw_files(self):
         from orchestrator.app.graph_builder import load_workspace_files
 
         existing_files = [{"path": "app.py", "content": "x = 1"}]
@@ -395,10 +397,11 @@ class TestLoadWorkspacePreservesRawFiles:
             "validation_retries": 0,
             "commit_status": "",
         }
-        result = load_workspace_files(state)
+        result = await load_workspace_files(state)
         assert result["raw_files"] == existing_files
 
-    def test_directory_path_set_loads_from_directory(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_directory_path_set_loads_from_directory(self, tmp_path):
         from orchestrator.app.graph_builder import load_workspace_files
 
         go_file = tmp_path / "service.go"
@@ -412,6 +415,6 @@ class TestLoadWorkspacePreservesRawFiles:
             "validation_retries": 0,
             "commit_status": "",
         }
-        result = load_workspace_files(state)
+        result = await load_workspace_files(state)
         assert len(result["raw_files"]) == 1
         assert result["raw_files"][0]["path"] == "service.go"

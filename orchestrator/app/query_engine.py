@@ -1,6 +1,7 @@
+import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
@@ -11,12 +12,21 @@ from orchestrator.app.access_control import (
     CypherPermissionFilter,
     SecurityPrincipal,
 )
-from orchestrator.app.config import AuthConfig, ExtractionConfig
+from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfig, RAGEvalConfig
+from orchestrator.app.prompt_sanitizer import sanitize_query_input
 from orchestrator.app.cypher_validator import CypherValidationError, validate_cypher_readonly
 from orchestrator.app.neo4j_pool import get_driver
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
+from orchestrator.app.rag_evaluator import RAGEvaluator
+
+try:
+    import openai as _openai_module
+except ImportError:
+    _openai_module = None
+
+_query_logger = logging.getLogger(__name__)
 
 _ROUTE_MAP = {
     QueryComplexity.ENTITY_LOOKUP: "vector",
@@ -28,11 +38,32 @@ _ROUTE_MAP = {
 MAX_CYPHER_ITERATIONS = 3
 
 _VECTOR_SEARCH_CYPHER = (
+    "CALL db.index.vector.queryNodes('service_embedding_index', $limit, $query_embedding) "
+    "YIELD node, score "
+    "RETURN node {.*, score: score} AS result "
+    "ORDER BY score DESC"
+)
+
+_FULLTEXT_FALLBACK_CYPHER = (
     "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
     "YIELD node, score "
     "RETURN node {.*, score: score} AS result "
     "ORDER BY score DESC LIMIT $limit"
 )
+
+
+async def _embed_query(text: str) -> Optional[List[float]]:
+    try:
+        cfg = EmbeddingConfig.from_env()
+        if cfg.provider == "openai" and _openai_module is not None:
+            client = _openai_module.AsyncOpenAI()
+            response = await client.embeddings.create(
+                input=[text], model=cfg.model_name
+            )
+            return response.data[0].embedding
+    except Exception:
+        _query_logger.debug("Embedding unavailable, falling back to fulltext")
+    return None
 
 
 def _get_neo4j_driver() -> AsyncDriver:
@@ -55,8 +86,12 @@ def _build_acl_filter(
     principal = SecurityPrincipal.from_header(
         state.get("authorization", ""),
         token_secret=auth_config.token_secret,
+        require_verification=auth_config.require_tokens,
     )
-    return CypherPermissionFilter(principal)
+    return CypherPermissionFilter(
+        principal,
+        default_deny_untagged=auth_config.default_deny_untagged,
+    )
 
 
 def _apply_acl(
@@ -76,13 +111,14 @@ def _build_llm() -> ChatGoogleGenerativeAI:
 
 async def _generate_cypher(query: str, schema_hint: str = "") -> str:
     llm = _build_llm()
+    sanitized = sanitize_query_input(query)
     prompt = (
         "Generate a Neo4j Cypher query to answer this question about a "
         "distributed system knowledge graph.\n\n"
         "Node labels: Service, Database, KafkaTopic, K8sDeployment\n"
         "Relationship types: CALLS, PRODUCES, CONSUMES, DEPLOYED_IN\n"
         f"Schema hint: {schema_hint}\n\n"
-        f"Question: {query}\n\n"
+        f"Question: {sanitized}\n\n"
         "Return ONLY the Cypher query, no explanation."
     )
     response = await llm.ainvoke(prompt)
@@ -94,10 +130,11 @@ async def _llm_synthesize(
     context: List[Dict[str, Any]],
 ) -> str:
     llm = _build_llm()
+    sanitized = sanitize_query_input(query)
     prompt = (
         "You are a distributed systems expert. Answer the following question "
         "using ONLY the provided graph context. Be concise and precise.\n\n"
-        f"Question: {query}\n\n"
+        f"Question: {sanitized}\n\n"
         f"Graph context:\n{context}\n\n"
         "Answer:"
     )
@@ -138,19 +175,27 @@ async def vector_retrieve(state: QueryState) -> dict:
             async with _neo4j_session() as driver:
                 query_text = state["query"]
                 limit = state.get("max_results", 10)
+                query_embedding = await _embed_query(query_text)
+                use_vector = query_embedding is not None
+
+                if use_vector:
+                    cypher = _VECTOR_SEARCH_CYPHER
+                else:
+                    cypher = _FULLTEXT_FALLBACK_CYPHER
+
                 filtered_cypher, acl_params = _apply_acl(
-                    _VECTOR_SEARCH_CYPHER, state, alias="node",
+                    cypher, state, alias="node",
                 )
 
                 async def _tx_func(
                     tx: AsyncManagedTransaction,
                 ) -> list:
-                    result = await tx.run(
-                        filtered_cypher,
-                        query=query_text,
-                        limit=limit,
-                        **acl_params,
-                    )
+                    params: Dict[str, Any] = {**acl_params, "limit": limit}
+                    if use_vector:
+                        params["query_embedding"] = query_embedding
+                    else:
+                        params["query"] = query_text
+                    result = await tx.run(filtered_cypher, **params)
                     return await result.data()
 
                 async with driver.session() as session:
@@ -162,45 +207,55 @@ async def vector_retrieve(state: QueryState) -> dict:
             )
 
 
+async def _fetch_candidates(
+    driver: AsyncDriver, state: QueryState,
+) -> list:
+    query_embedding = await _embed_query(state["query"])
+    use_vector = query_embedding is not None
+    base_cypher = _VECTOR_SEARCH_CYPHER if use_vector else _FULLTEXT_FALLBACK_CYPHER
+    vec_cypher, vec_acl = _apply_acl(base_cypher, state, alias="node")
+
+    async def _vector_tx(tx: AsyncManagedTransaction) -> list:
+        params: Dict[str, Any] = {
+            **vec_acl, "limit": state.get("max_results", 10),
+        }
+        if use_vector:
+            params["query_embedding"] = query_embedding
+        else:
+            params["query"] = state["query"]
+        result = await tx.run(vec_cypher, **params)
+        return await result.data()
+
+    async with driver.session() as session:
+        return await session.execute_read(_vector_tx)
+
+
 async def single_hop_retrieve(state: QueryState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("query.single_hop_retrieve"):
         start = time.monotonic()
         try:
             async with _neo4j_session() as driver:
-                vec_cypher, vec_acl = _apply_acl(
-                    _VECTOR_SEARCH_CYPHER, state, alias="node",
+                candidates = await _fetch_candidates(driver, state)
+                names = [
+                    c.get("name", c.get("result", {}).get("name", ""))
+                    for c in candidates
+                ]
+                hop_cypher, hop_acl = _apply_acl(
+                    "MATCH (n)-[r]-(m) "
+                    "WHERE n.name IN $names "
+                    "RETURN n.name AS source, type(r) AS rel, "
+                    "m.name AS target",
+                    state, alias="m",
                 )
 
-                async def _vector_tx(tx: AsyncManagedTransaction) -> list:
+                async def _hop_tx(tx: AsyncManagedTransaction) -> list:
                     result = await tx.run(
-                        vec_cypher,
-                        query=state["query"],
-                        limit=state.get("max_results", 10),
-                        **vec_acl,
+                        hop_cypher, names=names, **hop_acl,
                     )
                     return await result.data()
 
                 async with driver.session() as session:
-                    candidates = await session.execute_read(_vector_tx)
-                    names = [
-                        c.get("name", c.get("result", {}).get("name", ""))
-                        for c in candidates
-                    ]
-                    hop_cypher, hop_acl = _apply_acl(
-                        "MATCH (n)-[r]-(m) "
-                        "WHERE n.name IN $names "
-                        "RETURN n.name AS source, type(r) AS rel, "
-                        "m.name AS target",
-                        state, alias="m",
-                    )
-
-                    async def _hop_tx(tx: AsyncManagedTransaction) -> list:
-                        result = await tx.run(
-                            hop_cypher, names=names, **hop_acl,
-                        )
-                        return await result.data()
-
                     hop_records = await session.execute_read(_hop_tx)
 
                 return {
@@ -288,17 +343,23 @@ async def hybrid_retrieve(state: QueryState) -> dict:
 
 async def _hybrid_vector_phase(state: QueryState) -> list:
     async with _neo4j_session() as driver:
+        query_embedding = await _embed_query(state["query"])
+        use_vector = query_embedding is not None
+        base_cypher = _VECTOR_SEARCH_CYPHER if use_vector else _FULLTEXT_FALLBACK_CYPHER
         vec_cypher, vec_acl = _apply_acl(
-            _VECTOR_SEARCH_CYPHER, state, alias="node",
+            base_cypher, state, alias="node",
         )
 
         async def _vector_tx(tx: AsyncManagedTransaction) -> list:
-            result = await tx.run(
-                vec_cypher,
-                query=state["query"],
-                limit=state.get("max_results", 10),
+            params: Dict[str, Any] = {
                 **vec_acl,
-            )
+                "limit": state.get("max_results", 10),
+            }
+            if use_vector:
+                params["query_embedding"] = query_embedding
+            else:
+                params["query"] = state["query"]
+            result = await tx.run(vec_cypher, **params)
             return await result.data()
 
         async with driver.session() as session:
@@ -310,7 +371,7 @@ async def _hybrid_aggregation_phase(
 ) -> dict:
     agg_cypher = await _generate_cypher(
         state["query"],
-        schema_hint=f"Pre-filtered candidates: {candidates}",
+        schema_hint=f"Pre-filtered candidates (count={len(candidates)})",
     )
 
     try:
@@ -369,6 +430,56 @@ async def _do_synthesize(state: QueryState) -> dict:
     return {"answer": answer, "sources": context}
 
 
+async def evaluate_response(state: QueryState) -> dict:
+    tracer = get_tracer()
+    with tracer.start_as_current_span("query.evaluate"):
+        start = time.monotonic()
+        try:
+            eval_config = RAGEvalConfig.from_env()
+            if not eval_config.enable_evaluation:
+                return {"evaluation_score": -1.0, "retrieval_quality": "skipped"}
+
+            query_embedding = await _embed_query(state["query"])
+            if query_embedding is None:
+                return {"evaluation_score": -1.0, "retrieval_quality": "no_embedding"}
+
+            context_embeddings: List[List[float]] = []
+            for source in state.get("sources", []):
+                if isinstance(source, dict):
+                    emb = source.get("embedding")
+                    if isinstance(emb, list):
+                        context_embeddings.append(emb)
+
+            evaluator = RAGEvaluator(
+                low_relevance_threshold=eval_config.low_relevance_threshold,
+            )
+            result = evaluator.evaluate(
+                query=state["query"],
+                query_embedding=query_embedding,
+                context_embeddings=context_embeddings,
+                retrieval_path=state.get("retrieval_path", "vector"),
+            )
+            quality = "low" if evaluator.is_low_relevance(result) else "adequate"
+            if result.score >= 0.7:
+                quality = "high"
+
+            _query_logger.info(
+                "RAG evaluation: score=%.3f quality=%s path=%s contexts=%d",
+                result.score,
+                quality,
+                result.retrieval_path,
+                result.context_count,
+            )
+            return {"evaluation_score": result.score, "retrieval_quality": quality}
+        except Exception:
+            _query_logger.debug("RAG evaluation failed, continuing without score")
+            return {"evaluation_score": -1.0, "retrieval_quality": "error"}
+        finally:
+            QUERY_DURATION.record(
+                (time.monotonic() - start) * 1000, {"node": "evaluate"}
+            )
+
+
 builder = StateGraph(QueryState)
 
 builder.add_node("classify", classify_query_node)
@@ -377,6 +488,7 @@ builder.add_node("single_hop_retrieve", single_hop_retrieve)
 builder.add_node("cypher_retrieve", cypher_retrieve)
 builder.add_node("hybrid_retrieve", hybrid_retrieve)
 builder.add_node("synthesize", synthesize_answer)
+builder.add_node("evaluate", evaluate_response)
 
 builder.add_edge(START, "classify")
 builder.add_conditional_edges(
@@ -393,6 +505,7 @@ builder.add_edge("vector_retrieve", "synthesize")
 builder.add_edge("single_hop_retrieve", "synthesize")
 builder.add_edge("cypher_retrieve", "synthesize")
 builder.add_edge("hybrid_retrieve", "synthesize")
-builder.add_edge("synthesize", END)
+builder.add_edge("synthesize", "evaluate")
+builder.add_edge("evaluate", END)
 
 query_graph = builder.compile()

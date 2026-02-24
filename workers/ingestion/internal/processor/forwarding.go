@@ -7,9 +7,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
+)
+
+const (
+	maxRetries       = 3
+	initialBackoff   = 1 * time.Second
+	backoffMultiplier = 2
 )
 
 type ingestDocument struct {
@@ -28,6 +35,7 @@ type ForwardingProcessor struct {
 	orchestratorURL string
 	client          *http.Client
 	authToken       string
+	retryBackoff    time.Duration
 }
 
 type ForwardingOption func(*ForwardingProcessor)
@@ -38,10 +46,17 @@ func WithAuthToken(token string) ForwardingOption {
 	}
 }
 
+func WithRetryBackoff(d time.Duration) ForwardingOption {
+	return func(fp *ForwardingProcessor) {
+		fp.retryBackoff = d
+	}
+}
+
 func NewForwardingProcessor(orchestratorURL string, client *http.Client, opts ...ForwardingOption) *ForwardingProcessor {
 	fp := &ForwardingProcessor{
 		orchestratorURL: orchestratorURL,
 		client:          client,
+		retryBackoff:    initialBackoff,
 	}
 	for _, o := range opts {
 		o(fp)
@@ -90,15 +105,46 @@ func (f *ForwardingProcessor) Process(ctx context.Context, job domain.Job) error
 	}
 	telemetry.InjectTraceContext(ctx, req.Header)
 
-	resp, err := f.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("forward to orchestrator: %w", err)
-	}
-	defer resp.Body.Close()
+	var lastErr error
+	backoff := f.retryBackoff
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("orchestrator returned %d", resp.StatusCode)
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= backoffMultiplier
+
+			req, err = http.NewRequestWithContext(ctx, http.MethodPost, f.orchestratorURL+"/ingest", bytes.NewReader(body))
+			if err != nil {
+				return fmt.Errorf("create request: %w", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if f.authToken != "" {
+				req.Header.Set("Authorization", "Bearer "+f.authToken)
+			}
+			telemetry.InjectTraceContext(ctx, req.Header)
+		}
+
+		resp, err := f.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("forward to orchestrator: %w", err)
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			lastErr = fmt.Errorf("orchestrator returned 429")
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("orchestrator returned %d", resp.StatusCode)
+		}
+
+		return nil
 	}
 
-	return nil
+	return fmt.Errorf("max retries exceeded: %w", lastErr)
 }

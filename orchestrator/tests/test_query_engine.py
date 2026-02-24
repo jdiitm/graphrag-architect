@@ -642,7 +642,7 @@ class TestBuildAclFilterRequireTokens:
         from orchestrator.app.query_engine import _build_acl_filter
 
         secret = "test-secret-key"
-        token = sign_token("team=infra,namespace=default,role=viewer", secret)
+        token = sign_token({"team": "infra", "namespace": "default", "role": "viewer"}, secret)
         state = {**base_query_state, "authorization": f"Bearer {token}"}
         fake_auth = MagicMock()
         fake_auth.require_tokens = True

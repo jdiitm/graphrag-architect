@@ -4,9 +4,17 @@ import pytest
 from fastapi import Request
 from starlette.testclient import TestClient
 
+from orchestrator.app.access_control import sign_token
 from orchestrator.app.main import app
 from orchestrator.app.query_models import QueryComplexity
 from orchestrator.tests.conftest import mock_neo4j_driver_with_session
+
+_TEST_SECRET = "rbac-integration-test-secret-key-32b"
+
+
+def _jwt_header(claims: dict) -> str:
+    token = sign_token(claims, _TEST_SECRET)
+    return f"Bearer {token}"
 
 
 def _make_state(base_query_state, **overrides):
@@ -88,6 +96,7 @@ class TestQueryEndpointAuthorizationHeader:
 
 class TestVectorRetrieveAppliesACL:
     @pytest.mark.asyncio
+    @patch.dict("os.environ", {"AUTH_TOKEN_SECRET": _TEST_SECRET})
     async def test_team_scoped_filter_injected(self, base_query_state):
         from orchestrator.app.query_engine import vector_retrieve
 
@@ -98,7 +107,7 @@ class TestVectorRetrieveAppliesACL:
         state = _make_state(
             base_query_state,
             query="auth-service",
-            authorization="Bearer team=platform,namespace=production,role=viewer",
+            authorization=_jwt_header({"team": "platform", "namespace": "production", "role": "viewer"}),
         )
 
         with patch(
@@ -121,6 +130,7 @@ class TestVectorRetrieveAppliesACL:
         assert called_kwargs["acl_team"] == "platform"
 
     @pytest.mark.asyncio
+    @patch.dict("os.environ", {"AUTH_TOKEN_SECRET": _TEST_SECRET})
     async def test_admin_bypasses_acl(self, base_query_state):
         from orchestrator.app.query_engine import vector_retrieve
 
@@ -131,7 +141,7 @@ class TestVectorRetrieveAppliesACL:
         state = _make_state(
             base_query_state,
             query="svc",
-            authorization="Bearer team=ops,namespace=all,role=admin",
+            authorization=_jwt_header({"team": "ops", "namespace": "all", "role": "admin"}),
         )
 
         with patch(
@@ -153,6 +163,7 @@ class TestVectorRetrieveAppliesACL:
 
 class TestCypherRetrieveAppliesACL:
     @pytest.mark.asyncio
+    @patch.dict("os.environ", {"AUTH_TOKEN_SECRET": _TEST_SECRET})
     async def test_acl_injected_into_generated_cypher(self, base_query_state):
         from orchestrator.app.query_engine import cypher_retrieve
 
@@ -164,7 +175,7 @@ class TestCypherRetrieveAppliesACL:
         state = _make_state(
             base_query_state,
             query="blast radius of auth",
-            authorization="Bearer team=data,namespace=staging,role=editor",
+            authorization=_jwt_header({"team": "data", "namespace": "staging", "role": "editor"}),
         )
 
         with patch(
@@ -190,6 +201,7 @@ class TestCypherRetrieveAppliesACL:
 
 class TestSingleHopRetrieveAppliesACL:
     @pytest.mark.asyncio
+    @patch.dict("os.environ", {"AUTH_TOKEN_SECRET": _TEST_SECRET})
     async def test_acl_applied_to_hop_query(self, base_query_state):
         from orchestrator.app.query_engine import single_hop_retrieve
 
@@ -223,7 +235,7 @@ class TestSingleHopRetrieveAppliesACL:
         state = _make_state(
             base_query_state,
             query="what does svc-a call?",
-            authorization="Bearer team=platform,namespace=production,role=viewer",
+            authorization=_jwt_header({"team": "platform", "namespace": "production", "role": "viewer"}),
         )
 
         with patch(
@@ -242,6 +254,7 @@ class TestSingleHopRetrieveAppliesACL:
 
 class TestHybridRetrieveAppliesACL:
     @pytest.mark.asyncio
+    @patch.dict("os.environ", {"AUTH_TOKEN_SECRET": _TEST_SECRET})
     async def test_acl_injected_into_aggregation_cypher(self, base_query_state):
         from orchestrator.app.query_engine import hybrid_retrieve
 
@@ -268,7 +281,7 @@ class TestHybridRetrieveAppliesACL:
         state = _make_state(
             base_query_state,
             query="most critical services",
-            authorization="Bearer team=data,namespace=staging,role=viewer",
+            authorization=_jwt_header({"team": "data", "namespace": "staging", "role": "viewer"}),
         )
 
         with patch(

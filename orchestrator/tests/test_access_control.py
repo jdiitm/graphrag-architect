@@ -1,29 +1,36 @@
-import hashlib
-import hmac
 import time
 
+import jwt
 import pytest
 
 from orchestrator.app.access_control import (
     CypherPermissionFilter,
     InvalidTokenError,
+    JWT_ALGORITHM,
     SecurityPrincipal,
     sign_token,
 )
 
 
 class TestSecurityPrincipal:
-    def test_from_header_parses_valid_token(self):
+    def test_from_header_parses_valid_jwt(self):
+        secret = "test-key"
+        token = sign_token(
+            {"team": "platform", "namespace": "production", "role": "admin"},
+            secret,
+        )
         principal = SecurityPrincipal.from_header(
-            "Bearer team=platform,namespace=production,role=admin"
+            f"Bearer {token}", token_secret=secret
         )
         assert principal.team == "platform"
         assert principal.namespace == "production"
         assert principal.role == "admin"
 
     def test_from_header_defaults_on_missing_fields(self):
+        secret = "test-key"
+        token = sign_token({"team": "platform"}, secret)
         principal = SecurityPrincipal.from_header(
-            "Bearer team=platform"
+            f"Bearer {token}", token_secret=secret
         )
         assert principal.team == "platform"
         assert principal.namespace == "*"
@@ -295,59 +302,55 @@ class TestCypherPermissionFilter:
 
 
 class TestSignToken:
-    def test_produces_payload_dot_signature_format(self):
-        payload = "team=ops,role=admin"
+    def test_produces_valid_jwt(self):
+        claims = {"team": "ops", "role": "admin"}
         secret = "test-secret-key"
-        token = sign_token(payload, secret)
-        assert "." in token
-        parts = token.rsplit(".", 1)
-        assert len(parts) == 2
-        assert parts[0].startswith(payload)
-        assert ",iat=" in parts[0]
-        assert ",exp=" in parts[0]
+        token = sign_token(claims, secret)
+        decoded = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+        assert decoded["team"] == "ops"
+        assert decoded["role"] == "admin"
+        assert "iat" in decoded
+        assert "exp" in decoded
 
-    def test_signature_is_valid_hmac_sha256(self):
-        payload = "team=ops,role=admin"
+    def test_jwt_contains_standard_time_claims(self):
+        claims = {"team": "ops", "role": "admin"}
         secret = "test-secret-key"
-        token = sign_token(payload, secret)
-        full_payload, signature = token.rsplit(".", 1)
-        expected = hmac.new(
-            secret.encode(), full_payload.encode(), hashlib.sha256
-        ).hexdigest()
-        assert signature == expected
+        token = sign_token(claims, secret, ttl_seconds=3600)
+        decoded = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+        assert decoded["exp"] - decoded["iat"] == 3600
+        assert abs(decoded["iat"] - int(time.time())) < 5
 
-    def test_different_secrets_produce_different_signatures(self):
-        payload = "team=ops,role=admin"
-        token_a = sign_token(payload, "secret-a")
-        token_b = sign_token(payload, "secret-b")
+    def test_different_secrets_produce_different_tokens(self):
+        claims = {"team": "ops", "role": "admin"}
+        token_a = sign_token(claims, "secret-a")
+        token_b = sign_token(claims, "secret-b")
         assert token_a != token_b
 
 
 class TestTokenExpiration:
     def test_sign_token_embeds_iat_and_exp(self):
-        token = sign_token("team=ops,role=admin", "secret", ttl_seconds=3600)
-        payload, _ = token.rsplit(".", 1)
-        fields = dict(pair.split("=", 1) for pair in payload.split(",") if "=" in pair)
-        assert "iat" in fields
-        assert "exp" in fields
-        iat = int(fields["iat"])
-        exp = int(fields["exp"])
-        assert exp - iat == 3600
-        assert abs(iat - int(time.time())) < 5
+        token = sign_token({"team": "ops", "role": "admin"}, "secret", ttl_seconds=3600)
+        decoded = jwt.decode(token, "secret", algorithms=[JWT_ALGORITHM])
+        assert "iat" in decoded
+        assert "exp" in decoded
+        assert decoded["exp"] - decoded["iat"] == 3600
+        assert abs(decoded["iat"] - int(time.time())) < 5
 
     def test_expired_token_raises_invalid_token_error(self):
-        expired_payload = f"team=ops,role=admin,iat={int(time.time()) - 7200},exp={int(time.time()) - 3600}"
-        sig = hmac.new(
-            "secret".encode(), expired_payload.encode(), hashlib.sha256
-        ).hexdigest()
-        token = f"{expired_payload}.{sig}"
+        expired_payload = {
+            "team": "ops",
+            "role": "admin",
+            "iat": int(time.time()) - 7200,
+            "exp": int(time.time()) - 3600,
+        }
+        token = jwt.encode(expired_payload, "secret", algorithm=JWT_ALGORITHM)
         with pytest.raises(InvalidTokenError, match="token expired"):
             SecurityPrincipal.from_header(
                 f"Bearer {token}", token_secret="secret"
             )
 
     def test_token_within_ttl_validates_successfully(self):
-        token = sign_token("team=ops,role=admin", "secret", ttl_seconds=3600)
+        token = sign_token({"team": "ops", "role": "admin"}, "secret", ttl_seconds=3600)
         principal = SecurityPrincipal.from_header(
             f"Bearer {token}", token_secret="secret"
         )
@@ -356,30 +359,26 @@ class TestTokenExpiration:
 
     def test_token_at_exact_expiry_boundary_rejected(self):
         now = int(time.time())
-        boundary_payload = f"team=ops,role=viewer,iat={now},exp={now}"
-        sig = hmac.new(
-            "secret".encode(), boundary_payload.encode(), hashlib.sha256
-        ).hexdigest()
-        token = f"{boundary_payload}.{sig}"
+        boundary_payload = {"team": "ops", "role": "viewer", "iat": now, "exp": now}
+        token = jwt.encode(boundary_payload, "secret", algorithm=JWT_ALGORITHM)
         with pytest.raises(InvalidTokenError, match="token expired"):
             SecurityPrincipal.from_header(
                 f"Bearer {token}", token_secret="secret"
             )
 
     def test_default_ttl_is_one_hour(self):
-        token = sign_token("team=ops,role=admin", "secret")
-        payload, _ = token.rsplit(".", 1)
-        fields = dict(pair.split("=", 1) for pair in payload.split(",") if "=" in pair)
-        iat = int(fields["iat"])
-        exp = int(fields["exp"])
-        assert exp - iat == 3600
+        token = sign_token({"team": "ops", "role": "admin"}, "secret")
+        decoded = jwt.decode(token, "secret", algorithms=[JWT_ALGORITHM])
+        assert decoded["exp"] - decoded["iat"] == 3600
 
 
-class TestHMACTokenVerification:
+class TestJWTTokenVerification:
     def test_valid_signed_token_parses_correctly(self):
         secret = "production-secret"
-        payload = "team=platform,namespace=production,role=admin"
-        token = sign_token(payload, secret)
+        token = sign_token(
+            {"team": "platform", "namespace": "production", "role": "admin"},
+            secret,
+        )
         principal = SecurityPrincipal.from_header(
             f"Bearer {token}", token_secret=secret
         )
@@ -389,29 +388,30 @@ class TestHMACTokenVerification:
 
     def test_invalid_signature_raises_error(self):
         secret = "real-secret"
-        payload = "team=ops,role=admin"
-        forged_token = f"{payload}.deadbeef0000"
+        token = sign_token({"team": "ops", "role": "admin"}, "wrong-secret")
         with pytest.raises(InvalidTokenError):
             SecurityPrincipal.from_header(
-                f"Bearer {forged_token}", token_secret=secret
+                f"Bearer {token}", token_secret=secret
             )
 
     def test_tampered_payload_raises_error(self):
         secret = "real-secret"
-        original_payload = "team=ops,role=viewer"
-        token = sign_token(original_payload, secret)
-        _, sig = token.rsplit(".", 1)
-        tampered_token = f"team=ops,role=admin.{sig}"
+        token = sign_token({"team": "ops", "role": "viewer"}, secret)
+        parts = token.split(".")
+        import base64
+        payload_bytes = base64.urlsafe_b64decode(parts[1] + "==")
+        tampered = payload_bytes.replace(b"viewer", b"admin!")
+        parts[1] = base64.urlsafe_b64encode(tampered).rstrip(b"=").decode()
+        tampered_token = ".".join(parts)
         with pytest.raises(InvalidTokenError):
             SecurityPrincipal.from_header(
                 f"Bearer {tampered_token}", token_secret=secret
             )
 
-    def test_missing_signature_raises_error(self):
-        secret = "real-secret"
+    def test_nonsense_token_raises_error(self):
         with pytest.raises(InvalidTokenError):
             SecurityPrincipal.from_header(
-                "Bearer team=ops,role=admin", token_secret=secret
+                "Bearer not.a.jwt", token_secret="secret"
             )
 
     def test_empty_header_still_returns_anonymous(self):
@@ -424,19 +424,53 @@ class TestHMACTokenVerification:
         assert principal.role == "anonymous"
         assert principal.team == "*"
 
-    def test_no_secret_skips_verification(self):
-        principal = SecurityPrincipal.from_header(
-            "Bearer team=ops,role=admin", token_secret=""
-        )
-        assert principal.role == "admin"
-        assert principal.team == "ops"
+    def test_no_secret_rejects_token_fail_closed(self):
+        with pytest.raises(InvalidTokenError, match="no secret configured"):
+            SecurityPrincipal.from_header(
+                "Bearer team=ops,role=admin", token_secret=""
+            )
 
-    def test_no_secret_default_skips_verification(self):
+    def test_no_secret_default_rejects_token_fail_closed(self):
+        with pytest.raises(InvalidTokenError, match="no secret configured"):
+            SecurityPrincipal.from_header(
+                "Bearer team=ops,role=admin"
+            )
+
+
+class TestRequireVerificationFlag:
+    def test_token_with_require_and_no_secret_raises(self):
+        with pytest.raises(InvalidTokenError, match="no secret configured"):
+            SecurityPrincipal.from_header(
+                "Bearer team=ops,role=admin",
+                token_secret="",
+                require_verification=True,
+            )
+
+    def test_no_token_with_require_returns_anonymous(self):
         principal = SecurityPrincipal.from_header(
-            "Bearer team=ops,role=admin"
+            "",
+            token_secret="",
+            require_verification=True,
         )
-        assert principal.role == "admin"
+        assert principal.role == "anonymous"
+
+    def test_token_with_require_and_secret_verifies(self):
+        token = sign_token({"team": "ops", "role": "viewer"}, "s3cret")
+        principal = SecurityPrincipal.from_header(
+            f"Bearer {token}",
+            token_secret="s3cret",
+            require_verification=True,
+        )
         assert principal.team == "ops"
+        assert principal.role == "viewer"
+
+    def test_forged_token_with_require_and_secret_rejected(self):
+        with pytest.raises(InvalidTokenError):
+            SecurityPrincipal.from_header(
+                "Bearer forged.token.here",
+                token_secret="real-secret",
+                require_verification=True,
+            )
 
 
 class TestNodeMetadataOnIngestion:

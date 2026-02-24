@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import time
@@ -10,6 +11,7 @@ from opentelemetry.trace import StatusCode
 from orchestrator.app.ast_extraction import GoASTExtractor, PythonASTExtractor
 from orchestrator.app.checkpointing import ExtractionCheckpoint, FileStatus
 from orchestrator.app.config import ExtractionConfig
+from orchestrator.app.container import AppContainer
 from orchestrator.app.extraction_models import (
     CallsEdge,
     K8sDeploymentNode,
@@ -18,7 +20,7 @@ from orchestrator.app.extraction_models import (
 )
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.manifest_parser import parse_all_manifests
-from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, CircuitOpenError
+from orchestrator.app.circuit_breaker import CircuitOpenError
 from orchestrator.app.neo4j_client import GraphRepository
 from orchestrator.app.neo4j_pool import get_driver
 from orchestrator.app.observability import (
@@ -34,7 +36,19 @@ logger = logging.getLogger(__name__)
 
 MAX_VALIDATION_RETRIES = 3
 
-_NEO4J_CIRCUIT_BREAKER = CircuitBreaker(CircuitBreakerConfig())
+
+class _ContainerHolder:
+    value: AppContainer | None = None
+
+
+def set_container(container: AppContainer | None) -> None:
+    _ContainerHolder.value = container
+
+
+def get_container() -> AppContainer:
+    if _ContainerHolder.value is None:
+        _ContainerHolder.value = AppContainer.from_env()
+    return _ContainerHolder.value
 
 
 def _build_extractor() -> ServiceExtractor:
@@ -67,7 +81,20 @@ def _get_workspace_max_bytes() -> int:
     return value
 
 
-def load_workspace_files(state: IngestionState) -> dict:
+def _load_files_sync(
+    directory_path: str, max_bytes: int,
+) -> Tuple[List[Dict[str, str]], List[str]]:
+    skipped: List[str] = []
+    files: List[Dict[str, str]] = []
+    for chunk in load_directory_chunked(
+        directory_path, max_total_bytes=max_bytes, skipped=skipped,
+    ):
+        files.extend(chunk)
+    files.sort(key=lambda entry: entry["path"])
+    return files, skipped
+
+
+async def load_workspace_files(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.load_workspace") as span:
         start = time.monotonic()
@@ -80,13 +107,9 @@ def load_workspace_files(state: IngestionState) -> dict:
             )
             return {"raw_files": files}
         max_bytes = _get_workspace_max_bytes()
-        skipped: List[str] = []
-        files: List[Dict[str, str]] = []
-        for chunk in load_directory_chunked(
-            directory_path, max_total_bytes=max_bytes, skipped=skipped,
-        ):
-            files.extend(chunk)
-        files.sort(key=lambda entry: entry["path"])
+        files, skipped = await asyncio.to_thread(
+            _load_files_sync, directory_path, max_bytes,
+        )
         span.set_attribute("file_count", len(files))
         if skipped:
             span.set_attribute("skipped_count", len(skipped))
@@ -101,17 +124,24 @@ def load_workspace_files(state: IngestionState) -> dict:
         return {"raw_files": files, "skipped_files": skipped}
 
 
-def parse_source_ast(state: IngestionState) -> dict:
+def _run_ast_extraction(
+    pending: List[Dict[str, str]],
+) -> Tuple[Any, Any]:
+    go_extractor = GoASTExtractor()
+    py_extractor = PythonASTExtractor()
+    return go_extractor.extract_all(pending), py_extractor.extract_all(pending)
+
+
+async def parse_source_ast(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.parse_source_ast"):
         start = time.monotonic()
         raw_files = state.get("raw_files", [])
         checkpoint = _load_or_create_checkpoint(state, raw_files)
         pending = checkpoint.filter_files(raw_files, FileStatus.PENDING)
-        go_extractor = GoASTExtractor()
-        py_extractor = PythonASTExtractor()
-        go_result = go_extractor.extract_all(pending)
-        py_result = py_extractor.extract_all(pending)
+        go_result, py_result = await asyncio.to_thread(
+            _run_ast_extraction, pending,
+        )
         extracted_paths = (
             [f["path"] for f in pending if f["path"].endswith(".go")]
             + [f["path"] for f in pending if f["path"].endswith(".py")]
@@ -189,13 +219,15 @@ async def enrich_with_llm(state: IngestionState) -> dict:
         LLM_EXTRACTION_DURATION.record(elapsed_ms, {"node": "enrich_with_llm"})
         return {"extracted_nodes": existing}
 
-def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
+async def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.parse_manifests"):
         start = time.monotonic()
         raw_files = state.get("raw_files", [])
         existing = list(state.get("extracted_nodes", []))
-        manifest_entities = parse_all_manifests(raw_files)
+        manifest_entities = await asyncio.to_thread(
+            parse_all_manifests, raw_files,
+        )
         checkpoint = _load_or_create_checkpoint(state, raw_files)
         yaml_paths = [
             f["path"] for f in raw_files
@@ -210,10 +242,12 @@ def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
             "extraction_checkpoint": checkpoint.to_dict(),
         }
 
-def validate_extracted_schema(state: IngestionState) -> dict:
+async def validate_extracted_schema(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.validate_schema"):
-        errors = validate_topology(state.get("extracted_nodes", []))
+        errors = await asyncio.to_thread(
+            validate_topology, state.get("extracted_nodes", []),
+        )
         return {"extraction_errors": errors}
 
 def route_validation(state: IngestionState) -> str:
@@ -288,7 +322,9 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
         start = time.monotonic()
         try:
             driver = get_driver()
-            repo = GraphRepository(driver, circuit_breaker=_NEO4J_CIRCUIT_BREAKER)
+            repo = GraphRepository(
+                driver, circuit_breaker=get_container().circuit_breaker
+            )
             await repo.commit_topology(state.get("extracted_nodes", []))
             return {"commit_status": "success"}
         except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:
@@ -304,7 +340,7 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
 async def _process_chunk(
     chunk: List[Dict[str, str]],
 ) -> Tuple[List[Any], str, Dict[str, str]]:
-    state: dict = {
+    initial_state: Dict[str, Any] = {
         "directory_path": "",
         "raw_files": chunk,
         "extracted_nodes": [],
@@ -312,23 +348,13 @@ async def _process_chunk(
         "validation_retries": 0,
         "commit_status": "",
         "extraction_checkpoint": {},
+        "skipped_files": [],
     }
-
-    state.update(parse_source_ast(state))
-    state.update(await enrich_with_llm(state))
-    state.update(parse_k8s_and_kafka_manifests(state))
-    state.update(validate_extracted_schema(state))
-
-    while (state.get("extraction_errors")
-           and state.get("validation_retries", 0) < MAX_VALIDATION_RETRIES):
-        state.update(await fix_extraction_errors(state))
-        state.update(validate_extracted_schema(state))
-
-    commit_result = await commit_to_neo4j(state)
+    result = await ingestion_graph.ainvoke(initial_state)
     return (
-        state.get("extracted_nodes", []),
-        commit_result.get("commit_status", "failed"),
-        state.get("extraction_checkpoint", {}),
+        result.get("extracted_nodes", []),
+        result.get("commit_status", "failed"),
+        result.get("extraction_checkpoint", {}),
     )
 
 

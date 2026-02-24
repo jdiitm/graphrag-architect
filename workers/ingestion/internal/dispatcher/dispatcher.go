@@ -2,7 +2,10 @@ package dispatcher
 
 import (
 	"context"
+	"math"
+	"math/rand/v2"
 	"sync"
+	"time"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/metrics"
@@ -11,10 +14,13 @@ import (
 )
 
 type Config struct {
-	NumWorkers int
-	MaxRetries int
-	JobBuffer  int
-	DLQBuffer  int
+	NumWorkers     int
+	MaxRetries     int
+	JobBuffer      int
+	DLQBuffer      int
+	BaseBackoff    time.Duration
+	MaxBackoff     time.Duration
+	DLQAckTimeout  time.Duration
 }
 
 type Dispatcher struct {
@@ -83,21 +89,15 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			jobCtx := telemetry.ExtractTraceContext(ctx, job.Headers)
 			processCtx, processSpan := telemetry.StartProcessSpan(jobCtx, job)
 			result := d.processWithRetry(processCtx, job)
-			if result.Err != nil {
-				_, dlqSpan := telemetry.StartDLQSpan(processCtx, result)
-				result.Done = make(chan struct{})
-				d.dlq <- result
-				select {
-				case <-result.Done:
-				case <-ctx.Done():
-					dlqSpan.End()
-					processSpan.End()
-					return
-				}
-				dlqSpan.End()
-				d.observer.RecordDLQRouted()
-				d.observer.RecordJobProcessed("dlq")
-			} else {
+		if result.Err != nil {
+			_, dlqSpan := telemetry.StartDLQSpan(processCtx, result)
+			result.Done = make(chan struct{})
+			d.dlq <- result
+			d.awaitDLQDone(ctx, result)
+			dlqSpan.End()
+			d.observer.RecordDLQRouted()
+			d.observer.RecordJobProcessed("dlq")
+		} else {
 				d.observer.RecordJobProcessed("success")
 			}
 			processSpan.End()
@@ -107,6 +107,23 @@ func (d *Dispatcher) worker(ctx context.Context) {
 				return
 			}
 		}
+	}
+}
+
+func (d *Dispatcher) awaitDLQDone(ctx context.Context, result domain.Result) {
+	if d.cfg.DLQAckTimeout <= 0 {
+		select {
+		case <-result.Done:
+		case <-ctx.Done():
+		}
+		return
+	}
+	timer := time.NewTimer(d.cfg.DLQAckTimeout)
+	defer timer.Stop()
+	select {
+	case <-result.Done:
+	case <-ctx.Done():
+	case <-timer.C:
 	}
 }
 
@@ -120,6 +137,24 @@ func (d *Dispatcher) processWithRetry(ctx context.Context, job domain.Job) domai
 		if ctx.Err() != nil {
 			break
 		}
+		if attempt < d.cfg.MaxRetries && d.cfg.BaseBackoff > 0 {
+			delay := backoffWithJitter(d.cfg.BaseBackoff, d.cfg.MaxBackoff, attempt)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return domain.Result{Job: job, Err: lastErr, Attempts: attempt}
+			}
+		}
 	}
 	return domain.Result{Job: job, Err: lastErr, Attempts: d.cfg.MaxRetries}
+}
+
+func backoffWithJitter(base, maxDelay time.Duration, attempt int) time.Duration {
+	exp := math.Pow(2, float64(attempt-1))
+	delay := time.Duration(float64(base) * exp)
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	jitter := 0.5 + rand.Float64()
+	return time.Duration(float64(delay) * jitter)
 }

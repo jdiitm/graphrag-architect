@@ -19,6 +19,13 @@ DEFAULT_RETENTION_MS = 604800000
 TEAM_OWNER_LABEL = "graphrag.io/team-owner"
 NAMESPACE_ACL_ANNOTATION = "graphrag.io/namespace-acl"
 
+_TEAM_OWNER_FALLBACK_LABELS = (
+    TEAM_OWNER_LABEL,
+    "team",
+    "owner",
+    "app.kubernetes.io/managed-by",
+)
+
 
 def _safe_load_all(content: str) -> List[Dict[str, Any]]:
     if not content or not content.strip():
@@ -35,18 +42,25 @@ def _extract_team_owner(metadata: Dict[str, Any]) -> Optional[str]:
     labels: Dict[str, Any] = metadata.get("labels", {})
     if not isinstance(labels, dict):
         return None
-    owner = labels.get(TEAM_OWNER_LABEL)
-    return str(owner) if owner is not None else None
+    for label_key in _TEAM_OWNER_FALLBACK_LABELS:
+        owner = labels.get(label_key)
+        if owner is not None:
+            return str(owner)
+    return None
 
 
-def _extract_namespace_acl(metadata: Dict[str, Any]) -> List[str]:
+def _extract_namespace_acl(
+    metadata: Dict[str, Any], manifest_namespace: str = "",
+) -> List[str]:
     annotations: Dict[str, Any] = metadata.get("annotations", {})
-    if not isinstance(annotations, dict):
-        return []
-    raw = annotations.get(NAMESPACE_ACL_ANNOTATION)
-    if not raw:
-        return []
-    return [ns.strip() for ns in str(raw).split(",") if ns.strip()]
+    acl_namespaces: List[str] = []
+    if isinstance(annotations, dict):
+        raw = annotations.get(NAMESPACE_ACL_ANNOTATION)
+        if raw:
+            acl_namespaces = [ns.strip() for ns in str(raw).split(",") if ns.strip()]
+    if not acl_namespaces and manifest_namespace:
+        acl_namespaces = [manifest_namespace]
+    return acl_namespaces
 
 
 def _extract_deployment(doc: Dict[str, Any]) -> Optional[K8sDeploymentNode]:
@@ -58,17 +72,31 @@ def _extract_deployment(doc: Dict[str, Any]) -> Optional[K8sDeploymentNode]:
     name = metadata.get("name")
     if not name:
         return None
-    namespace = metadata.get("namespace", DEFAULT_NAMESPACE)
+    namespace = str(metadata.get("namespace", DEFAULT_NAMESPACE))
     spec: Dict[str, Any] = doc.get("spec", {})
     if not isinstance(spec, dict):
         spec = {}
     replicas = spec.get("replicas", DEFAULT_REPLICAS)
+    team_owner = _extract_team_owner(metadata)
+    namespace_acl = _extract_namespace_acl(metadata, manifest_namespace=namespace)
+    if team_owner is None:
+        logger.warning(
+            "Deployment %s/%s missing label %s — will be invisible "
+            "to non-admin users under default-deny ACL",
+            namespace, name, TEAM_OWNER_LABEL,
+        )
+    if not namespace_acl:
+        logger.warning(
+            "Deployment %s/%s missing annotation %s — will be invisible "
+            "to namespace-scoped users under default-deny ACL",
+            namespace, name, NAMESPACE_ACL_ANNOTATION,
+        )
     return K8sDeploymentNode(
         id=str(name),
         namespace=str(namespace),
         replicas=int(replicas),
-        team_owner=_extract_team_owner(metadata),
-        namespace_acl=_extract_namespace_acl(metadata),
+        team_owner=team_owner,
+        namespace_acl=namespace_acl,
     )
 
 
@@ -89,12 +117,27 @@ def _extract_kafka_topic(doc: Dict[str, Any]) -> Optional[KafkaTopicNode]:
     if not isinstance(config, dict):
         config = {}
     retention_raw: Union[str, int] = config.get("retention.ms", DEFAULT_RETENTION_MS)
+    topic_namespace = str(metadata.get("namespace", DEFAULT_NAMESPACE))
+    team_owner = _extract_team_owner(metadata)
+    namespace_acl = _extract_namespace_acl(metadata, manifest_namespace=topic_namespace)
+    if team_owner is None:
+        logger.warning(
+            "KafkaTopic %s missing label %s — will be invisible "
+            "to non-admin users under default-deny ACL",
+            name, TEAM_OWNER_LABEL,
+        )
+    if not namespace_acl:
+        logger.warning(
+            "KafkaTopic %s missing annotation %s — will be invisible "
+            "to namespace-scoped users under default-deny ACL",
+            name, NAMESPACE_ACL_ANNOTATION,
+        )
     return KafkaTopicNode(
         name=str(name),
         partitions=int(partitions),
         retention_ms=int(retention_raw),
-        team_owner=_extract_team_owner(metadata),
-        namespace_acl=_extract_namespace_acl(metadata),
+        team_owner=team_owner,
+        namespace_acl=namespace_acl,
     )
 
 

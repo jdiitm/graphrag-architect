@@ -126,3 +126,62 @@ class TestACLInjectionStringLiteralBypass:
         final_return_pos = filtered.rfind("RETURN n")
         acl_pos = filtered.find("n.team_owner")
         assert acl_pos < final_return_pos
+
+
+class TestDefaultDenyUntagged:
+    def test_deny_untagged_excludes_null_team_owner(self):
+        filt = CypherPermissionFilter(
+            SecurityPrincipal(
+                team="platform", namespace="production", role="viewer",
+            ),
+            default_deny_untagged=True,
+        )
+        clause, _ = filt.node_filter("n")
+        assert "IS NULL" not in clause
+
+    def test_deny_untagged_excludes_null_namespace_acl(self):
+        filt = CypherPermissionFilter(
+            SecurityPrincipal(
+                team="platform", namespace="production", role="viewer",
+            ),
+            default_deny_untagged=True,
+        )
+        clause, _ = filt.node_filter("n")
+        assert "IS NULL" not in clause
+
+    def test_allow_untagged_includes_null_fallback(self):
+        filt = CypherPermissionFilter(
+            SecurityPrincipal(
+                team="platform", namespace="production", role="viewer",
+            ),
+            default_deny_untagged=False,
+        )
+        clause, _ = filt.node_filter("n")
+        assert "IS NULL" in clause
+
+    def test_default_deny_is_true(self):
+        filt = CypherPermissionFilter(
+            SecurityPrincipal(
+                team="platform", namespace="production", role="viewer",
+            ),
+        )
+        clause, _ = filt.node_filter("n")
+        assert "IS NULL" not in clause
+
+    def test_anonymous_with_deny_gets_strict_public_filter(self):
+        filt = CypherPermissionFilter(
+            SecurityPrincipal(team="*", namespace="*", role="anonymous"),
+            default_deny_untagged=True,
+        )
+        clause, params = filt.node_filter("n")
+        assert params["acl_team"] == "public"
+        assert "IS NULL" not in clause
+
+    def test_anonymous_with_allow_gets_null_fallback(self):
+        filt = CypherPermissionFilter(
+            SecurityPrincipal(team="*", namespace="*", role="anonymous"),
+            default_deny_untagged=False,
+        )
+        clause, params = filt.node_filter("n")
+        assert params["acl_team"] == "public"
+        assert "IS NULL" in clause

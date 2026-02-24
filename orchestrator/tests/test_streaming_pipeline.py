@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -34,7 +34,8 @@ class TestStreamingWorkspaceLoader:
 
 
 class TestLoadWorkspaceUsesChunkedLoader:
-    def test_load_workspace_files_uses_chunked_for_directory(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_load_workspace_files_uses_chunked_for_directory(self, tmp_path):
         for i in range(5):
             f = tmp_path / f"svc{i}.go"
             f.write_text(f"package main{i}", encoding="utf-8")
@@ -49,7 +50,7 @@ class TestLoadWorkspaceUsesChunkedLoader:
             "commit_status": "",
             "extraction_checkpoint": {},
         }
-        result = load_workspace_files(state)
+        result = await load_workspace_files(state)
         assert len(result["raw_files"]) == 5
 
 
@@ -104,14 +105,15 @@ class TestSkippedFilesTracking:
         loaded = sum(len(c) for c in chunks)
         assert loaded < 5
 
-    def test_load_workspace_files_surfaces_skipped(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_load_workspace_files_surfaces_skipped(self, tmp_path):
         for i in range(10):
             (tmp_path / f"file{i:02d}.go").write_text("x" * 1000)
 
         from orchestrator.app.graph_builder import load_workspace_files
 
         with patch.dict("os.environ", {"WORKSPACE_MAX_BYTES": "3000"}):
-            result = load_workspace_files({
+            result = await load_workspace_files({
                 "directory_path": str(tmp_path),
                 "raw_files": [],
                 "extracted_nodes": [],
@@ -158,24 +160,11 @@ _ENV_VARS = {
 }
 
 
-def _mock_pipeline_internals():
-    mock_go = MagicMock()
-    mock_go.extract_all.return_value = MagicMock(services=[], calls=[])
-    mock_py = MagicMock()
-    mock_py.extract_all.return_value = MagicMock(services=[], calls=[])
-    mock_extractor = MagicMock()
-    mock_extractor.extract_all = AsyncMock(
-        return_value=MagicMock(services=[], calls=[])
-    )
-    return mock_go, mock_py, mock_extractor
-
 
 class TestStreamingPipelinePerChunkCommit:
     @pytest.mark.asyncio
     async def test_multiple_chunks_produce_multiple_commits(self):
         from orchestrator.app.graph_builder import run_streaming_pipeline
-
-        mock_go, mock_py, mock_extractor = _mock_pipeline_internals()
 
         mock_chunks = [
             [{"path": f"svc{i}.go", "content": f"package svc{i}"}
@@ -186,6 +175,14 @@ class TestStreamingPipelinePerChunkCommit:
              for i in range(6, 9)],
         ]
 
+        mock_invoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "commit_status": "success",
+            "extraction_errors": [],
+            "extraction_checkpoint": {},
+            "skipped_files": [],
+        })
+
         with (
             patch.dict("os.environ", _ENV_VARS),
             patch(
@@ -193,40 +190,32 @@ class TestStreamingPipelinePerChunkCommit:
                 return_value=iter(mock_chunks),
             ),
             patch(
-                "orchestrator.app.graph_builder.GoASTExtractor",
-                return_value=mock_go,
+                "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+                mock_invoke,
             ),
-            patch(
-                "orchestrator.app.graph_builder.PythonASTExtractor",
-                return_value=mock_py,
-            ),
-            patch(
-                "orchestrator.app.graph_builder._build_extractor",
-                return_value=mock_extractor,
-            ),
-            patch(
-                "orchestrator.app.graph_builder.commit_to_neo4j",
-                new_callable=AsyncMock,
-            ) as mock_commit,
         ):
-            mock_commit.return_value = {"commit_status": "success"}
-
             result = await run_streaming_pipeline({
                 "directory_path": "/some/workspace",
             })
 
-        assert mock_commit.call_count == 3
+        assert mock_invoke.call_count == 3
         assert result["commit_status"] == "success"
 
     @pytest.mark.asyncio
     async def test_single_chunk_produces_single_commit(self):
         from orchestrator.app.graph_builder import run_streaming_pipeline
 
-        mock_go, mock_py, mock_extractor = _mock_pipeline_internals()
-
         mock_chunks = [
             [{"path": "svc0.go", "content": "package svc0"}],
         ]
+
+        mock_invoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "commit_status": "success",
+            "extraction_errors": [],
+            "extraction_checkpoint": {},
+            "skipped_files": [],
+        })
 
         with (
             patch.dict("os.environ", _ENV_VARS),
@@ -235,43 +224,33 @@ class TestStreamingPipelinePerChunkCommit:
                 return_value=iter(mock_chunks),
             ),
             patch(
-                "orchestrator.app.graph_builder.GoASTExtractor",
-                return_value=mock_go,
+                "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+                mock_invoke,
             ),
-            patch(
-                "orchestrator.app.graph_builder.PythonASTExtractor",
-                return_value=mock_py,
-            ),
-            patch(
-                "orchestrator.app.graph_builder._build_extractor",
-                return_value=mock_extractor,
-            ),
-            patch(
-                "orchestrator.app.graph_builder.commit_to_neo4j",
-                new_callable=AsyncMock,
-            ) as mock_commit,
         ):
-            mock_commit.return_value = {"commit_status": "success"}
-
             result = await run_streaming_pipeline({
                 "directory_path": "/some/workspace",
             })
 
-        assert mock_commit.call_count == 1
+        assert mock_invoke.call_count == 1
 
     @pytest.mark.asyncio
     async def test_failed_chunk_commit_surfaces_in_result(self):
         from orchestrator.app.graph_builder import run_streaming_pipeline
 
-        mock_go, mock_py, mock_extractor = _mock_pipeline_internals()
         call_count = 0
 
-        async def alternating_commit(state):
+        async def alternating_invoke(state):
             nonlocal call_count
             call_count += 1
-            if call_count == 2:
-                return {"commit_status": "failed"}
-            return {"commit_status": "success"}
+            status = "failed" if call_count == 2 else "success"
+            return {
+                "extracted_nodes": [],
+                "commit_status": status,
+                "extraction_errors": [],
+                "extraction_checkpoint": {},
+                "skipped_files": [],
+            }
 
         mock_chunks = [
             [{"path": "a.go", "content": "package a"}],
@@ -286,20 +265,8 @@ class TestStreamingPipelinePerChunkCommit:
                 return_value=iter(mock_chunks),
             ),
             patch(
-                "orchestrator.app.graph_builder.GoASTExtractor",
-                return_value=mock_go,
-            ),
-            patch(
-                "orchestrator.app.graph_builder.PythonASTExtractor",
-                return_value=mock_py,
-            ),
-            patch(
-                "orchestrator.app.graph_builder._build_extractor",
-                return_value=mock_extractor,
-            ),
-            patch(
-                "orchestrator.app.graph_builder.commit_to_neo4j",
-                side_effect=alternating_commit,
+                "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+                side_effect=alternating_invoke,
             ),
         ):
             result = await run_streaming_pipeline({
@@ -312,35 +279,27 @@ class TestStreamingPipelinePerChunkCommit:
     async def test_preloaded_files_bypass_chunked_loader(self):
         from orchestrator.app.graph_builder import run_streaming_pipeline
 
-        mock_go, mock_py, mock_extractor = _mock_pipeline_internals()
+        mock_invoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "commit_status": "success",
+            "extraction_errors": [],
+            "extraction_checkpoint": {},
+            "skipped_files": [],
+        })
 
         with (
             patch.dict("os.environ", _ENV_VARS),
             patch(
-                "orchestrator.app.graph_builder.GoASTExtractor",
-                return_value=mock_go,
+                "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+                mock_invoke,
             ),
-            patch(
-                "orchestrator.app.graph_builder.PythonASTExtractor",
-                return_value=mock_py,
-            ),
-            patch(
-                "orchestrator.app.graph_builder._build_extractor",
-                return_value=mock_extractor,
-            ),
-            patch(
-                "orchestrator.app.graph_builder.commit_to_neo4j",
-                new_callable=AsyncMock,
-            ) as mock_commit,
         ):
-            mock_commit.return_value = {"commit_status": "success"}
-
             result = await run_streaming_pipeline({
                 "directory_path": "",
                 "raw_files": [{"path": "a.go", "content": "package a"}],
             })
 
-        assert mock_commit.call_count == 1
+        assert mock_invoke.call_count == 1
         assert result["skipped_files"] == []
 
 
@@ -348,8 +307,6 @@ class TestStreamingPipelineSkippedFiles:
     @pytest.mark.asyncio
     async def test_skipped_files_surfaced_in_result(self):
         from orchestrator.app.graph_builder import run_streaming_pipeline
-
-        mock_go, mock_py, mock_extractor = _mock_pipeline_internals()
 
         mock_chunks = [
             [{"path": "a.go", "content": "package a"}],
@@ -361,6 +318,14 @@ class TestStreamingPipelineSkippedFiles:
                 skipped.extend(["dropped1.go", "dropped2.go"])
             yield from mock_chunks
 
+        mock_invoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "commit_status": "success",
+            "extraction_errors": [],
+            "extraction_checkpoint": {},
+            "skipped_files": [],
+        })
+
         with (
             patch.dict("os.environ", {**_ENV_VARS, "WORKSPACE_MAX_BYTES": "500"}),
             patch(
@@ -368,24 +333,10 @@ class TestStreamingPipelineSkippedFiles:
                 side_effect=fake_chunked,
             ),
             patch(
-                "orchestrator.app.graph_builder.GoASTExtractor",
-                return_value=mock_go,
+                "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+                mock_invoke,
             ),
-            patch(
-                "orchestrator.app.graph_builder.PythonASTExtractor",
-                return_value=mock_py,
-            ),
-            patch(
-                "orchestrator.app.graph_builder._build_extractor",
-                return_value=mock_extractor,
-            ),
-            patch(
-                "orchestrator.app.graph_builder.commit_to_neo4j",
-                new_callable=AsyncMock,
-            ) as mock_commit,
         ):
-            mock_commit.return_value = {"commit_status": "success"}
-
             result = await run_streaming_pipeline({
                 "directory_path": "/some/workspace",
             })

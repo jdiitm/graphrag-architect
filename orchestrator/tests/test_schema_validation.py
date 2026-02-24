@@ -234,22 +234,24 @@ class TestRouteValidation:
 
 class TestValidateExtractedSchemaNode:
 
-    def test_populates_errors_from_validation(self) -> None:
+    @pytest.mark.asyncio
+    async def test_populates_errors_from_validation(self) -> None:
         from orchestrator.app.graph_builder import validate_extracted_schema
 
         state = {
             "extracted_nodes": [AUTH_SERVICE, {"bad": True}],
         }
-        result = validate_extracted_schema(state)
+        result = await validate_extracted_schema(state)
         assert len(result["extraction_errors"]) >= 1
 
-    def test_no_errors_on_valid_entities(self) -> None:
+    @pytest.mark.asyncio
+    async def test_no_errors_on_valid_entities(self) -> None:
         from orchestrator.app.graph_builder import validate_extracted_schema
 
         state = {
             "extracted_nodes": [AUTH_SERVICE, ORDER_SERVICE, VALID_CALLS],
         }
-        result = validate_extracted_schema(state)
+        result = await validate_extracted_schema(state)
         assert result["extraction_errors"] == []
 
 

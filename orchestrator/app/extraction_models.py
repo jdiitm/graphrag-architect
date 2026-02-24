@@ -1,6 +1,14 @@
+import hashlib
+import json
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
+
+
+def compute_content_hash(entity: BaseModel) -> str:
+    data = entity.model_dump(exclude={"content_hash"})
+    json_str = json.dumps(data, sort_keys=True)
+    return hashlib.sha256(json_str.encode()).hexdigest()
 
 
 class ServiceNode(BaseModel):
@@ -12,12 +20,16 @@ class ServiceNode(BaseModel):
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    content_hash: str = ""
+
 
 class DatabaseNode(BaseModel):
     id: str
     type: str
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
+    content_hash: str = ""
+
 
 class KafkaTopicNode(BaseModel):
     name: str
@@ -25,6 +37,8 @@ class KafkaTopicNode(BaseModel):
     retention_ms: int
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
+    content_hash: str = ""
+
 
 class K8sDeploymentNode(BaseModel):
     id: str
@@ -32,6 +46,7 @@ class K8sDeploymentNode(BaseModel):
     replicas: int
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
+    content_hash: str = ""
 
 class CallsEdge(BaseModel):
     source_service_id: str

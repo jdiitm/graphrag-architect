@@ -6,6 +6,12 @@ import pytest
 from orchestrator.app.query_models import QueryComplexity
 
 
+@pytest.fixture(autouse=True)
+def _reset_graph_builder_container() -> None:
+    import orchestrator.app.graph_builder as gb
+    gb.set_container(None)
+
+
 @pytest.fixture
 def base_query_state():
     return {

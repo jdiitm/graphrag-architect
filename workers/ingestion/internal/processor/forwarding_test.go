@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -270,6 +272,60 @@ func TestForwardingProcessor_OmitsAuthHeaderWhenEmpty(t *testing.T) {
 
 	if capturedAuth != "" {
 		t.Errorf("Authorization should be empty when no token configured, got %q", capturedAuth)
+	}
+}
+
+func TestForwardingProcessor_429TriggersRetry(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client(), processor.WithRetryBackoff(time.Millisecond))
+	err := fp.Process(context.Background(), validJob())
+	if err == nil {
+		t.Fatal("expected error after 429 retries exhausted, got nil")
+	}
+	if attempts.Load() != 4 {
+		t.Errorf("expected 4 attempts (1 initial + 3 retries), got %d", attempts.Load())
+	}
+}
+
+func TestForwardingProcessor_429RetrySucceedsAfterTemporary(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count := attempts.Add(1)
+		if count <= 2 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"committed","entities_extracted":1,"errors":[]}`))
+	}))
+	defer srv.Close()
+
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client(), processor.WithRetryBackoff(time.Millisecond))
+	err := fp.Process(context.Background(), validJob())
+	if err != nil {
+		t.Fatalf("expected success after transient 429s, got %v", err)
+	}
+	if attempts.Load() != 3 {
+		t.Errorf("expected 3 attempts, got %d", attempts.Load())
+	}
+}
+
+func TestForwardingProcessor_429MaxRetriesExhausted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client(), processor.WithRetryBackoff(time.Millisecond))
+	err := fp.Process(context.Background(), validJob())
+	if err == nil {
+		t.Fatal("expected error when max retries exhausted, got nil")
 	}
 }
 

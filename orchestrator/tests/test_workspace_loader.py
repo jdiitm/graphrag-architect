@@ -231,20 +231,22 @@ class TestLoadDirectoryChunked:
 
 class TestLoadWorkspaceFilesDAGNode:
 
-    def test_dag_node_delegates_to_load_directory(self, workspace: Path):
+    @pytest.mark.asyncio
+    async def test_dag_node_delegates_to_load_directory(self, workspace: Path):
         from orchestrator.app.graph_builder import load_workspace_files
 
         state = {"directory_path": str(workspace)}
-        result = load_workspace_files(state)
+        result = await load_workspace_files(state)
         assert "raw_files" in result
         assert len(result["raw_files"]) == 4
         paths = [f["path"] for f in result["raw_files"]]
         assert "main.go" in paths
         assert "app.py" in paths
 
-    def test_dag_node_returns_empty_for_missing_dir(self):
+    @pytest.mark.asyncio
+    async def test_dag_node_returns_empty_for_missing_dir(self):
         from orchestrator.app.graph_builder import load_workspace_files
 
         state = {"directory_path": "/nonexistent/path"}
-        result = load_workspace_files(state)
+        result = await load_workspace_files(state)
         assert result["raw_files"] == []
