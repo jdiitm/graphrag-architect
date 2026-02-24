@@ -1,3 +1,64 @@
+## Completed: Full-System Audit Mitigation — 12-Cycle Roadmap
+
+Quality Gates: Pylint 10/10, Python 754/754, Go 12/12 packages (118 tests)
+
+### Summary
+
+Implemented all 12 cycles across 4 waves from the FAANG-bar audit mitigation
+roadmap, addressing all 5 critical weaknesses, 3 architectural refactors,
+and 4 adversarial scenarios.
+
+### Wave 1 — Data Integrity (CRITICAL)
+- Cycle 1: Go FileOutbox + Reaper for crash-recoverable Kafka emit; Python
+  CompletionTracker for post-commit durability records
+- Cycle 2: LangGraph persistent checkpointer (MemorySaver default,
+  AsyncPostgresSaver via env config) wired into ingestion DAG compilation
+- Cycle 3: IncrementalNodeSink flushes extracted nodes to Neo4j in batches,
+  eliminating all_nodes RAM accumulation OOM vector
+
+### Wave 2 — Performance & AI (HIGH)
+- Cycle 4: Async-aware AdaptiveTokenBucket with AIMD convergence for LLM API
+  rate limiting (halve on 429, increment on success)
+- Cycle 5: BatchedHopExecutor caps vector search candidates (default 50),
+  partitions into parallel hop queries, deduplicates cross-batch results
+- Cycle 6: ScopedEntityId (repository::namespace::name) + attribute similarity
+  scoring prevents cross-team entity collisions in Neo4j MERGE
+
+### Wave 3 — Security Hardening (HIGH)
+- Cycle 7: Recursive descent CypherParser producing AST nodes; inject_acl_all_scopes
+  walks every scope level including CALL {} subqueries and UNION branches
+- Cycle 8: ASTVisitor pattern + validate_call_subquery_acl defense-in-depth
+  rejects CALL MATCH without required ACL fields
+
+### Wave 4 — Architecture Evolution (MEDIUM)
+- Cycle 9: OntologyLoader parses YAML-defined node/edge types; dynamic Cypher
+  MERGE/UNWIND generation replaces hardcoded type tuples
+- Cycle 10: RequestContextFactory provides per-request isolated Neo4j sessions,
+  principals, and trace context (replaces global _ContainerHolder)
+- Cycle 11: PromptRegistry with versioned YAML templates, get_active with
+  env-configured version override for A/B testing
+- Cycle 12: IngestionStatusStore tracks DAG execution state per thread_id with
+  progress updates, failure recording, TTL cleanup, and resumable listing
+
+### New Tests: 117 total (108 Python, 9 Go)
+
+### New Modules
+- orchestrator/app/completion_tracker.py
+- orchestrator/app/checkpoint_store.py
+- orchestrator/app/node_sink.py
+- orchestrator/app/token_bucket.py
+- orchestrator/app/batched_hop.py
+- orchestrator/app/entity_resolver.py
+- orchestrator/app/cypher_ast.py
+- orchestrator/app/call_isolation.py
+- orchestrator/app/ontology.py
+- orchestrator/app/request_context.py
+- orchestrator/app/prompt_registry.py
+- orchestrator/app/ingestion_resume.py
+- workers/ingestion/internal/outbox/outbox.go
+
+---
+
 ## Completed: DLQ Deadlock Remediation (HIGH — Audit 3.1)
 
 Branch: `feat/dlq-deadlock-remediation`
