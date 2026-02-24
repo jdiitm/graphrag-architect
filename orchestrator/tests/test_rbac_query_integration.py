@@ -185,9 +185,6 @@ class TestCypherRetrieveAppliesACL:
             "orchestrator.app.query_engine._generate_cypher",
             new_callable=AsyncMock,
             return_value="MATCH (n:Service)-[:CALLS*]->(t) RETURN n, t",
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
         ):
             result = await cypher_retrieve(state)
 
@@ -294,9 +291,6 @@ class TestHybridRetrieveAppliesACL:
             "orchestrator.app.query_engine._generate_cypher",
             new_callable=AsyncMock,
             return_value="MATCH (n:Service)-[:CALLS*]->(t) RETURN n.name, count(t)",
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
         ):
             result = await hybrid_retrieve(state)
 

@@ -333,6 +333,15 @@ class GraphRepository:
     ) -> None:
         await tx.run(query, batch=batch)
 
+    @staticmethod
+    async def _run_unwind_with_tenant(
+        tx: AsyncManagedTransaction,
+        query: str,
+        batch: List[Dict[str, Any]],
+        tenant_id: str,
+    ) -> None:
+        await tx.run(query, batch=batch, tenant_id=tenant_id)
+
     async def prune_stale_edges(
         self,
         current_ingestion_id: str,
@@ -340,25 +349,30 @@ class GraphRepository:
     ) -> int:
         return await self.tombstone_stale_edges(current_ingestion_id)
 
+    _TOMBSTONE_NODE_LABELS = ("Service", "Database", "KafkaTopic", "K8sDeployment")
+
     async def tombstone_stale_edges(
         self,
         current_ingestion_id: str,
     ) -> int:
-        query = (
-            "MATCH ()-[r]->() "
-            "WHERE r.ingestion_id IS NOT NULL "
-            "AND r.ingestion_id <> $current_id "
-            "AND r.tombstoned_at IS NULL "
-            "SET r.tombstoned_at = $timestamp "
-            "RETURN count(r) AS tombstoned"
-        )
         timestamp = datetime.now(timezone.utc).isoformat()
+        total = 0
         async with self._session() as session:
-            result = await session.execute_write(
-                self._run_tombstone, query=query,
-                current_id=current_ingestion_id, timestamp=timestamp,
-            )
-            return result
+            for label in self._TOMBSTONE_NODE_LABELS:
+                query = (
+                    f"MATCH (n:{label})-[r]->() "
+                    "WHERE r.ingestion_id IS NOT NULL "
+                    "AND r.ingestion_id <> $current_id "
+                    "AND r.tombstoned_at IS NULL "
+                    "SET r.tombstoned_at = $timestamp "
+                    "RETURN count(r) AS tombstoned"
+                )
+                result = await session.execute_write(
+                    self._run_tombstone, query=query,
+                    current_id=current_ingestion_id, timestamp=timestamp,
+                )
+                total += result or 0
+        return total
 
     @staticmethod
     async def _run_tombstone(
@@ -443,17 +457,31 @@ class GraphRepository:
         label: str,
         id_field: str,
         embeddings: List[Dict[str, Any]],
+        tenant_id: Optional[str] = None,
     ) -> None:
         if not embeddings:
             return
         _validate_cypher_identifier(label, "label")
         _validate_cypher_identifier(id_field, "id_field")
-        cypher = (
-            f"UNWIND $batch AS item "
-            f"MATCH (n:{label} {{{id_field}: item.id}}) "
-            f"SET n.embedding = item.embedding"
-        )
-        async with self._session() as session:
-            await session.execute_write(
-                self._run_unwind, query=cypher, batch=embeddings,
+        if tenant_id:
+            cypher = (
+                f"UNWIND $batch AS item "
+                f"MATCH (n:{label} {{{id_field}: item.id, tenant_id: $tenant_id}}) "
+                f"SET n.embedding = item.embedding"
             )
+        else:
+            cypher = (
+                f"UNWIND $batch AS item "
+                f"MATCH (n:{label} {{{id_field}: item.id}}) "
+                f"SET n.embedding = item.embedding"
+            )
+        async with self._session() as session:
+            if tenant_id:
+                await session.execute_write(
+                    self._run_unwind_with_tenant,
+                    query=cypher, batch=embeddings, tenant_id=tenant_id,
+                )
+            else:
+                await session.execute_write(
+                    self._run_unwind, query=cypher, batch=embeddings,
+                )

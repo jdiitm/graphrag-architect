@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import defaultdict
-from typing import Any, Dict, List, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 
 class TopologyCommitter(Protocol):
     async def commit_topology(self, nodes: List[Any]) -> None: ...
+
+
+class MessageProducer(Protocol):
+    async def send(
+        self, topic: str, value: bytes, key: Optional[bytes] = None,
+    ) -> None: ...
 
 
 def _get_partition_key(entity: Any) -> str:
@@ -75,3 +82,42 @@ class IncrementalNodeSink:
             for partition_batch in partitions.values()
         ]
         await asyncio.gather(*tasks)
+
+
+class DurableNodeSink:
+    def __init__(
+        self,
+        committer: TopologyCommitter,
+        producer: MessageProducer,
+        topic: str = "entity-outbox",
+        batch_size: int = 500,
+    ) -> None:
+        self._inner = IncrementalNodeSink(committer, batch_size)
+        self._producer = producer
+        self._topic = topic
+
+    @property
+    def total_entities(self) -> int:
+        return self._inner.total_entities
+
+    @property
+    def flush_count(self) -> int:
+        return self._inner.flush_count
+
+    async def ingest(self, nodes: List[Any]) -> None:
+        payload = json.dumps(
+            [_serialize_entity(n) for n in nodes], default=str,
+        ).encode("utf-8")
+        await self._producer.send(self._topic, value=payload)
+        await self._inner.ingest(nodes)
+
+    async def flush(self) -> None:
+        await self._inner.flush()
+
+
+def _serialize_entity(entity: Any) -> Any:
+    if hasattr(entity, "model_dump"):
+        return entity.model_dump()
+    if hasattr(entity, "__dict__"):
+        return entity.__dict__
+    return str(entity)

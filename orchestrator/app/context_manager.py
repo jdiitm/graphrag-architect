@@ -39,3 +39,25 @@ def truncate_context(
         result.append(candidate)
         total_tokens += candidate_tokens
     return result
+
+
+def _truncate_value(value: Any, max_chars: int) -> str:
+    text = str(value)
+    if len(text) > max_chars:
+        return text[:max_chars] + "..."
+    return text
+
+
+def format_context_for_prompt(
+    context: List[Dict[str, Any]],
+    max_chars_per_value: int = 500,
+) -> str:
+    if not context:
+        return ""
+    lines: List[str] = []
+    for i, record in enumerate(context, 1):
+        lines.append(f"[{i}]")
+        for key, value in record.items():
+            formatted = _truncate_value(value, max_chars_per_value)
+            lines.append(f"  {key}: {formatted}")
+    return "\n".join(lines)

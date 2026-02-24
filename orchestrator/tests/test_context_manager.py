@@ -3,6 +3,7 @@ from __future__ import annotations
 from orchestrator.app.context_manager import (
     TokenBudget,
     estimate_tokens,
+    format_context_for_prompt,
     truncate_context,
 )
 
@@ -60,3 +61,41 @@ class TestTruncateContext:
         candidates = [{"id": i} for i in range(5)]
         result = truncate_context(candidates, budget)
         assert [c["id"] for c in result] == [0, 1, 2, 3, 4]
+
+
+class TestFormatContextForPrompt:
+
+    def test_returns_string(self) -> None:
+        context = [{"name": "auth-service", "type": "Service"}]
+        result = format_context_for_prompt(context)
+        assert isinstance(result, str)
+
+    def test_includes_field_labels(self) -> None:
+        context = [{"name": "auth-service", "language": "go"}]
+        result = format_context_for_prompt(context)
+        assert "name" in result.lower()
+        assert "auth-service" in result
+
+    def test_no_raw_dict_repr(self) -> None:
+        context = [{"name": "svc-a"}, {"name": "svc-b"}]
+        result = format_context_for_prompt(context)
+        assert "{'name'" not in result, (
+            "Context must be formatted as structured text, not raw dict repr"
+        )
+
+    def test_empty_context_returns_empty(self) -> None:
+        result = format_context_for_prompt([])
+        assert result == ""
+
+    def test_truncates_large_values(self) -> None:
+        context = [{"data": "x" * 5000}]
+        result = format_context_for_prompt(context, max_chars_per_value=200)
+        assert len(result) < 5000
+
+    def test_integrates_with_token_budget(self) -> None:
+        budget = TokenBudget(max_context_tokens=100, max_results=2)
+        context = [{"name": f"svc-{i}"} for i in range(10)]
+        truncated = truncate_context(context, budget)
+        result = format_context_for_prompt(truncated)
+        assert isinstance(result, str)
+        assert len(result) > 0

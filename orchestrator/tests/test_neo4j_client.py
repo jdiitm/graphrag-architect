@@ -314,6 +314,34 @@ class TestCypherIdentifierValidation:
             )
 
     @pytest.mark.asyncio
+    async def test_upsert_embeddings_scopes_by_tenant_id(self) -> None:
+        driver, _, tx = _mock_driver()
+        mock_session_obj = AsyncMock()
+
+        async def _exec_write(fn, **kw):
+            return await fn(tx, **kw)
+
+        mock_session_obj.execute_write = _exec_write
+        mock_session_obj.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_obj.__aexit__ = AsyncMock(return_value=False)
+        driver.session.return_value = mock_session_obj
+
+        repo = GraphRepository(driver)
+        await repo.upsert_embeddings(
+            label="Service",
+            id_field="id",
+            embeddings=[{"id": "svc-1", "embedding": [0.1, 0.2]}],
+            tenant_id="acme",
+        )
+
+        call_args = tx.run.call_args
+        cypher_used = call_args.args[0] if call_args.args else ""
+        assert "tenant_id" in cypher_used.lower(), (
+            "upsert_embeddings must scope MATCH by tenant_id, "
+            f"got query: {cypher_used}"
+        )
+
+    @pytest.mark.asyncio
     async def test_valid_identifiers_accepted(self) -> None:
         driver, session, tx = _mock_driver()
         mock_session_obj = AsyncMock()

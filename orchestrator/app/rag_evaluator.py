@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Set
+from typing import Any, Awaitable, Callable, Dict, List, Set
 
 from orchestrator.app.vector_store import _cosine_similarity
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -188,3 +192,54 @@ class RAGEvaluator:
 
     def is_low_relevance(self, score: RelevanceScore) -> bool:
         return score.score < self._threshold
+
+
+_JUDGE_PROMPT_TEMPLATE = (
+    "You are an expert evaluator for a Retrieval-Augmented Generation system.\n"
+    "Given a QUERY, an ANSWER, and SOURCE CONTEXT, evaluate:\n"
+    "1. faithfulness: Does the answer only contain claims supported by sources? (0.0-1.0)\n"
+    "2. groundedness: What fraction of entities in the answer appear in sources? (0.0-1.0)\n\n"
+    "QUERY: {query}\n\n"
+    "ANSWER: {answer}\n\n"
+    "SOURCES:\n{sources}\n\n"
+    "Respond ONLY with a JSON object: {{\"faithfulness\": <float>, \"groundedness\": <float>}}"
+)
+
+
+class LLMEvaluator:
+    def __init__(
+        self,
+        judge_fn: Callable[[str], Awaitable[str]],
+    ) -> None:
+        self._judge_fn = judge_fn
+
+    async def evaluate(
+        self,
+        query: str,
+        answer: str,
+        sources: List[Dict[str, Any]],
+    ) -> EvaluationResult:
+        sources_text = json.dumps(sources, indent=2, default=str)[:4000]
+        prompt = _JUDGE_PROMPT_TEMPLATE.format(
+            query=query, answer=answer, sources=sources_text,
+        )
+        try:
+            raw_response = await self._judge_fn(prompt)
+            scores = json.loads(raw_response)
+            faithfulness = float(scores.get("faithfulness", 0.5))
+            groundedness = float(scores.get("groundedness", 0.5))
+        except (json.JSONDecodeError, ValueError, TypeError, KeyError):
+            logger.warning("LLM judge returned unparseable response, using lexical fallback")
+            faithfulness_score, _ = _compute_faithfulness(answer, sources)
+            groundedness = _compute_groundedness(answer, sources)
+            faithfulness = faithfulness_score
+
+        faithfulness = max(0.0, min(1.0, faithfulness))
+        groundedness = max(0.0, min(1.0, groundedness))
+
+        return EvaluationResult(
+            context_relevance=0.0,
+            faithfulness=faithfulness,
+            groundedness=groundedness,
+            context_count=len(sources),
+        )

@@ -372,9 +372,6 @@ class TestMissingQuerySpans:
             "orchestrator.app.query_engine._generate_cypher",
             new_callable=AsyncMock,
             return_value="MATCH (n) RETURN n",
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
         ):
             mock_driver = MagicMock()
             mock_driver.close = AsyncMock()
@@ -413,9 +410,6 @@ class TestMissingQuerySpans:
             "orchestrator.app.query_engine._generate_cypher",
             new_callable=AsyncMock,
             return_value="MATCH (n) RETURN count(n)",
-        ), patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
         ):
             mock_driver = MagicMock()
             mock_driver.close = AsyncMock()

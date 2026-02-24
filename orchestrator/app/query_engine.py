@@ -14,10 +14,13 @@ from orchestrator.app.access_control import (
 )
 from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfig, RAGEvalConfig
 from orchestrator.app.cypher_sandbox import (
-    QueryTooExpensiveError,
     SandboxedQueryExecutor,
 )
-from orchestrator.app.context_manager import TokenBudget, truncate_context
+from orchestrator.app.context_manager import (
+    TokenBudget,
+    format_context_for_prompt,
+    truncate_context,
+)
 from orchestrator.app.prompt_sanitizer import sanitize_query_input
 from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.cypher_validator import CypherValidationError, validate_cypher_readonly
@@ -26,7 +29,11 @@ from orchestrator.app.query_templates import (
     dynamic_cypher_allowed,
     match_template,
 )
-from orchestrator.app.subgraph_cache import SubgraphCache, normalize_cypher
+from orchestrator.app.subgraph_cache import (
+    SubgraphCache,
+    default_cache_maxsize,
+    normalize_cypher,
+)
 from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
@@ -51,15 +58,13 @@ MAX_CYPHER_ITERATIONS = 3
 
 _SANDBOX = SandboxedQueryExecutor()
 _TEMPLATE_CATALOG = TemplateCatalog()
-_SUBGRAPH_CACHE = SubgraphCache(maxsize=256)
+_SUBGRAPH_CACHE = SubgraphCache(maxsize=default_cache_maxsize())
 
 
 def _sandbox_inject_limit(cypher: str) -> str:
     return _SANDBOX.inject_limit(cypher)
 
 
-async def _sandbox_explain_check(session: Any, cypher: str) -> None:
-    await _SANDBOX.explain_check(session, cypher)
 
 _VECTOR_SEARCH_CYPHER = (
     "CALL db.index.vector.queryNodes('service_embedding_index', $limit, $query_embedding) "
@@ -175,11 +180,12 @@ async def _llm_synthesize(
 ) -> str:
     llm = _build_llm()
     sanitized = sanitize_query_input(query)
+    formatted_context = format_context_for_prompt(context)
     prompt = (
         "You are a distributed systems expert. Answer the following question "
         "using ONLY the provided graph context. Be concise and precise.\n\n"
         f"Question: {sanitized}\n\n"
-        f"Graph context:\n{context}\n\n"
+        f"Graph context:\n{formatted_context}\n\n"
         "Answer:"
     )
     response = await llm.ainvoke(prompt)
@@ -334,15 +340,6 @@ async def _execute_sandboxed_read(
     sandboxed = _sandbox_inject_limit(cypher)
     frozen = tuple(acl_params.items())
     async with driver.session() as session:
-        try:
-            await _sandbox_explain_check(session, sandboxed)
-        except QueryTooExpensiveError:
-            _query_logger.warning(
-                "Cypher query too expensive, skipping: %s",
-                sandboxed[:120],
-            )
-            return None
-
         async def _tx(
             tx: AsyncManagedTransaction,
             _q: str = sandboxed,

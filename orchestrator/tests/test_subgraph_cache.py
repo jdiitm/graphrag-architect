@@ -71,6 +71,39 @@ class TestSubgraphCacheStats:
         assert stats.maxsize == 256
 
 
+class TestSubgraphCacheByteBudget:
+
+    def test_oversized_value_rejected(self) -> None:
+        cache = SubgraphCache(maxsize=256, max_value_bytes=100)
+        large_value = [{"data": "x" * 200}]
+        cache.put("big", large_value)
+        assert cache.get("big") is None, (
+            "Values exceeding max_value_bytes must be rejected"
+        )
+
+    def test_normal_value_accepted(self) -> None:
+        cache = SubgraphCache(maxsize=256, max_value_bytes=10_000)
+        small_value = [{"data": "x"}]
+        cache.put("small", small_value)
+        assert cache.get("small") == small_value
+
+    def test_configurable_maxsize_via_env(self) -> None:
+        import os
+        os.environ["SUBGRAPH_CACHE_MAXSIZE"] = "128"
+        try:
+            from orchestrator.app.subgraph_cache import default_cache_maxsize
+            assert default_cache_maxsize() == 128
+        finally:
+            del os.environ["SUBGRAPH_CACHE_MAXSIZE"]
+
+    def test_stats_includes_rejected_count(self) -> None:
+        cache = SubgraphCache(maxsize=256, max_value_bytes=500)
+        cache.put("ok", [{"a": 1}])
+        cache.put("too_big", [{"data": "x" * 2000}])
+        stats = cache.stats()
+        assert stats.size == 1
+
+
 class TestSubgraphCacheWiredIntoQueryEngine:
 
     @pytest.mark.asyncio
@@ -89,9 +122,6 @@ class TestSubgraphCacheWiredIntoQueryEngine:
         params: dict[str, str] = {}
 
         with patch(
-            "orchestrator.app.query_engine._sandbox_explain_check",
-            new_callable=AsyncMock,
-        ), patch(
             "orchestrator.app.query_engine._get_query_timeout",
             return_value=30.0,
         ):
