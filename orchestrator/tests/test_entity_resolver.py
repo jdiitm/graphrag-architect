@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import pytest
+
+from orchestrator.app.entity_resolver import (
+    EntityResolver,
+    ScopedEntityId,
+    compute_similarity,
+    resolve_entity_id,
+)
+
+
+class TestScopedEntityId:
+    def test_format(self) -> None:
+        scoped = ScopedEntityId(
+            repository="team-a/auth-service",
+            namespace="backend",
+            name="auth",
+        )
+        assert str(scoped) == "team-a/auth-service::backend::auth"
+
+    def test_from_string(self) -> None:
+        scoped = ScopedEntityId.from_string(
+            "team-a/auth-service::backend::auth"
+        )
+        assert scoped.repository == "team-a/auth-service"
+        assert scoped.namespace == "backend"
+        assert scoped.name == "auth"
+
+    def test_legacy_unscoped_id(self) -> None:
+        scoped = ScopedEntityId.from_string("auth")
+        assert scoped.repository == ""
+        assert scoped.namespace == ""
+        assert scoped.name == "auth"
+
+
+class TestResolveEntityId:
+    def test_different_repos_stay_separate(self) -> None:
+        id_a = resolve_entity_id(
+            name="auth", repository="team-a/repo", namespace="prod",
+        )
+        id_b = resolve_entity_id(
+            name="auth", repository="team-b/repo", namespace="prod",
+        )
+        assert id_a != id_b
+
+    def test_same_repo_same_name_merge(self) -> None:
+        id_a = resolve_entity_id(
+            name="auth", repository="team-a/repo", namespace="prod",
+        )
+        id_b = resolve_entity_id(
+            name="auth", repository="team-a/repo", namespace="prod",
+        )
+        assert id_a == id_b
+
+    def test_empty_repo_falls_back_to_name(self) -> None:
+        entity_id = resolve_entity_id(
+            name="standalone", repository="", namespace="",
+        )
+        assert "standalone" in entity_id
+
+
+class TestComputeSimilarity:
+    def test_identical_entities_score_one(self) -> None:
+        attrs_a = {"name": "auth", "language": "python", "framework": "fastapi"}
+        attrs_b = {"name": "auth", "language": "python", "framework": "fastapi"}
+        assert compute_similarity(attrs_a, attrs_b) == 1.0
+
+    def test_completely_different_score_low(self) -> None:
+        attrs_a = {"name": "auth", "language": "python"}
+        attrs_b = {"name": "billing", "language": "go"}
+        score = compute_similarity(attrs_a, attrs_b)
+        assert score < 0.5
+
+    def test_partial_overlap(self) -> None:
+        attrs_a = {"name": "auth", "language": "python", "framework": "fastapi"}
+        attrs_b = {"name": "auth", "language": "go", "framework": "gin"}
+        score = compute_similarity(attrs_a, attrs_b)
+        assert 0.0 < score < 1.0
+
+
+class TestEntityResolver:
+    def test_new_entity_added(self) -> None:
+        resolver = EntityResolver(threshold=0.85)
+        result = resolver.resolve(
+            name="auth",
+            repository="team-a/repo",
+            namespace="prod",
+            attributes={"language": "python"},
+        )
+        assert result.is_new is True
+        assert "team-a/repo" in result.resolved_id
+
+    def test_duplicate_entity_merged(self) -> None:
+        resolver = EntityResolver(threshold=0.85)
+        resolver.resolve(
+            name="auth",
+            repository="team-a/repo",
+            namespace="prod",
+            attributes={"language": "python", "framework": "fastapi"},
+        )
+        result = resolver.resolve(
+            name="auth",
+            repository="team-a/repo",
+            namespace="prod",
+            attributes={"language": "python", "framework": "fastapi"},
+        )
+        assert result.is_new is False
+
+    def test_same_name_different_repo_separate(self) -> None:
+        resolver = EntityResolver(threshold=0.85)
+        r1 = resolver.resolve(
+            name="auth",
+            repository="team-a/repo",
+            namespace="prod",
+            attributes={"language": "python"},
+        )
+        r2 = resolver.resolve(
+            name="auth",
+            repository="team-b/repo",
+            namespace="prod",
+            attributes={"language": "go"},
+        )
+        assert r1.resolved_id != r2.resolved_id
+        assert r2.is_new is True
+
+    def test_provenance_tracked(self) -> None:
+        resolver = EntityResolver(threshold=0.85)
+        resolver.resolve(
+            name="auth",
+            repository="team-a/repo",
+            namespace="prod",
+            attributes={"language": "python"},
+        )
+        result = resolver.resolve(
+            name="auth",
+            repository="team-a/repo",
+            namespace="prod",
+            attributes={"language": "python"},
+        )
+        assert result.resolved_from is not None
