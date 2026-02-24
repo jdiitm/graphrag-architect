@@ -333,6 +333,15 @@ class GraphRepository:
     ) -> None:
         await tx.run(query, batch=batch)
 
+    @staticmethod
+    async def _run_unwind_with_tenant(
+        tx: AsyncManagedTransaction,
+        query: str,
+        batch: List[Dict[str, Any]],
+        tenant_id: str,
+    ) -> None:
+        await tx.run(query, batch=batch, tenant_id=tenant_id)
+
     async def prune_stale_edges(
         self,
         current_ingestion_id: str,
@@ -448,17 +457,31 @@ class GraphRepository:
         label: str,
         id_field: str,
         embeddings: List[Dict[str, Any]],
+        tenant_id: Optional[str] = None,
     ) -> None:
         if not embeddings:
             return
         _validate_cypher_identifier(label, "label")
         _validate_cypher_identifier(id_field, "id_field")
-        cypher = (
-            f"UNWIND $batch AS item "
-            f"MATCH (n:{label} {{{id_field}: item.id}}) "
-            f"SET n.embedding = item.embedding"
-        )
-        async with self._session() as session:
-            await session.execute_write(
-                self._run_unwind, query=cypher, batch=embeddings,
+        if tenant_id:
+            cypher = (
+                f"UNWIND $batch AS item "
+                f"MATCH (n:{label} {{{id_field}: item.id, tenant_id: $tenant_id}}) "
+                f"SET n.embedding = item.embedding"
             )
+        else:
+            cypher = (
+                f"UNWIND $batch AS item "
+                f"MATCH (n:{label} {{{id_field}: item.id}}) "
+                f"SET n.embedding = item.embedding"
+            )
+        async with self._session() as session:
+            if tenant_id:
+                await session.execute_write(
+                    self._run_unwind_with_tenant,
+                    query=cypher, batch=embeddings, tenant_id=tenant_id,
+                )
+            else:
+                await session.execute_write(
+                    self._run_unwind, query=cypher, batch=embeddings,
+                )
