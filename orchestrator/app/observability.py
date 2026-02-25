@@ -154,3 +154,78 @@ QUERY_DURATION = meter.create_histogram(
     name="query.duration_ms",
     description="Query pipeline node duration in milliseconds",
 )
+
+QUERY_TOTAL = meter.create_counter(
+    name="query.total",
+    description="Total query requests",
+)
+
+QUERY_ERRORS = meter.create_counter(
+    name="query.errors",
+    description="Total query errors (5xx)",
+)
+
+INGESTION_TOTAL = meter.create_counter(
+    name="ingestion.total",
+    description="Total ingestion requests",
+)
+
+INGESTION_ERRORS = meter.create_counter(
+    name="ingestion.errors",
+    description="Total ingestion errors (5xx)",
+)
+
+
+class ErrorBudgetTracker:
+    def __init__(self, slo_target: float = 0.995) -> None:
+        self._slo_target = slo_target
+        self._total = 0
+        self._errors = 0
+
+    @property
+    def slo_target(self) -> float:
+        return self._slo_target
+
+    @property
+    def total_requests(self) -> int:
+        return self._total
+
+    @property
+    def error_count(self) -> int:
+        return self._errors
+
+    @property
+    def error_rate(self) -> float:
+        if self._total == 0:
+            return 0.0
+        return self._errors / self._total
+
+    @property
+    def budget_remaining(self) -> float:
+        allowed_error_rate = 1.0 - self._slo_target
+        return max(0.0, allowed_error_rate - self.error_rate)
+
+    @property
+    def budget_exhausted(self) -> bool:
+        return self.budget_remaining <= 0.0
+
+    def record_request(self, is_error: bool = False) -> None:
+        self._total += 1
+        if is_error:
+            self._errors += 1
+
+    def reset(self) -> None:
+        self._total = 0
+        self._errors = 0
+
+
+_QUERY_BUDGET = ErrorBudgetTracker(slo_target=0.995)
+_INGESTION_BUDGET = ErrorBudgetTracker(slo_target=0.99)
+
+
+def get_query_error_budget() -> ErrorBudgetTracker:
+    return _QUERY_BUDGET
+
+
+def get_ingestion_error_budget() -> ErrorBudgetTracker:
+    return _INGESTION_BUDGET
