@@ -25,6 +25,7 @@ from orchestrator.app.cypher_sandbox import (
     SandboxedQueryExecutor,
     TemplateHashRegistry,
 )
+from orchestrator.app.cypher_validator import CypherValidationError, estimate_query_cost
 from orchestrator.app.context_manager import (
     TokenBudget,
     format_context_for_prompt,
@@ -89,6 +90,17 @@ _CB_EMBEDDING = CircuitBreaker(
     CircuitBreakerConfig(failure_threshold=5, recovery_timeout=20.0),
     name="embedding",
 )
+
+
+_DEFAULT_MAX_QUERY_COST = 20
+
+
+def _get_max_query_cost() -> int:
+    raw = os.environ.get("MAX_QUERY_COST", str(_DEFAULT_MAX_QUERY_COST))
+    try:
+        return int(raw)
+    except ValueError:
+        return _DEFAULT_MAX_QUERY_COST
 
 
 def _sandbox_inject_limit(cypher: str) -> str:
@@ -411,6 +423,13 @@ async def _execute_sandboxed_read(
     cypher: str,
     acl_params: Dict[str, str],
 ) -> Optional[list]:
+    cost = estimate_query_cost(cypher)
+    max_cost = _get_max_query_cost()
+    if cost > max_cost:
+        raise CypherValidationError(
+            f"Query cost {cost} exceeds maximum allowed cost {max_cost}"
+        )
+
     cache_key = normalize_cypher(cypher) + "|" + str(sorted(acl_params.items()))
     cached = await _cache_get(cache_key)
     if cached is not None:
