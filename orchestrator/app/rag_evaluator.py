@@ -7,6 +7,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
+try:
+    import redis.asyncio as aioredis
+except ImportError:  # pragma: no cover
+    aioredis = None  # type: ignore[assignment]
+
 from orchestrator.app.vector_store import _cosine_similarity
 
 logger = logging.getLogger(__name__)
@@ -28,6 +33,7 @@ class EvaluationResult:
     ungrounded_claims: List[str] = field(default_factory=list)
     context_count: int = 0
     retrieval_path: str = "vector"
+    used_fallback: bool = False
 
     @property
     def score(self) -> float:
@@ -219,11 +225,14 @@ class LLMEvaluator:
         query: str,
         answer: str,
         sources: List[Dict[str, Any]],
+        query_embedding: Optional[List[float]] = None,
+        context_embeddings: Optional[List[List[float]]] = None,
     ) -> EvaluationResult:
         sources_text = json.dumps(sources, indent=2, default=str)[:4000]
         prompt = _JUDGE_PROMPT_TEMPLATE.format(
             query=query, answer=answer, sources=sources_text,
         )
+        used_fallback = False
         try:
             raw_response = await self._judge_fn(prompt)
             scores = json.loads(raw_response)
@@ -231,6 +240,7 @@ class LLMEvaluator:
             groundedness = float(scores.get("groundedness", 0.5))
         except (json.JSONDecodeError, ValueError, TypeError, KeyError):
             logger.warning("LLM judge returned unparseable response, using lexical fallback")
+            used_fallback = True
             faithfulness_score, _ = _compute_faithfulness(answer, sources)
             groundedness = _compute_groundedness(answer, sources)
             faithfulness = faithfulness_score
@@ -238,11 +248,16 @@ class LLMEvaluator:
         faithfulness = max(0.0, min(1.0, faithfulness))
         groundedness = max(0.0, min(1.0, groundedness))
 
+        context_relevance = 0.0
+        if query_embedding is not None and context_embeddings is not None:
+            context_relevance = evaluate_relevance(query_embedding, context_embeddings)
+
         return EvaluationResult(
-            context_relevance=0.0,
+            context_relevance=context_relevance,
             faithfulness=faithfulness,
             groundedness=groundedness,
             context_count=len(sources),
+            used_fallback=used_fallback,
         )
 
 
@@ -270,3 +285,60 @@ class EvaluationStore:
         for qid in expired:
             self._data.pop(qid, None)
             self._timestamps.pop(qid, None)
+
+
+class RedisEvaluationStore:
+    def __init__(
+        self,
+        redis_url: str,
+        ttl_seconds: int = 600,
+        key_prefix: str = "graphrag:evalstore:",
+        password: str = "",
+        db: int = 0,
+    ) -> None:
+        if aioredis is None:
+            raise ImportError("redis package is required for RedisEvaluationStore")
+        kwargs: dict[str, Any] = {"decode_responses": True, "db": db}
+        if password:
+            kwargs["password"] = password
+        self._redis = aioredis.from_url(redis_url, **kwargs)
+        self._ttl = ttl_seconds
+        self._prefix = key_prefix
+        self._local = EvaluationStore(ttl_seconds=float(ttl_seconds))
+
+    def _rkey(self, query_id: str) -> str:
+        return f"{self._prefix}{query_id}"
+
+    async def get(self, query_id: str) -> Optional[Dict[str, Any]]:
+        local_result = self._local.get(query_id)
+        if local_result is not None:
+            return local_result
+        try:
+            raw = await self._redis.get(self._rkey(query_id))
+            if raw is not None:
+                value = json.loads(raw)
+                self._local.put(query_id, value)
+                return value
+        except Exception:  # pylint: disable=broad-except
+            logger.debug("Redis eval-store get failed, falling back to local miss")
+        return None
+
+    async def put(self, query_id: str, result: Dict[str, Any]) -> None:
+        self._local.put(query_id, result)
+        try:
+            raw = json.dumps(result, default=str)
+            await self._redis.setex(self._rkey(query_id), self._ttl, raw)
+        except Exception:  # pylint: disable=broad-except
+            logger.debug("Redis eval-store put failed, local still updated")
+
+
+def create_evaluation_store() -> Any:
+    from orchestrator.app.config import RedisConfig
+    redis_cfg = RedisConfig.from_env()
+    if redis_cfg.url:
+        return RedisEvaluationStore(
+            redis_url=redis_cfg.url,
+            password=redis_cfg.password,
+            db=redis_cfg.db,
+        )
+    return EvaluationStore()
