@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import time
@@ -40,7 +41,7 @@ from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
-from orchestrator.app.rag_evaluator import RAGEvaluator
+from orchestrator.app.rag_evaluator import EvaluationStore, RAGEvaluator
 
 try:
     import openai as _openai_module
@@ -507,18 +508,30 @@ async def _do_synthesize(state: QueryState) -> dict:
     return {"answer": answer, "sources": truncated}
 
 
-async def evaluate_response(state: QueryState) -> dict:
+_EVAL_STORE = EvaluationStore()
+
+
+def get_eval_store() -> EvaluationStore:
+    return _EVAL_STORE
+
+
+async def _run_background_evaluation(
+    query_id: str,
+    state: dict,
+) -> None:
     tracer = get_tracer()
-    with tracer.start_as_current_span("query.evaluate"):
+    with tracer.start_as_current_span("query.evaluate_background"):
         start = time.monotonic()
         try:
             eval_config = RAGEvalConfig.from_env()
-            if not eval_config.enable_evaluation:
-                return {"evaluation_score": -1.0, "retrieval_quality": "skipped"}
-
             query_embedding = await _embed_query(state["query"])
             if query_embedding is None:
-                return {"evaluation_score": -1.0, "retrieval_quality": "no_embedding"}
+                _EVAL_STORE.put(query_id, {
+                    "evaluation_score": -1.0,
+                    "retrieval_quality": "no_embedding",
+                    "query_id": query_id,
+                })
+                return
 
             context_embeddings: List[List[float]] = []
             for source in state.get("sources", []):
@@ -547,16 +560,36 @@ async def evaluate_response(state: QueryState) -> dict:
                 result.retrieval_path,
                 result.context_count,
             )
-            return {"evaluation_score": result.score, "retrieval_quality": quality}
+            _EVAL_STORE.put(query_id, {
+                "evaluation_score": result.score,
+                "retrieval_quality": quality,
+                "query_id": query_id,
+            })
         except Exception:
             _query_logger.warning(
                 "RAG evaluation failed, continuing without score", exc_info=True,
             )
-            return {"evaluation_score": -1.0, "retrieval_quality": "error"}
+            _EVAL_STORE.put(query_id, {
+                "evaluation_score": -1.0,
+                "retrieval_quality": "error",
+                "query_id": query_id,
+            })
         finally:
             QUERY_DURATION.record(
                 (time.monotonic() - start) * 1000, {"node": "evaluate"}
             )
+
+
+async def evaluate_response(state: QueryState) -> dict:
+    eval_config = RAGEvalConfig.from_env()
+    if not eval_config.enable_evaluation:
+        return {"evaluation_score": -1.0, "retrieval_quality": "skipped"}
+
+    query_id = f"eval-{id(state)}-{time.monotonic_ns()}"
+    asyncio.create_task(
+        _run_background_evaluation(query_id, dict(state)),
+    )
+    return {"evaluation_score": -1.0, "retrieval_quality": "pending"}
 
 
 builder = StateGraph(QueryState)

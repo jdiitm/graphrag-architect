@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Set
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
 from orchestrator.app.vector_store import _cosine_similarity
 
@@ -243,3 +244,29 @@ class LLMEvaluator:
             groundedness=groundedness,
             context_count=len(sources),
         )
+
+
+class EvaluationStore:
+    def __init__(self, ttl_seconds: float = 600.0) -> None:
+        self._data: Dict[str, Dict[str, Any]] = {}
+        self._timestamps: Dict[str, float] = {}
+        self._ttl = ttl_seconds
+
+    def put(self, query_id: str, result: Dict[str, Any]) -> None:
+        self._evict_expired()
+        self._data[query_id] = result
+        self._timestamps[query_id] = time.monotonic()
+
+    def get(self, query_id: str) -> Optional[Dict[str, Any]]:
+        self._evict_expired()
+        return self._data.get(query_id)
+
+    def _evict_expired(self) -> None:
+        now = time.monotonic()
+        expired = [
+            qid for qid, ts in self._timestamps.items()
+            if (now - ts) > self._ttl
+        ]
+        for qid in expired:
+            self._data.pop(qid, None)
+            self._timestamps.pop(qid, None)
