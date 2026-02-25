@@ -153,6 +153,10 @@ class RedisSubgraphCache:
 
     async def invalidate_all(self) -> None:
         self._l1.invalidate_all()
+        try:
+            await self._redis.flushdb()
+        except Exception:
+            logger.debug("Redis flushdb failed during invalidate_all")
 
     def stats(self) -> CacheStats:
         return self._l1.stats()

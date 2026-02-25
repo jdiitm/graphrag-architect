@@ -62,7 +62,7 @@ func main() {
 		}
 	}()
 
-	processorMode := envOrDefault("PROCESSOR_MODE", "http")
+	processorMode := envOrDefault("PROCESSOR_MODE", "kafka")
 
 	var fp processor.DocumentProcessor
 	if processorMode == "kafka" {

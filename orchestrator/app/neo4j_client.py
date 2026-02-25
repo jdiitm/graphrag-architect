@@ -365,7 +365,7 @@ class GraphRepository:
         self,
         current_ingestion_id: str,
         max_age_hours: int = 24,
-    ) -> int:
+    ) -> tuple[int, list[str]]:
         return await self.tombstone_stale_edges(current_ingestion_id)
 
     _TOMBSTONE_NODE_LABELS = ("Service", "Database", "KafkaTopic", "K8sDeployment")
@@ -373,9 +373,10 @@ class GraphRepository:
     async def tombstone_stale_edges(
         self,
         current_ingestion_id: str,
-    ) -> int:
+    ) -> tuple[int, list[str]]:
         timestamp = datetime.now(timezone.utc).isoformat()
         total = 0
+        affected_node_ids: list[str] = []
         async with self._write_session() as session:
             for label in self._TOMBSTONE_NODE_LABELS:
                 query = (
@@ -384,29 +385,32 @@ class GraphRepository:
                     "AND r.ingestion_id <> $current_id "
                     "AND r.tombstoned_at IS NULL "
                     "SET r.tombstoned_at = $timestamp "
-                    "RETURN count(r) AS tombstoned"
+                    "RETURN count(r) AS tombstoned, "
+                    "collect(DISTINCT n.id) AS node_ids"
                 )
                 result = await session.execute_write(
-                    self._run_tombstone, query=query,
+                    self._run_tombstone_with_ids, query=query,
                     current_id=current_ingestion_id, timestamp=timestamp,
                 )
-                total += result or 0
-        return total
+                count, ids = result
+                total += count
+                affected_node_ids.extend(ids)
+        return total, affected_node_ids
 
     @staticmethod
-    async def _run_tombstone(
+    async def _run_tombstone_with_ids(
         tx: AsyncManagedTransaction,
         query: str,
         current_id: str,
         timestamp: str,
-    ) -> int:
+    ) -> tuple[int, list[str]]:
         result = await tx.run(
             query, current_id=current_id, timestamp=timestamp,
         )
         record = await result.single()
         if record is None:
-            return 0
-        return record["tombstoned"]
+            return 0, []
+        return record["tombstoned"], list(record.get("node_ids", []))
 
     async def reap_tombstoned_edges(
         self,

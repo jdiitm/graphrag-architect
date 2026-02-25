@@ -70,6 +70,7 @@ _TEMPLATE_CATALOG = TemplateCatalog()
 _TEMPLATE_REGISTRY = TemplateHashRegistry(_TEMPLATE_CATALOG)
 _SANDBOX = SandboxedQueryExecutor(registry=_TEMPLATE_REGISTRY)
 _SUBGRAPH_CACHE = SubgraphCache(maxsize=default_cache_maxsize())
+_SEMANTIC_CACHE = None
 
 _VS_CFG = VectorStoreConfig.from_env()
 _VECTOR_STORE = create_vector_store(

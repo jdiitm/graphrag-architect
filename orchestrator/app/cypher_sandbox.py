@@ -59,6 +59,28 @@ class TemplateHashRegistry:
         return _hash_cypher(cypher) in self._hashes
 
 
+def detect_unwind_amplification(cypher: str) -> bool:
+    tokens = tokenize_cypher(cypher)
+    keywords = [
+        t for t in tokens if t.token_type == TokenType.KEYWORD
+    ]
+    seen_with_limit = False
+    for i, token in enumerate(keywords):
+        upper = token.value.upper()
+        if upper == "WITH":
+            remaining = [k.value.upper() for k in keywords[i + 1:]]
+            if "LIMIT" in remaining:
+                limit_idx = remaining.index("LIMIT")
+                if "UNWIND" in remaining[limit_idx:]:
+                    return True
+            seen_with_limit = True
+        if upper == "LIMIT" and seen_with_limit:
+            remaining_after = [k.value.upper() for k in keywords[i + 1:]]
+            if "UNWIND" in remaining_after:
+                return True
+    return False
+
+
 class SandboxedQueryExecutor:
     def __init__(
         self,
