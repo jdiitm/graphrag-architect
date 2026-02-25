@@ -127,7 +127,8 @@ func main() {
 	if fallbackPath := os.Getenv("DLQ_FALLBACK_PATH"); fallbackPath != "" {
 		fileSink, err := dlq.NewFileSink(fallbackPath)
 		if err != nil {
-			log.Fatalf("create dlq file fallback: %v", err)
+			log.Printf("FATAL: create dlq file fallback: %v", err)
+			return
 		}
 		dlqOpts = append(dlqOpts, dlq.WithFallback(fileSink))
 		log.Printf("DLQ fallback: file=%s", fallbackPath)
