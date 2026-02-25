@@ -17,6 +17,7 @@ from orchestrator.app.access_control import (
     InvalidTokenError,
     SecurityPrincipal,
 )
+from orchestrator.app.circuit_breaker import CircuitOpenError
 from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.config import AuthConfig, KafkaConsumerConfig, RateLimitConfig
 from orchestrator.app.executor import shutdown_pool
@@ -213,6 +214,12 @@ async def ingest(
         response = JSONResponse(content=body, status_code=status_code)
         response.headers["Deprecation"] = "true"
         return response
+    except CircuitOpenError:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "service temporarily unavailable"},
+            headers={"Retry-After": "30"},
+        )
     finally:
         sem.release()
 

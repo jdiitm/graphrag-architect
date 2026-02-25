@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
@@ -134,8 +135,13 @@ func (f *ForwardingProcessor) Process(ctx context.Context, job domain.Job) error
 		}
 		resp.Body.Close()
 
-		if resp.StatusCode == http.StatusTooManyRequests {
-			lastErr = fmt.Errorf("orchestrator returned 429")
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+				if seconds, parseErr := strconv.Atoi(retryAfter); parseErr == nil && seconds > 0 {
+					backoff = time.Duration(seconds) * time.Second
+				}
+			}
+			lastErr = fmt.Errorf("orchestrator returned %d", resp.StatusCode)
 			continue
 		}
 
