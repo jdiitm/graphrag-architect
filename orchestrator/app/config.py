@@ -130,6 +130,7 @@ class VectorStoreConfig:
     backend: str = "memory"
     qdrant_url: str = ""
     qdrant_api_key: str = ""
+    pool_size: int = 4
 
     @classmethod
     def from_env(cls) -> VectorStoreConfig:
@@ -137,6 +138,7 @@ class VectorStoreConfig:
             backend=os.environ.get("VECTOR_STORE_BACKEND", "memory"),
             qdrant_url=os.environ.get("QDRANT_URL", ""),
             qdrant_api_key=os.environ.get("QDRANT_API_KEY", ""),
+            pool_size=int(os.environ.get("QDRANT_POOL_SIZE", "4")),
         )
 
 
