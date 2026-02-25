@@ -175,6 +175,11 @@ INGESTION_ERRORS = meter.create_counter(
     description="Total ingestion errors (5xx)",
 )
 
+EMBEDDING_FALLBACK_TOTAL = meter.create_counter(
+    name="embedding.fallback_total",
+    description="Total embedding fallbacks to fulltext search",
+)
+
 
 class ErrorBudgetTracker:
     def __init__(self, slo_target: float = 0.995) -> None:

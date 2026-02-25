@@ -6,6 +6,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
 from neo4j import AsyncDriver, AsyncManagedTransaction
@@ -46,7 +47,7 @@ from orchestrator.app.subgraph_cache import (
 from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.vector_store import SearchResult, create_vector_store
 from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
-from orchestrator.app.observability import QUERY_DURATION, get_tracer
+from orchestrator.app.observability import EMBEDDING_FALLBACK_TOTAL, QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
 from orchestrator.app.rag_evaluator import (
@@ -152,11 +153,13 @@ async def _embed_query(text: str) -> Optional[List[float]]:
         return await _CB_EMBEDDING.call(_raw_embed_query, text)
     except CircuitOpenError:
         _query_logger.warning("Embedding circuit open, falling back to fulltext")
+        EMBEDDING_FALLBACK_TOTAL.add(1, {"reason": "circuit_open"})
         return None
     except Exception:
         _query_logger.warning(
             "Embedding unavailable, falling back to fulltext", exc_info=True,
         )
+        EMBEDDING_FALLBACK_TOTAL.add(1, {"reason": "exception"})
     return None
 
 
@@ -256,14 +259,23 @@ async def _raw_llm_synthesize(
     llm = _build_llm()
     sanitized = sanitize_query_input(query)
     formatted_context = format_context_for_prompt(context)
-    prompt = (
-        "You are a distributed systems expert. Answer the following question "
-        "using ONLY the provided graph context. Be concise and precise.\n\n"
-        f"Question: {sanitized}\n\n"
-        f"Graph context:\n{formatted_context}\n\n"
-        "Answer:"
-    )
-    response = await llm.ainvoke(prompt)
+    messages = [
+        SystemMessage(
+            content=(
+                "You are a distributed systems expert. Answer the following "
+                "question using ONLY the provided graph context. "
+                "Be concise and precise."
+            ),
+        ),
+        HumanMessage(
+            content=(
+                f"Question: {sanitized}\n\n"
+                f"Graph context:\n{formatted_context}\n\n"
+                "Answer:"
+            ),
+        ),
+    ]
+    response = await llm.ainvoke(messages)
     return response.content.strip()
 
 

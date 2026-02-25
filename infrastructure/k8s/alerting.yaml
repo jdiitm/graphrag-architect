@@ -119,6 +119,21 @@ spec:
             summary: "p99 query latency exceeds NFR-2 SLA (3s)"
             description: "p99 query latency: {{ $value }}ms"
 
+    - name: graphrag.embedding
+      rules:
+        - alert: EmbeddingFallbackRateHigh
+          expr: rate(embedding_fallback_total[5m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+            channel: slack
+          annotations:
+            summary: "Embedding fallback active — vector search degraded to fulltext"
+            description: >
+              Embedding fallback rate is {{ $value | humanize }}/s.
+              The system is silently degrading to fulltext search.
+              Check embedding provider health (OpenAI API status, circuit breaker state).
+
     - name: graphrag.infrastructure
       rules:
         - alert: Neo4jDown
