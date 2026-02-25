@@ -33,6 +33,7 @@ class QueryResponse(BaseModel):
     retrieval_path: str
     evaluation_score: float = -1.0
     retrieval_quality: str = "skipped"
+    query_id: str = ""
 
 
 class QueryJobResponse(BaseModel):
@@ -58,6 +59,7 @@ class QueryState(TypedDict):
     authorization: str
     evaluation_score: float
     retrieval_quality: str
+    query_id: str
 
 
 class QueryJobStore:

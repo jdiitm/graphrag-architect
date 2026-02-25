@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import time
@@ -16,13 +17,15 @@ from orchestrator.app.access_control import (
 from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfig, RAGEvalConfig
 from orchestrator.app.cypher_sandbox import (
     SandboxedQueryExecutor,
+    TemplateHashRegistry,
 )
 from orchestrator.app.context_manager import (
     TokenBudget,
     format_context_for_prompt,
-    truncate_context,
+    truncate_context_topology,
 )
 from orchestrator.app.prompt_sanitizer import sanitize_query_input
+from orchestrator.app.graph_embeddings import rerank_with_structural
 from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.agentic_traversal import run_traversal
 from orchestrator.app.query_templates import (
@@ -40,7 +43,7 @@ from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
-from orchestrator.app.rag_evaluator import RAGEvaluator
+from orchestrator.app.rag_evaluator import EvaluationStore, RAGEvaluator
 
 try:
     import openai as _openai_module
@@ -58,8 +61,9 @@ _ROUTE_MAP = {
 
 MAX_CYPHER_ITERATIONS = 3
 
-_SANDBOX = SandboxedQueryExecutor()
 _TEMPLATE_CATALOG = TemplateCatalog()
+_TEMPLATE_REGISTRY = TemplateHashRegistry(_TEMPLATE_CATALOG)
+_SANDBOX = SandboxedQueryExecutor(registry=_TEMPLATE_REGISTRY)
 _SUBGRAPH_CACHE = SubgraphCache(maxsize=default_cache_maxsize())
 
 _VS_CFG = VectorStoreConfig.from_env()
@@ -365,6 +369,7 @@ async def _try_template_match(
     template = _TEMPLATE_CATALOG.get(tmatch.template_name)
     if template is None:
         return None
+    _SANDBOX.validate(template.cypher)
     acl_cypher, acl_params = _apply_acl(template.cypher, state)
     tenant_id = state.get("tenant_id", "")
     merged_params = {**tmatch.params, **acl_params, "tenant_id": tenant_id}
@@ -440,6 +445,7 @@ async def hybrid_retrieve(state: QueryState) -> dict:
                 if tmatch is not None:
                     template = _TEMPLATE_CATALOG.get(tmatch.template_name)
                     if template is not None:
+                        _SANDBOX.validate(template.cypher)
                         acl_cypher, acl_params = _apply_acl(
                             template.cypher, state,
                         )
@@ -484,6 +490,46 @@ async def synthesize_answer(state: QueryState) -> dict:
 
 _DEFAULT_RERANKER = BM25Reranker()
 _DEFAULT_TOKEN_BUDGET = TokenBudget()
+_STRUCTURAL_EMBEDDINGS: Dict[str, List[float]] = {}
+
+
+def set_structural_embeddings(embeddings: Dict[str, List[float]]) -> None:
+    _STRUCTURAL_EMBEDDINGS.clear()
+    _STRUCTURAL_EMBEDDINGS.update(embeddings)
+
+
+def _apply_structural_rerank(
+    candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not _STRUCTURAL_EMBEDDINGS or not candidates:
+        return candidates
+
+    search_results = [
+        SearchResult(
+            id=str(c.get("id", c.get("name", ""))),
+            score=float(c.get("score", 0.0)),
+            metadata=c,
+        )
+        for c in candidates
+    ]
+
+    available = [
+        _STRUCTURAL_EMBEDDINGS[r.id]
+        for r in search_results
+        if r.id in _STRUCTURAL_EMBEDDINGS
+    ]
+    if not available:
+        return candidates
+
+    dim = len(available[0])
+    query_structural = [
+        sum(v[i] for v in available) / len(available) for i in range(dim)
+    ]
+
+    reranked = rerank_with_structural(
+        search_results, _STRUCTURAL_EMBEDDINGS, query_structural,
+    )
+    return [r.metadata for r in reranked]
 
 
 async def _do_synthesize(state: QueryState) -> dict:
@@ -501,24 +547,37 @@ async def _do_synthesize(state: QueryState) -> dict:
 
     reranked = _DEFAULT_RERANKER.rerank(state["query"], context)
     ranked_context = [sc.data for sc in reranked]
-    truncated = truncate_context(ranked_context, _DEFAULT_TOKEN_BUDGET)
+    ranked_context = _apply_structural_rerank(ranked_context)
+    truncated = truncate_context_topology(ranked_context, _DEFAULT_TOKEN_BUDGET)
 
     answer = await _llm_synthesize(state["query"], truncated)
     return {"answer": answer, "sources": truncated}
 
 
-async def evaluate_response(state: QueryState) -> dict:
+_EVAL_STORE = EvaluationStore()
+
+
+def get_eval_store() -> EvaluationStore:
+    return _EVAL_STORE
+
+
+async def _run_background_evaluation(
+    query_id: str,
+    state: dict,
+) -> None:
     tracer = get_tracer()
-    with tracer.start_as_current_span("query.evaluate"):
+    with tracer.start_as_current_span("query.evaluate_background"):
         start = time.monotonic()
         try:
             eval_config = RAGEvalConfig.from_env()
-            if not eval_config.enable_evaluation:
-                return {"evaluation_score": -1.0, "retrieval_quality": "skipped"}
-
             query_embedding = await _embed_query(state["query"])
             if query_embedding is None:
-                return {"evaluation_score": -1.0, "retrieval_quality": "no_embedding"}
+                _EVAL_STORE.put(query_id, {
+                    "evaluation_score": -1.0,
+                    "retrieval_quality": "no_embedding",
+                    "query_id": query_id,
+                })
+                return
 
             context_embeddings: List[List[float]] = []
             for source in state.get("sources", []):
@@ -547,16 +606,45 @@ async def evaluate_response(state: QueryState) -> dict:
                 result.retrieval_path,
                 result.context_count,
             )
-            return {"evaluation_score": result.score, "retrieval_quality": quality}
+            _EVAL_STORE.put(query_id, {
+                "evaluation_score": result.score,
+                "retrieval_quality": quality,
+                "query_id": query_id,
+            })
         except Exception:
             _query_logger.warning(
                 "RAG evaluation failed, continuing without score", exc_info=True,
             )
-            return {"evaluation_score": -1.0, "retrieval_quality": "error"}
+            _EVAL_STORE.put(query_id, {
+                "evaluation_score": -1.0,
+                "retrieval_quality": "error",
+                "query_id": query_id,
+            })
         finally:
             QUERY_DURATION.record(
                 (time.monotonic() - start) * 1000, {"node": "evaluate"}
             )
+
+
+def _on_eval_task_done(task: asyncio.Task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _query_logger.error("Background evaluation failed: %s", exc, exc_info=exc)
+
+
+async def evaluate_response(state: QueryState) -> dict:
+    eval_config = RAGEvalConfig.from_env()
+    if not eval_config.enable_evaluation:
+        return {"evaluation_score": -1.0, "retrieval_quality": "skipped", "query_id": ""}
+
+    query_id = f"eval-{id(state)}-{time.monotonic_ns()}"
+    task = asyncio.create_task(
+        _run_background_evaluation(query_id, dict(state)),
+    )
+    task.add_done_callback(_on_eval_task_done)
+    return {"evaluation_score": -1.0, "retrieval_quality": "pending", "query_id": query_id}
 
 
 builder = StateGraph(QueryState)

@@ -1,12 +1,28 @@
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+import logging
+import time
+from typing import Any, List, Optional, Protocol, runtime_checkable
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from orchestrator.app.config import ExtractionConfig
 from orchestrator.app.extraction_models import ServiceExtractionResult
+
+_logger = logging.getLogger(__name__)
+
+
+class LLMError(Exception):
+    pass
+
+
+class ProviderUnavailableError(LLMError):
+    pass
+
+
+class ProviderTimeoutError(LLMError):
+    pass
 
 
 @runtime_checkable
@@ -59,12 +75,94 @@ class StubProvider:
         return self._ainvoke_structured_response
 
 
+class ProviderWithCircuitBreaker:
+    def __init__(
+        self,
+        inner: Any,
+        failure_threshold: int = 5,
+        reset_timeout: float = 60.0,
+    ) -> None:
+        self._inner = inner
+        self._failure_threshold = failure_threshold
+        self._reset_timeout = reset_timeout
+        self._failure_count = 0
+        self._last_failure_time: float = 0.0
+        self._open = False
+
+    def _check_state(self) -> None:
+        if self._open:
+            elapsed = time.monotonic() - self._last_failure_time
+            if elapsed >= self._reset_timeout:
+                self._open = False
+                self._failure_count = 0
+            else:
+                raise ProviderUnavailableError(
+                    f"circuit open; retry after {self._reset_timeout - elapsed:.0f}s"
+                )
+
+    def _record_failure(self, exc: Exception) -> None:
+        self._failure_count += 1
+        self._last_failure_time = time.monotonic()
+        if self._failure_count >= self._failure_threshold:
+            self._open = True
+
+    def _record_success(self) -> None:
+        self._failure_count = 0
+        self._open = False
+
+    async def ainvoke(self, prompt: str) -> str:
+        self._check_state()
+        try:
+            result = await self._inner.ainvoke(prompt)
+            self._record_success()
+            return result
+        except Exception as exc:
+            self._record_failure(exc)
+            raise
+
+    async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
+        self._check_state()
+        try:
+            result = await self._inner.ainvoke_structured(prompt, messages)
+            self._record_success()
+            return result
+        except Exception as exc:
+            self._record_failure(exc)
+            raise
+
+
+class FallbackChain:
+    def __init__(self, providers: List[Any]) -> None:
+        self._providers = providers
+
+    async def ainvoke(self, prompt: str) -> str:
+        last_error: Optional[Exception] = None
+        for provider in self._providers:
+            try:
+                return await provider.ainvoke(prompt)
+            except Exception as exc:
+                _logger.warning("Provider %s failed: %s", type(provider).__name__, exc)
+                last_error = exc
+        raise LLMError(f"All {len(self._providers)} providers failed") from last_error
+
+    async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
+        last_error: Optional[Exception] = None
+        for provider in self._providers:
+            try:
+                return await provider.ainvoke_structured(prompt, messages)
+            except Exception as exc:
+                _logger.warning("Provider %s failed: %s", type(provider).__name__, exc)
+                last_error = exc
+        raise LLMError(f"All {len(self._providers)} providers failed") from last_error
+
+
 def create_provider(
     provider_name: str, config: ExtractionConfig
 ) -> LLMProvider:
     name = (provider_name or "gemini").strip().lower()
     if name == "gemini":
-        return GeminiProvider(config)
+        inner = GeminiProvider(config)
+        return ProviderWithCircuitBreaker(inner)
     if name == "stub":
         return StubProvider()
     raise ValueError(f"Unknown LLM provider: {provider_name!r}")

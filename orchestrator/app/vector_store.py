@@ -119,7 +119,97 @@ class InMemoryVectorStore:
         ]
 
 
+class Neo4jVectorStore:
+    is_read_replica: bool = False
+
+    def __init__(self, driver: Any = None) -> None:
+        self._driver = driver
+
+    def _get_driver(self) -> Any:
+        if self._driver is None:
+            from orchestrator.app.neo4j_pool import get_driver
+            self._driver = get_driver()
+        return self._driver
+
+    async def upsert(
+        self, collection: str, vectors: List[VectorRecord],
+    ) -> int:
+        async def _tx(tx: Any) -> int:
+            for record in vectors:
+                await tx.run(
+                    "MERGE (n {id: $id}) "
+                    "SET n.embedding = $vector, n += $metadata",
+                    id=record.id,
+                    vector=record.vector,
+                    metadata=record.metadata,
+                )
+            return len(vectors)
+
+        async with self._get_driver().session() as session:
+            return await session.execute_write(_tx)
+
+    async def search(
+        self,
+        collection: str,
+        query_vector: List[float],
+        limit: int = 10,
+    ) -> List[SearchResult]:
+        async def _tx(tx: Any) -> list:
+            result = await tx.run(
+                "CALL db.index.vector.queryNodes($index, $k, $vector) "
+                "YIELD node, score "
+                "RETURN node.id AS id, score, node {.*} AS metadata "
+                "LIMIT $limit",
+                index=collection,
+                k=limit,
+                vector=query_vector,
+                limit=limit,
+            )
+            return await result.data()
+
+        async with self._get_driver().session() as session:
+            records = await session.execute_read(_tx)
+
+        return [
+            SearchResult(
+                id=str(r["id"]),
+                score=r["score"],
+                metadata={k: v for k, v in r.get("metadata", {}).items() if k != "embedding"},
+            )
+            for r in records
+        ]
+
+    async def delete(self, collection: str, ids: List[str]) -> int:
+        async def _tx(tx: Any) -> int:
+            result = await tx.run(
+                "MATCH (n) WHERE n.id IN $ids "
+                "REMOVE n.embedding "
+                "RETURN count(n) AS removed",
+                ids=ids,
+            )
+            data = await result.data()
+            return data[0]["removed"] if data else 0
+
+        async with self._get_driver().session() as session:
+            return await session.execute_write(_tx)
+
+    async def search_with_tenant(
+        self,
+        collection: str,
+        query_vector: List[float],
+        tenant_id: str,
+        limit: int = 10,
+    ) -> List[SearchResult]:
+        results = await self.search(collection, query_vector, limit=limit * 2)
+        return [
+            r for r in results
+            if not tenant_id or r.metadata.get("tenant_id") == tenant_id
+        ][:limit]
+
+
 class QdrantVectorStore:
+    is_read_replica: bool = True
+
     def __init__(
         self,
         url: str = "http://localhost:6333",
@@ -227,7 +317,10 @@ def create_vector_store(
     backend: str = "memory",
     url: str = "",
     api_key: str = "",
+    driver: Any = None,
 ) -> Any:
+    if backend == "neo4j":
+        return Neo4jVectorStore(driver=driver)
     if backend == "qdrant":
         return QdrantVectorStore(url=url, api_key=api_key)
     return InMemoryVectorStore()

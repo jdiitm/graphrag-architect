@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -155,3 +155,61 @@ class Node2VecEmbedder:
                     node, walks, self._config.embedding_dim,
                 )
         return result
+
+
+def _cosine_sim(a: List[float], b: List[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    from orchestrator.app.vector_store import _cosine_similarity
+    try:
+        return _cosine_similarity(a, b)
+    except ValueError:
+        return 0.0
+
+
+def hybrid_score(
+    text_score: float,
+    structural_score: float,
+    text_weight: float = 0.7,
+    structural_weight: float = 0.3,
+) -> float:
+    return text_weight * text_score + structural_weight * structural_score
+
+
+@dataclass(frozen=True)
+class _ScoredResult:
+    id: str
+    score: float
+    metadata: Dict[str, Any]
+
+
+def rerank_with_structural(
+    text_results: List[Any],
+    structural_embeddings: Dict[str, List[float]],
+    query_structural: List[float],
+    text_weight: float = 0.7,
+    structural_weight: float = 0.3,
+) -> List[Any]:
+    if not text_results:
+        return []
+
+    scored = []
+    for r in text_results:
+        struct_emb = structural_embeddings.get(r.id)
+        struct_sim = 0.0
+        if struct_emb is not None and query_structural:
+            struct_sim = max(0.0, _cosine_sim(struct_emb, query_structural))
+        combined = hybrid_score(
+            r.score, struct_sim,
+            text_weight=text_weight,
+            structural_weight=structural_weight,
+        )
+        scored.append(_ScoredResult(id=r.id, score=combined, metadata=r.metadata))
+
+    scored.sort(key=lambda s: s.score, reverse=True)
+
+    from orchestrator.app.vector_store import SearchResult
+    return [
+        SearchResult(id=s.id, score=s.score, metadata=s.metadata)
+        for s in scored
+    ]

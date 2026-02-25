@@ -27,7 +27,7 @@ from orchestrator.app.kafka_consumer import AsyncKafkaConsumer
 from orchestrator.app.checkpoint_store import close_checkpointer, init_checkpointer
 from orchestrator.app.neo4j_pool import close_driver, init_driver
 from orchestrator.app.observability import configure_metrics, configure_telemetry
-from orchestrator.app.query_engine import query_graph
+from orchestrator.app.query_engine import get_eval_store, query_graph
 from orchestrator.app.query_models import (
     QueryJobResponse,
     QueryJobStore,
@@ -311,6 +311,7 @@ def _build_query_state(
         "authorization": authorization,
         "evaluation_score": -1.0,
         "retrieval_quality": "skipped",
+        "query_id": "",
         "tenant_id": tenant_ctx.tenant_id,
     }
 
@@ -323,6 +324,7 @@ def _result_to_response(result: Dict[str, Any]) -> QueryResponse:
         retrieval_path=result.get("retrieval_path", "vector"),
         evaluation_score=result.get("evaluation_score", -1.0),
         retrieval_quality=result.get("retrieval_quality", "skipped"),
+        query_id=result.get("query_id", ""),
     )
 
 
@@ -376,3 +378,14 @@ async def get_query_job(job_id: str) -> JSONResponse:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return JSONResponse(content=job.model_dump(), status_code=200)
+
+
+_EVAL_STORE = get_eval_store()
+
+
+@app.get("/query/{query_id}/evaluation")
+async def get_evaluation(query_id: str) -> JSONResponse:
+    result = _EVAL_STORE.get(query_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Evaluation not ready or not found")
+    return JSONResponse(content=result, status_code=200)
