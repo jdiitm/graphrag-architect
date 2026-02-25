@@ -485,14 +485,16 @@ async def _try_template_match(
 
 async def _check_semantic_cache(
     query: str, tenant_id: str,
-) -> Tuple[Optional[dict], Optional[List[float]]]:
+) -> Tuple[Optional[dict], Optional[List[float]], bool]:
     if _SEMANTIC_CACHE is None:
-        return None, None
+        return None, None, False
     query_embedding = await _embed_query(query)
     if query_embedding is None:
-        return None, None
-    result = _SEMANTIC_CACHE.lookup(query_embedding, tenant_id=tenant_id)
-    return result, query_embedding
+        return None, None, False
+    result, is_owner = await _SEMANTIC_CACHE.lookup_or_wait(
+        query_embedding, tenant_id=tenant_id,
+    )
+    return result, query_embedding, is_owner
 
 
 def _store_in_semantic_cache(
@@ -511,6 +513,7 @@ def _store_in_semantic_cache(
         tenant_id=tenant_id,
         complexity=complexity,
     )
+    _SEMANTIC_CACHE.notify_complete(query_embedding)
 
 
 async def cypher_retrieve(state: QueryState) -> dict:
@@ -519,52 +522,63 @@ async def cypher_retrieve(state: QueryState) -> dict:
         start = time.monotonic()
         try:
             tenant_id = state.get("tenant_id", "")
-            cached, query_embedding = await _check_semantic_cache(
+            cached, query_embedding, is_owner = await _check_semantic_cache(
                 state["query"], tenant_id,
             )
             if cached is not None:
                 _query_logger.debug("Semantic cache hit for cypher_retrieve")
                 return cached
 
-            async with _neo4j_session() as driver:
-                template_result = await _try_template_match(state, driver)
-                if template_result is not None:
-                    _store_in_semantic_cache(
-                        state["query"], query_embedding,
-                        template_result, tenant_id,
-                    )
-                    return template_result
+            try:
+                async with _neo4j_session() as driver:
+                    template_result = await _try_template_match(state, driver)
+                    if template_result is not None:
+                        _store_in_semantic_cache(
+                            state["query"], query_embedding,
+                            template_result, tenant_id,
+                        )
+                        return template_result
 
-                candidates = await _fetch_candidates(driver, state)
-                if not candidates:
-                    return {
-                        "cypher_query": "",
-                        "cypher_results": [],
+                    candidates = await _fetch_candidates(driver, state)
+                    if not candidates:
+                        if is_owner and query_embedding is not None:
+                            _SEMANTIC_CACHE.notify_complete(
+                                query_embedding, failed=True,
+                            )
+                        return {
+                            "cypher_query": "",
+                            "cypher_results": [],
+                            "iteration_count": 0,
+                        }
+
+                    start_node_id = _extract_start_node(candidates)
+                    acl_params = _build_traversal_acl_params(state)
+
+                    context = await run_traversal(
+                        driver=driver,
+                        start_node_id=start_node_id,
+                        tenant_id=tenant_id,
+                        acl_params=acl_params,
+                        timeout=_get_query_timeout(),
+                    )
+
+                    result = {
+                        "cypher_query": "agentic_traversal",
+                        "cypher_results": context,
                         "iteration_count": 0,
                     }
-
-                start_node_id = _extract_start_node(candidates)
-                acl_params = _build_traversal_acl_params(state)
-
-                context = await run_traversal(
-                    driver=driver,
-                    start_node_id=start_node_id,
-                    tenant_id=tenant_id,
-                    acl_params=acl_params,
-                    timeout=_get_query_timeout(),
-                )
-
-                result = {
-                    "cypher_query": "agentic_traversal",
-                    "cypher_results": context,
-                    "iteration_count": 0,
-                }
-                _store_in_semantic_cache(
-                    state["query"], query_embedding,
-                    result, tenant_id,
-                    complexity=str(state.get("complexity", "")),
-                )
-                return result
+                    _store_in_semantic_cache(
+                        state["query"], query_embedding,
+                        result, tenant_id,
+                        complexity=str(state.get("complexity", "")),
+                    )
+                    return result
+            except Exception:
+                if is_owner and query_embedding is not None:
+                    _SEMANTIC_CACHE.notify_complete(
+                        query_embedding, failed=True,
+                    )
+                raise
         finally:
             QUERY_DURATION.record(
                 (time.monotonic() - start) * 1000, {"node": "cypher_retrieve"}

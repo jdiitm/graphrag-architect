@@ -57,7 +57,7 @@ class QueryState(TypedDict):
     answer: str
     sources: List[Dict[str, Any]]
     authorization: str
-    evaluation_score: float
+    evaluation_score: Optional[float]
     retrieval_quality: str
     query_id: str
 

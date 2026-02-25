@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field, field_validator
 
 
 _SAFE_ENTITY_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}$")
+_CYPHER_INJECTION_CHARS = re.compile(r"['\"{};\\`\x00]")
+_MAX_EDGE_REF_LENGTH = 512
 
 
 def validate_entity_identifier(value: str) -> str:
@@ -14,6 +16,20 @@ def validate_entity_identifier(value: str) -> str:
         raise ValueError(
             f"Entity identifier {value!r} contains disallowed characters "
             f"or exceeds 253 chars. Must match: [a-zA-Z0-9][a-zA-Z0-9._-]{{0,252}}"
+        )
+    return value
+
+
+def validate_edge_reference(value: str) -> str:
+    if not value or len(value) > _MAX_EDGE_REF_LENGTH:
+        raise ValueError(
+            f"Edge reference {value!r} must be non-empty and "
+            f"at most {_MAX_EDGE_REF_LENGTH} characters"
+        )
+    if _CYPHER_INJECTION_CHARS.search(value):
+        raise ValueError(
+            f"Edge reference {value!r} contains disallowed characters "
+            f"(quotes, braces, semicolons, backslashes, backticks, or null bytes)"
         )
     return value
 
@@ -93,12 +109,24 @@ class CallsEdge(BaseModel):
     ingestion_id: str = ""
     last_seen_at: str = ""
 
+    @field_validator("source_service_id", "target_service_id")
+    @classmethod
+    def _validate_edge_ref(cls, v: str) -> str:
+        return validate_edge_reference(v)
+
+
 class ProducesEdge(BaseModel):
     service_id: str
     topic_name: str
     event_schema: str
     ingestion_id: str = ""
     last_seen_at: str = ""
+
+    @field_validator("service_id", "topic_name")
+    @classmethod
+    def _validate_edge_ref(cls, v: str) -> str:
+        return validate_edge_reference(v)
+
 
 class ConsumesEdge(BaseModel):
     service_id: str
@@ -107,11 +135,22 @@ class ConsumesEdge(BaseModel):
     ingestion_id: str = ""
     last_seen_at: str = ""
 
+    @field_validator("service_id", "topic_name", "consumer_group")
+    @classmethod
+    def _validate_edge_ref(cls, v: str) -> str:
+        return validate_edge_reference(v)
+
+
 class DeployedInEdge(BaseModel):
     service_id: str
     deployment_id: str
     ingestion_id: str = ""
     last_seen_at: str = ""
+
+    @field_validator("service_id", "deployment_id")
+    @classmethod
+    def _validate_edge_ref(cls, v: str) -> str:
+        return validate_edge_reference(v)
 
 class ServiceExtractionResult(BaseModel):
     services: List[ServiceNode]
