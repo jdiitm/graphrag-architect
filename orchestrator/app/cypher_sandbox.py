@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+class CypherWhitelistError(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -17,9 +22,38 @@ class CypherSandboxConfig:
 _LIMIT_PATTERN = re.compile(r"\bLIMIT\s+(\d+)", re.IGNORECASE)
 
 
+def _normalize_cypher(cypher: str) -> str:
+    return " ".join(cypher.split())
+
+
+def _hash_cypher(cypher: str) -> str:
+    normalized = _normalize_cypher(cypher)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+class TemplateHashRegistry:
+    def __init__(self, catalog: Any) -> None:
+        hashes: set[str] = set()
+        for template in catalog.all_templates().values():
+            hashes.add(_hash_cypher(template.cypher))
+        self._hashes: FrozenSet[str] = frozenset(hashes)
+
+    @property
+    def registered_hashes(self) -> FrozenSet[str]:
+        return self._hashes
+
+    def is_allowed(self, cypher: str) -> bool:
+        return _hash_cypher(cypher) in self._hashes
+
+
 class SandboxedQueryExecutor:
-    def __init__(self, config: Optional[CypherSandboxConfig] = None) -> None:
+    def __init__(
+        self,
+        config: Optional[CypherSandboxConfig] = None,
+        registry: Optional[TemplateHashRegistry] = None,
+    ) -> None:
         self._config = config or CypherSandboxConfig()
+        self._registry = registry
 
     @property
     def config(self) -> CypherSandboxConfig:
@@ -42,6 +76,11 @@ class SandboxedQueryExecutor:
         cypher: str,
         params: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
+        if self._registry is not None and not self._registry.is_allowed(cypher):
+            raise CypherWhitelistError(
+                f"Cypher query not in registered template whitelist: "
+                f"{_hash_cypher(cypher)[:16]}..."
+            )
         sandboxed = self.inject_limit(cypher)
 
         async def _tx(tx: Any) -> List[Dict[str, Any]]:
