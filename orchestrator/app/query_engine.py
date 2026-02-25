@@ -307,12 +307,22 @@ async def _fetch_candidates(
         return _search_results_to_dicts(results)
 
     base_cypher = _FULLTEXT_FALLBACK_CYPHER
+    if tenant_id:
+        base_cypher = (
+            "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
+            "YIELD node, score "
+            "WHERE node.tenant_id = $tenant_id "
+            "RETURN node {.*, score: score} AS result "
+            "ORDER BY score DESC LIMIT $limit"
+        )
     vec_cypher, vec_acl = _apply_acl(base_cypher, state, alias="node")
 
     async def _vector_tx(tx: AsyncManagedTransaction) -> list:
         params: Dict[str, Any] = {
             **vec_acl, "limit": limit, "query": state["query"],
         }
+        if tenant_id:
+            params["tenant_id"] = tenant_id
         result = await tx.run(vec_cypher, **params)
         return await result.data()
 
