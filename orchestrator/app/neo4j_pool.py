@@ -7,8 +7,8 @@ from neo4j import AsyncDriver, AsyncGraphDatabase
 from orchestrator.app.config import Neo4jConfig
 from orchestrator.app.tenant_isolation import (
     IsolationMode,
-    TenantAwareDriverPool,
     TenantRegistry,
+    TenantRouter,
 )
 
 _state: dict[str, Optional[AsyncDriver | float | str]] = {
@@ -17,9 +17,9 @@ _state: dict[str, Optional[AsyncDriver | float | str]] = {
     "database": None,
 }
 
-_TENANT_STATE: dict[str, Optional[TenantRegistry | TenantAwareDriverPool]] = {
+_TENANT_STATE: dict[str, Optional[TenantRegistry | TenantRouter]] = {
     "registry": None,
-    "pool": None,
+    "router": None,
 }
 
 
@@ -39,9 +39,6 @@ async def close_driver() -> None:
     if driver is not None:
         await driver.close()
         _state["driver"] = None
-    pool = _TENANT_STATE.get("pool")
-    if pool is not None and isinstance(pool, TenantAwareDriverPool):
-        await pool.close_all()
 
 
 def get_query_timeout() -> float:
@@ -82,15 +79,15 @@ def set_tenant_registry(registry: TenantRegistry) -> None:
     _TENANT_STATE["registry"] = registry
 
 
-def get_tenant_pool() -> Optional[TenantAwareDriverPool]:
-    pool = _TENANT_STATE.get("pool")
-    if pool is not None and isinstance(pool, TenantAwareDriverPool):
-        return pool
+def get_tenant_router() -> Optional[TenantRouter]:
+    router = _TENANT_STATE.get("router")
+    if router is not None and isinstance(router, TenantRouter):
+        return router
     return None
 
 
-def set_tenant_pool(pool: TenantAwareDriverPool) -> None:
-    _TENANT_STATE["pool"] = pool
+def set_tenant_router(router: TenantRouter) -> None:
+    _TENANT_STATE["router"] = router
 
 
 def resolve_database_for_tenant(
@@ -109,15 +106,10 @@ def resolve_database_for_tenant(
 
 
 def resolve_driver_for_tenant(
-    pool: Optional[TenantAwareDriverPool],
     registry: Optional[TenantRegistry],
     tenant_id: str,
 ) -> Tuple[Any, str]:
     if not tenant_id:
         return get_driver(), get_database()
     database = resolve_database_for_tenant(registry, tenant_id)
-    if pool is not None:
-        driver = pool.get_driver(tenant_id)
-    else:
-        driver = get_driver()
-    return driver, database
+    return get_driver(), database
