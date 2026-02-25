@@ -448,13 +448,14 @@ async def _try_template_match(
 
 async def _check_semantic_cache(
     query: str, tenant_id: str,
-) -> Optional[dict]:
+) -> Tuple[Optional[dict], Optional[List[float]]]:
     if _SEMANTIC_CACHE is None:
-        return None
+        return None, None
     query_embedding = await _embed_query(query)
     if query_embedding is None:
-        return None
-    return _SEMANTIC_CACHE.lookup(query_embedding, tenant_id=tenant_id)
+        return None, None
+    result = _SEMANTIC_CACHE.lookup(query_embedding, tenant_id=tenant_id)
+    return result, query_embedding
 
 
 def _store_in_semantic_cache(
@@ -481,7 +482,9 @@ async def cypher_retrieve(state: QueryState) -> dict:
         start = time.monotonic()
         try:
             tenant_id = state.get("tenant_id", "")
-            cached = await _check_semantic_cache(state["query"], tenant_id)
+            cached, query_embedding = await _check_semantic_cache(
+                state["query"], tenant_id,
+            )
             if cached is not None:
                 _query_logger.debug("Semantic cache hit for cypher_retrieve")
                 return cached
@@ -489,7 +492,6 @@ async def cypher_retrieve(state: QueryState) -> dict:
             async with _neo4j_session() as driver:
                 template_result = await _try_template_match(state, driver)
                 if template_result is not None:
-                    query_embedding = await _embed_query(state["query"])
                     _store_in_semantic_cache(
                         state["query"], query_embedding,
                         template_result, tenant_id,
@@ -520,7 +522,6 @@ async def cypher_retrieve(state: QueryState) -> dict:
                     "cypher_results": context,
                     "iteration_count": 0,
                 }
-                query_embedding = await _embed_query(state["query"])
                 _store_in_semantic_cache(
                     state["query"], query_embedding,
                     result, tenant_id,

@@ -90,17 +90,74 @@ class TestSemanticCacheQueryEngineIntegration:
         ) as mock_neo4j:
             result = await cypher_retrieve(state)
 
-        if result.get("cypher_results") == [{"cached": True}]:
-            mock_neo4j.assert_not_called()
+        assert result.get("cypher_results") == [{"cached": True}], (
+            "Expected cached result from semantic cache but got: "
+            f"{result.get('cypher_results')!r}"
+        )
+        mock_neo4j.assert_not_called()
 
         _SEMANTIC_CACHE.invalidate_all()
 
     @pytest.mark.asyncio
     async def test_semantic_cache_stores_result_on_miss(self) -> None:
-        from orchestrator.app.query_engine import _SEMANTIC_CACHE
+        from orchestrator.app.query_engine import (
+            _SEMANTIC_CACHE,
+            cypher_retrieve,
+        )
 
         _SEMANTIC_CACHE.invalidate_all()
-        initial_size = _SEMANTIC_CACHE.stats().size
-        assert initial_size == 0, (
+        assert _SEMANTIC_CACHE.stats().size == 0, (
             "Semantic cache should start empty after invalidation"
         )
+
+        embedding = [0.9] * 128
+        mock_driver = AsyncMock()
+        mock_session = AsyncMock()
+        mock_driver.session.return_value.__aenter__ = AsyncMock(
+            return_value=mock_session,
+        )
+        mock_driver.session.return_value.__aexit__ = AsyncMock(
+            return_value=False,
+        )
+        mock_session.execute_read = AsyncMock(
+            return_value=[{"name": "auth-service", "id": "auth-1"}],
+        )
+
+        state = {
+            "query": "unique store on miss query",
+            "complexity": "MULTI_HOP",
+            "max_results": 10,
+            "tenant_id": "",
+            "candidates": [],
+            "cypher_query": "",
+            "cypher_results": [],
+            "iteration_count": 0,
+            "answer": "",
+            "sources": [],
+        }
+
+        with patch(
+            "orchestrator.app.query_engine._embed_query",
+            return_value=embedding,
+        ), patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._fetch_candidates",
+            return_value=[{"name": "auth-service", "id": "auth-1"}],
+        ), patch(
+            "orchestrator.app.query_engine.run_traversal",
+            return_value=[{"source": "auth", "rel": "CALLS", "target": "db"}],
+        ), patch(
+            "orchestrator.app.query_engine._build_traversal_acl_params",
+            return_value={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+        ):
+            result = await cypher_retrieve(state)
+
+        assert result.get("cypher_results") is not None
+        assert _SEMANTIC_CACHE.stats().size == 1, (
+            "Semantic cache should contain 1 entry after a cache miss triggers "
+            f"store; got size={_SEMANTIC_CACHE.stats().size}"
+        )
+
+        _SEMANTIC_CACHE.invalidate_all()

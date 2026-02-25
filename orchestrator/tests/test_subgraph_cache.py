@@ -164,6 +164,30 @@ class TestNormalizeCypher:
         q2 = "MATCH (x)-[e:CALLS]->(y) RETURN x, y"
         assert normalize_cypher(q1) == normalize_cypher(q2)
 
+    def test_normalize_cypher_different_labels_produce_different_keys(self) -> None:
+        q1 = normalize_cypher("MATCH (n:Service) RETURN n")
+        q2 = normalize_cypher("MATCH (n:Database) RETURN n")
+        assert q1 != q2, (
+            "Queries with different labels must produce different cache keys; "
+            f"got identical: {q1!r}"
+        )
+
+    def test_normalize_cypher_different_reltypes_produce_different_keys(self) -> None:
+        q1 = normalize_cypher("MATCH (a)-[r:CALLS]->(b) RETURN a, b")
+        q2 = normalize_cypher("MATCH (a)-[r:PRODUCES]->(b) RETURN a, b")
+        assert q1 != q2, (
+            "Queries with different relationship types must produce different "
+            f"cache keys; got identical: {q1!r}"
+        )
+
+    def test_normalize_cypher_preserves_function_names(self) -> None:
+        q1 = normalize_cypher("MATCH (a)-[r]->(b) RETURN type(r)")
+        q2 = normalize_cypher("MATCH (a)-[r]->(b) RETURN count(r)")
+        assert q1 != q2, (
+            "Queries with different function calls must produce different "
+            f"cache keys; got identical: {q1!r}"
+        )
+
 
 class TestCacheKey:
     def test_same_query_same_acl_same_key(self) -> None:
