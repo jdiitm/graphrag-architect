@@ -9,10 +9,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-try:
-    import redis.asyncio as aioredis
-except ImportError:  # pragma: no cover
-    aioredis = None  # type: ignore[assignment]
+from orchestrator.app.redis_client import create_async_redis, require_redis
 
 logger = logging.getLogger(__name__)
 
@@ -120,12 +117,8 @@ class RedisSubgraphCache:
         password: str = "",
         db: int = 0,
     ) -> None:
-        if aioredis is None:
-            raise ImportError("redis package is required for RedisSubgraphCache")
-        kwargs: dict[str, Any] = {"decode_responses": True, "db": db}
-        if password:
-            kwargs["password"] = password
-        self._redis = aioredis.from_url(redis_url, **kwargs)
+        require_redis("RedisSubgraphCache")
+        self._redis = create_async_redis(redis_url, password=password, db=db)
         self._ttl = ttl_seconds
         self._prefix = key_prefix
         self._l1 = SubgraphCache(maxsize=l1_maxsize)
