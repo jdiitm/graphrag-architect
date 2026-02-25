@@ -51,8 +51,8 @@ jobs:
           cache-dependency-path: workers/ingestion/go.sum
       - name: Download dependencies
         run: go mod download
-      - name: Run tests
-        run: go test ./... -v -count=1 -timeout 30s
+      - name: Run tests with race detector
+        run: go test ./... -v -race -count=1 -timeout 60s
       - name: Build binary
         run: CGO_ENABLED=0 go build -o /dev/null ./cmd/
 
