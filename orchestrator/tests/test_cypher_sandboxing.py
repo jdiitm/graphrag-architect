@@ -283,6 +283,202 @@ class TestUnwindAmplificationRejection:
         assert result == [{"n": "result"}]
 
 
+class TestASTBasedAmplificationDetection:
+
+    def test_multi_with_chain_unwind_bypass(self) -> None:
+        from orchestrator.app.cypher_sandbox import detect_unwind_amplification
+
+        cypher = (
+            "MATCH (n) WITH n LIMIT 10 "
+            "WITH n AS m "
+            "UNWIND range(1, 1000000) AS x "
+            "RETURN m, x"
+        )
+        assert detect_unwind_amplification(cypher) is True, (
+            "Multi-WITH chain resets the pipeline; UNWIND after second WITH "
+            "operates on the full range, not the limited 10 rows"
+        )
+
+    def test_unwind_inside_call_subquery_after_limit(self) -> None:
+        from orchestrator.app.cypher_sandbox import detect_unwind_amplification
+
+        cypher = (
+            "MATCH (n) WITH n LIMIT 10 "
+            "CALL { "
+            "UNWIND range(1, 1000000) AS x "
+            "RETURN x "
+            "} "
+            "RETURN n, x"
+        )
+        assert detect_unwind_amplification(cypher) is True, (
+            "UNWIND inside CALL subquery after LIMIT must be detected"
+        )
+
+    def test_unwind_range_with_computed_cardinality(self) -> None:
+        from orchestrator.app.cypher_sandbox import detect_unwind_amplification
+
+        cypher = (
+            "MATCH (n) WITH n LIMIT 5 "
+            "UNWIND range(1, 500000) AS x "
+            "MATCH (m) WHERE m.id = x "
+            "RETURN n, m"
+        )
+        assert detect_unwind_amplification(cypher) is True, (
+            "UNWIND range() with large computed cardinality after LIMIT "
+            "must be detected regardless of intermediate clauses"
+        )
+
+    def test_triple_with_chain_masks_amplification(self) -> None:
+        from orchestrator.app.cypher_sandbox import detect_unwind_amplification
+
+        cypher = (
+            "MATCH (n) WITH n LIMIT 10 "
+            "WITH n AS a "
+            "WITH a AS b "
+            "UNWIND range(1, 100000) AS x "
+            "RETURN b, x"
+        )
+        assert detect_unwind_amplification(cypher) is True, (
+            "Triple WITH chain must not mask UNWIND amplification"
+        )
+
+    def test_legitimate_unwind_before_limit_is_allowed(self) -> None:
+        from orchestrator.app.cypher_sandbox import detect_unwind_amplification
+
+        cypher = (
+            "UNWIND ['a', 'b', 'c'] AS label "
+            "MATCH (n:Service) WHERE n.name = label "
+            "RETURN n LIMIT 10"
+        )
+        assert detect_unwind_amplification(cypher) is False, (
+            "UNWIND before any WITH...LIMIT is a legitimate pattern"
+        )
+
+    def test_unwind_small_literal_array_is_allowed(self) -> None:
+        from orchestrator.app.cypher_sandbox import detect_unwind_amplification
+
+        cypher = (
+            "MATCH (n) WITH collect(n) AS nodes "
+            "UNWIND nodes AS node "
+            "RETURN node"
+        )
+        assert detect_unwind_amplification(cypher) is False, (
+            "UNWIND of a collected variable without preceding LIMIT is safe"
+        )
+
+    def test_with_limit_without_unwind_is_allowed(self) -> None:
+        from orchestrator.app.cypher_sandbox import detect_unwind_amplification
+
+        cypher = (
+            "MATCH (n) WITH n LIMIT 10 "
+            "MATCH (n)-[:CALLS]->(m) "
+            "RETURN n, m"
+        )
+        assert detect_unwind_amplification(cypher) is False, (
+            "WITH...LIMIT followed by MATCH (no UNWIND) must be allowed"
+        )
+
+    def test_unwind_after_with_no_limit_is_allowed(self) -> None:
+        from orchestrator.app.cypher_sandbox import detect_unwind_amplification
+
+        cypher = (
+            "MATCH (n) WITH n "
+            "UNWIND n.tags AS tag "
+            "RETURN n.name, tag"
+        )
+        assert detect_unwind_amplification(cypher) is False, (
+            "UNWIND after WITH without LIMIT is a safe pattern"
+        )
+
+
+class TestUnwindClauseASTParsing:
+
+    def test_unwind_parsed_as_unwind_clause(self) -> None:
+        from orchestrator.app.cypher_ast import CypherParser, UnwindClause
+
+        cypher = "MATCH (n) UNWIND n.tags AS tag RETURN tag"
+        ast = CypherParser(cypher).parse()
+        unwind_clauses = [
+            c for c in ast.clauses if isinstance(c, UnwindClause)
+        ]
+        assert len(unwind_clauses) == 1, (
+            "UNWIND must be parsed as UnwindClause, not GenericClause"
+        )
+
+    def test_unwind_tokens_preserved(self) -> None:
+        from orchestrator.app.cypher_ast import CypherParser, UnwindClause
+
+        cypher = "UNWIND range(1, 10) AS x RETURN x"
+        ast = CypherParser(cypher).parse()
+        unwind_clauses = [
+            c for c in ast.clauses if isinstance(c, UnwindClause)
+        ]
+        assert len(unwind_clauses) == 1
+        text = "".join(t.value for t in unwind_clauses[0].tokens)
+        assert "range" in text.lower()
+
+    def test_unwind_expression_extraction(self) -> None:
+        from orchestrator.app.cypher_ast import CypherParser, UnwindClause
+
+        cypher = "MATCH (n) WITH n UNWIND range(1, 100) AS x RETURN x"
+        ast = CypherParser(cypher).parse()
+        unwind_clauses = [
+            c for c in ast.clauses if isinstance(c, UnwindClause)
+        ]
+        assert len(unwind_clauses) == 1
+        assert unwind_clauses[0].expression_text is not None
+        assert "range" in unwind_clauses[0].expression_text.lower()
+
+
+class TestValidateQueryStructure:
+
+    def test_rejects_limit_then_unwind_range(self) -> None:
+        from orchestrator.app.cypher_ast import validate_query_structure
+
+        cypher = "MATCH (n) WITH n LIMIT 10 UNWIND range(1, 1000000) AS x RETURN n, x"
+        assert validate_query_structure(cypher) is False
+
+    def test_rejects_multi_with_unwind_amplification(self) -> None:
+        from orchestrator.app.cypher_ast import validate_query_structure
+
+        cypher = (
+            "MATCH (n) WITH n LIMIT 10 "
+            "WITH n AS m "
+            "UNWIND range(1, 999999) AS x "
+            "RETURN m, x"
+        )
+        assert validate_query_structure(cypher) is False
+
+    def test_accepts_safe_query(self) -> None:
+        from orchestrator.app.cypher_ast import validate_query_structure
+
+        cypher = "MATCH (n:Service) RETURN n LIMIT 10"
+        assert validate_query_structure(cypher) is True
+
+    def test_accepts_unwind_before_limit(self) -> None:
+        from orchestrator.app.cypher_ast import validate_query_structure
+
+        cypher = (
+            "UNWIND ['a', 'b'] AS label "
+            "MATCH (n) WHERE n.name = label "
+            "RETURN n LIMIT 10"
+        )
+        assert validate_query_structure(cypher) is True
+
+    def test_rejects_call_subquery_unwind_amplification(self) -> None:
+        from orchestrator.app.cypher_ast import validate_query_structure
+
+        cypher = (
+            "MATCH (n) WITH n LIMIT 10 "
+            "CALL { "
+            "UNWIND range(1, 1000000) AS x "
+            "RETURN x "
+            "} "
+            "RETURN n, x"
+        )
+        assert validate_query_structure(cypher) is False
+
+
 class TestSandboxConfig:
 
     def test_defaults(self) -> None:
