@@ -49,8 +49,13 @@ from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
-from orchestrator.app.rag_evaluator import EvaluationStore, LLMEvaluator, RAGEvaluator
-from orchestrator.app.semantic_cache import SemanticQueryCache
+from orchestrator.app.rag_evaluator import (
+    EvaluationStore,
+    LLMEvaluator,
+    RAGEvaluator,
+    create_evaluation_store,
+)
+from orchestrator.app.semantic_cache import create_semantic_cache
 
 try:
     import openai as _openai_module
@@ -72,7 +77,7 @@ _TEMPLATE_CATALOG = TemplateCatalog()
 _TEMPLATE_REGISTRY = TemplateHashRegistry(_TEMPLATE_CATALOG)
 _SANDBOX = SandboxedQueryExecutor(registry=_TEMPLATE_REGISTRY)
 _SUBGRAPH_CACHE = create_subgraph_cache()
-_SEMANTIC_CACHE = SemanticQueryCache()
+_SEMANTIC_CACHE = create_semantic_cache()
 
 _VS_CFG = VectorStoreConfig.from_env()
 _VECTOR_STORE = create_vector_store(
@@ -709,7 +714,7 @@ async def _do_synthesize(state: QueryState) -> dict:
     return {"answer": answer, "sources": truncated}
 
 
-_EVAL_STORE = EvaluationStore()
+_EVAL_STORE = create_evaluation_store()
 
 
 def get_eval_store() -> EvaluationStore:

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
-from typing import Dict
+import uuid
+from typing import Any, Dict
+
+from orchestrator.app.redis_client import create_async_redis, require_redis
+
+logger = logging.getLogger(__name__)
 
 
 class AdaptiveTokenBucket:
@@ -108,3 +114,57 @@ class TenantRateLimiter:
     @property
     def active_tenants(self) -> int:
         return len(self._buckets)
+
+
+class RedisRateLimiter:
+    def __init__(
+        self,
+        redis_url: str,
+        capacity: int = 20,
+        window_seconds: int = 60,
+        key_prefix: str = "graphrag:ratelimit:",
+        password: str = "",
+        db: int = 0,
+    ) -> None:
+        require_redis("RedisRateLimiter")
+        self._redis = create_async_redis(redis_url, password=password, db=db)
+        self._capacity = capacity
+        self._window = window_seconds
+        self._prefix = key_prefix
+
+    async def try_acquire(self, tenant_id: str) -> bool:
+        key = f"{self._prefix}{tenant_id}"
+        now = time.time()
+        window_start = now - self._window
+        member = f"{now}:{uuid.uuid4().hex[:8]}"
+        try:
+            async with self._redis.pipeline(transaction=True) as pipe:
+                pipe.zremrangebyscore(key, "-inf", window_start)
+                pipe.zadd(key, {member: now})
+                pipe.expire(key, self._window + 1)
+                pipe.zcard(key)
+                results = await pipe.execute()
+            count = results[3]
+            if count > self._capacity:
+                await self._redis.zrem(key, member)
+                return False
+            return True
+        except Exception:
+            logger.debug("Redis rate limiter failed, allowing request")
+            return True
+
+
+def create_rate_limiter(
+    capacity: int = 20,
+    refill_rate: float = 10.0,
+) -> Any:
+    from orchestrator.app.config import RedisConfig
+    redis_cfg = RedisConfig.from_env()
+    if redis_cfg.url:
+        return RedisRateLimiter(
+            redis_url=redis_cfg.url,
+            password=redis_cfg.password,
+            db=redis_cfg.db,
+            capacity=capacity,
+        )
+    return TenantRateLimiter(capacity=capacity, refill_rate=refill_rate)

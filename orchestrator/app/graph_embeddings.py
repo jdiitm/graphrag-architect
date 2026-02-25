@@ -14,6 +14,11 @@ DEFAULT_NUM_WALKS = 10
 DEFAULT_EMBEDDING_DIM = 128
 DEFAULT_P = 1.0
 DEFAULT_Q = 0.5
+MAX_PYTHON_NODES = 5000
+
+
+class GraphTooLargeError(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -128,10 +133,19 @@ class Node2VecEmbedder:
     def __init__(self, config: Optional[Node2VecConfig] = None) -> None:
         self._config = config or Node2VecConfig()
 
+    def _check_size(self, topology: GraphTopology) -> None:
+        if len(topology.nodes) > MAX_PYTHON_NODES:
+            raise GraphTooLargeError(
+                f"Graph has {len(topology.nodes)} nodes which exceeds the "
+                f"Python Node2Vec limit of {MAX_PYTHON_NODES}. Use Neo4j GDS "
+                f"for graphs of this size."
+            )
+
     def embed(
         self,
         topology: GraphTopology,
     ) -> Dict[str, List[float]]:
+        self._check_size(topology)
         walks = generate_walks(topology, self._config)
         embeddings: Dict[str, List[float]] = {}
         for node in topology.nodes:
@@ -146,6 +160,7 @@ class Node2VecEmbedder:
         changed_nodes: List[str],
         existing_embeddings: Dict[str, List[float]],
     ) -> Dict[str, List[float]]:
+        self._check_size(topology)
         affected: Set[str] = set(changed_nodes)
         for node in changed_nodes:
             affected.update(topology.neighbors(node))

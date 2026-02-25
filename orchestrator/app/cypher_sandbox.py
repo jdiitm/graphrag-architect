@@ -11,6 +11,11 @@ from orchestrator.app.cypher_tokenizer import (
     tokenize_cypher,
     reconstruct_cypher,
 )
+from orchestrator.app.cypher_validator import (
+    CypherValidationError,
+    estimate_query_cost,
+    validate_cypher_readonly,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,7 @@ class CypherAmplificationError(Exception):
 class CypherSandboxConfig:
     max_results: int = 1000
     query_timeout_seconds: float = 30.0
+    max_query_cost: int = 20
 
 
 _LIMIT_PATTERN = re.compile(r"\bLIMIT\s+(\d+)", re.IGNORECASE)
@@ -107,6 +113,12 @@ class SandboxedQueryExecutor:
         cypher: str,
         params: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
+        validate_cypher_readonly(cypher)
+        cost = estimate_query_cost(cypher)
+        if cost > self._config.max_query_cost:
+            raise CypherValidationError(
+                f"Query cost {cost} exceeds maximum {self._config.max_query_cost}"
+            )
         self.validate(cypher)
         if detect_unwind_amplification(cypher):
             raise CypherAmplificationError(

@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 from enum import Enum
@@ -5,6 +6,10 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
+
+from orchestrator.app.redis_client import create_async_redis, require_redis
+
+logger = logging.getLogger(__name__)
 
 
 class QueryComplexity(str, Enum):
@@ -68,7 +73,7 @@ class QueryJobStore:
         self._mono: Dict[str, float] = {}
         self._ttl = ttl_seconds
 
-    def create(self) -> QueryJobResponse:
+    async def create(self) -> QueryJobResponse:
         self._evict_expired()
         job = QueryJobResponse(
             job_id=str(uuid.uuid4()),
@@ -79,22 +84,22 @@ class QueryJobStore:
         self._mono[job.job_id] = time.monotonic()
         return job
 
-    def get(self, job_id: str) -> Optional[QueryJobResponse]:
+    async def get(self, job_id: str) -> Optional[QueryJobResponse]:
         return self._jobs.get(job_id)
 
-    def mark_running(self, job_id: str) -> None:
+    async def mark_running(self, job_id: str) -> None:
         job = self._jobs.get(job_id)
         if job:
             job.status = JobStatus.RUNNING
 
-    def complete(self, job_id: str, result: QueryResponse) -> None:
+    async def complete(self, job_id: str, result: QueryResponse) -> None:
         job = self._jobs.get(job_id)
         if job:
             job.status = JobStatus.COMPLETED
             job.result = result
             job.completed_at = time.time()
 
-    def fail(self, job_id: str, error: str) -> None:
+    async def fail(self, job_id: str, error: str) -> None:
         job = self._jobs.get(job_id)
         if job:
             job.status = JobStatus.FAILED
@@ -110,3 +115,97 @@ class QueryJobStore:
         for jid in expired:
             self._jobs.pop(jid, None)
             self._mono.pop(jid, None)
+
+
+class RedisQueryJobStore:
+    def __init__(
+        self,
+        redis_url: str,
+        ttl_seconds: int = 300,
+        key_prefix: str = "graphrag:jobstore:",
+        password: str = "",
+        db: int = 0,
+    ) -> None:
+        require_redis("RedisQueryJobStore")
+        self._redis = create_async_redis(redis_url, password=password, db=db)
+        self._ttl = ttl_seconds
+        self._prefix = key_prefix
+
+    def _rkey(self, job_id: str) -> str:
+        return f"{self._prefix}{job_id}"
+
+    async def create(self) -> QueryJobResponse:
+        job = QueryJobResponse(
+            job_id=str(uuid.uuid4()),
+            status=JobStatus.PENDING,
+            created_at=time.time(),
+        )
+        try:
+            await self._redis.setex(
+                self._rkey(job.job_id), self._ttl, job.model_dump_json(),
+            )
+        except Exception:
+            logger.debug("Redis job-store create failed")
+        return job
+
+    async def get(self, job_id: str) -> Optional[QueryJobResponse]:
+        try:
+            raw = await self._redis.get(self._rkey(job_id))
+            if raw is not None:
+                return QueryJobResponse.model_validate_json(raw)
+        except Exception:
+            logger.debug("Redis job-store get failed")
+        return None
+
+    async def mark_running(self, job_id: str) -> None:
+        job = await self.get(job_id)
+        if job is None:
+            return
+        job.status = JobStatus.RUNNING
+        try:
+            await self._redis.setex(
+                self._rkey(job_id), self._ttl, job.model_dump_json(),
+            )
+        except Exception:
+            logger.debug("Redis job-store mark_running failed")
+
+    async def complete(self, job_id: str, result: QueryResponse) -> None:
+        job = await self.get(job_id)
+        if job is None:
+            return
+        job.status = JobStatus.COMPLETED
+        job.result = result
+        job.completed_at = time.time()
+        try:
+            await self._redis.setex(
+                self._rkey(job_id), self._ttl, job.model_dump_json(),
+            )
+        except Exception:
+            logger.debug("Redis job-store complete failed")
+
+    async def fail(self, job_id: str, error: str) -> None:
+        job = await self.get(job_id)
+        if job is None:
+            return
+        job.status = JobStatus.FAILED
+        job.error = error
+        job.completed_at = time.time()
+        try:
+            await self._redis.setex(
+                self._rkey(job_id), self._ttl, job.model_dump_json(),
+            )
+        except Exception:
+            logger.debug("Redis job-store fail failed")
+
+
+def create_job_store(ttl_seconds: float = 300.0) -> Any:
+    from orchestrator.app.config import RedisConfig
+    redis_cfg = RedisConfig.from_env()
+    if redis_cfg.url:
+        return RedisQueryJobStore(
+            redis_url=redis_cfg.url,
+            password=redis_cfg.password,
+            db=redis_cfg.db,
+            ttl_seconds=int(ttl_seconds),
+        )
+    return QueryJobStore(ttl_seconds=ttl_seconds)

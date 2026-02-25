@@ -125,8 +125,18 @@ class SubgraphCache:
         self._maxsize = maxsize
         self._max_value_bytes = max_value_bytes
         self._cache: OrderedDict[str, List[Dict[str, Any]]] = OrderedDict()
+        self._generations: Dict[str, int] = {}
+        self._generation = 0
         self._hits = 0
         self._misses = 0
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def advance_generation(self) -> int:
+        self._generation += 1
+        return self._generation
 
     def get(self, key: str) -> Optional[List[Dict[str, Any]]]:
         if key not in self._cache:
@@ -144,15 +154,29 @@ class SubgraphCache:
             self._cache.move_to_end(key)
         else:
             while len(self._cache) >= self._maxsize and self._cache:
-                self._cache.popitem(last=False)
+                evicted_key, _ = self._cache.popitem(last=False)
+                self._generations.pop(evicted_key, None)
         self._cache[key] = value
+        self._generations[key] = self._generation
 
     def invalidate(self, key: str) -> None:
         if key in self._cache:
             del self._cache[key]
+            self._generations.pop(key, None)
+
+    def invalidate_stale(self) -> int:
+        stale = [
+            k for k, gen in self._generations.items()
+            if gen < self._generation
+        ]
+        for k in stale:
+            self._cache.pop(k, None)
+            self._generations.pop(k, None)
+        return len(stale)
 
     def invalidate_all(self) -> None:
         self._cache.clear()
+        self._generations.clear()
 
     def stats(self) -> CacheStats:
         return CacheStats(
@@ -198,6 +222,16 @@ class RedisSubgraphCache:
         self._ttl = ttl_seconds
         self._prefix = key_prefix
         self._l1 = SubgraphCache(maxsize=l1_maxsize)
+
+    @property
+    def generation(self) -> int:
+        return self._l1.generation
+
+    def advance_generation(self) -> int:
+        return self._l1.advance_generation()
+
+    def invalidate_stale(self) -> int:
+        return self._l1.invalidate_stale()
 
     def _rkey(self, key: str) -> str:
         return f"{self._prefix}{key}"

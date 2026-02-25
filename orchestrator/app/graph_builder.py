@@ -90,10 +90,12 @@ def invalidate_caches_after_ingest() -> None:
             _SUBGRAPH_CACHE,
             _SEMANTIC_CACHE,
         )
-        _SUBGRAPH_CACHE.invalidate_all()
+        _SUBGRAPH_CACHE.advance_generation()
+        _SUBGRAPH_CACHE.invalidate_stale()
         if _SEMANTIC_CACHE is not None:
-            _SEMANTIC_CACHE.invalidate_all()
-        logger.info("Post-ingestion cache invalidation complete")
+            _SEMANTIC_CACHE.advance_generation()
+            _SEMANTIC_CACHE.invalidate_stale()
+        logger.info("Post-ingestion generational cache invalidation complete")
     except Exception as exc:
         logger.warning("Cache invalidation failed (non-fatal): %s", exc)
 

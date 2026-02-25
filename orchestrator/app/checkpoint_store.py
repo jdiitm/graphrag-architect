@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from langgraph.checkpoint.memory import MemorySaver
+
+try:
+    import psycopg
+except ImportError:
+    psycopg = None  # type: ignore[assignment]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -24,7 +32,23 @@ _state: dict[str, Optional[Any]] = {"checkpointer": None}
 
 
 def _create_postgres_checkpointer(dsn: str) -> Any:
-    return MemorySaver()
+    try:
+        from langgraph.checkpoint.postgres import PostgresSaver
+    except ImportError as exc:
+        raise ImportError(
+            "langgraph-checkpoint-postgres is required for the postgres "
+            "checkpoint backend. Install it with: "
+            "pip install langgraph-checkpoint-postgres 'psycopg[binary]'"
+        ) from exc
+    if psycopg is None:
+        raise ImportError(
+            "psycopg is required for the postgres checkpoint backend. "
+            "Install with: pip install 'psycopg[binary]'"
+        )
+    conn = psycopg.connect(dsn)
+    saver = PostgresSaver(conn=conn)
+    saver.setup()
+    return saver
 
 
 def init_checkpointer() -> None:
