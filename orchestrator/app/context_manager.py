@@ -107,6 +107,88 @@ def _path_token_cost(path: List[Dict[str, Any]]) -> int:
     return sum(estimate_tokens(_serialize_candidate(c)) for c in path)
 
 
+_PAGERANK_ITERATIONS = 10
+_PAGERANK_DAMPING = 0.85
+
+
+def _pagerank_scores(
+    adjacency: Dict[str, List[str]],
+    iterations: int = _PAGERANK_ITERATIONS,
+    damping: float = _PAGERANK_DAMPING,
+) -> Dict[str, float]:
+    if not adjacency:
+        return {}
+    nodes = list(adjacency.keys())
+    n = len(nodes)
+    scores: Dict[str, float] = {node: 1.0 / n for node in nodes}
+    for _ in range(iterations):
+        new_scores: Dict[str, float] = {}
+        for node in nodes:
+            rank = (1.0 - damping) / n
+            for src in nodes:
+                neighbors = adjacency.get(src, [])
+                if node in neighbors and len(neighbors) > 0:
+                    rank += damping * scores[src] / len(neighbors)
+            new_scores[node] = rank
+        scores = new_scores
+    return scores
+
+
+def _build_component_adjacency(
+    component: List[Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    adj: Dict[str, Set[str]] = defaultdict(set)
+    all_nodes: Set[str] = set()
+    for candidate in component:
+        ids = _candidate_node_ids(candidate)
+        all_nodes.update(ids)
+        if len(ids) == 2:
+            adj[ids[0]].add(ids[1])
+            adj[ids[1]].add(ids[0])
+    for node in all_nodes:
+        if node not in adj:
+            adj[node] = set()
+    return {k: list(v) for k, v in adj.items()}
+
+
+def _truncate_component_by_pagerank(
+    component: List[Dict[str, Any]],
+    token_budget: int,
+    max_results: int,
+) -> List[Dict[str, Any]]:
+    adjacency = _build_component_adjacency(component)
+    pr_scores = _pagerank_scores(adjacency)
+
+    scored_candidates = []
+    for c in component:
+        ids = _candidate_node_ids(c)
+        c_score = max((pr_scores.get(nid, 0.0) for nid in ids), default=0.0)
+        scored_candidates.append((c_score, c))
+    scored_candidates.sort(key=lambda x: x[0], reverse=True)
+
+    result: List[Dict[str, Any]] = []
+    included_nodes: Set[str] = set()
+    total_tokens = 0
+
+    for _, candidate in scored_candidates:
+        cost = estimate_tokens(_serialize_candidate(candidate))
+        if total_tokens + cost > token_budget:
+            continue
+        if len(result) >= max_results:
+            break
+
+        ids = _candidate_node_ids(candidate)
+        if result and len(ids) == 2:
+            if ids[0] not in included_nodes and ids[1] not in included_nodes:
+                continue
+
+        result.append(candidate)
+        total_tokens += cost
+        included_nodes.update(ids)
+
+    return result
+
+
 def truncate_context_topology(
     candidates: List[Dict[str, Any]],
     budget: TokenBudget,
@@ -127,12 +209,19 @@ def truncate_context_topology(
 
     for path in connected:
         cost = _path_token_cost(path)
-        if total_tokens + cost > budget.max_context_tokens:
-            continue
-        if len(result) + len(path) > budget.max_results:
-            continue
-        result.extend(path)
-        total_tokens += cost
+        remaining_budget = budget.max_context_tokens - total_tokens
+        remaining_results = budget.max_results - len(result)
+        if remaining_results <= 0:
+            break
+        if cost <= remaining_budget and len(path) <= remaining_results:
+            result.extend(path)
+            total_tokens += cost
+        elif remaining_budget > 0:
+            partial = _truncate_component_by_pagerank(
+                path, remaining_budget, remaining_results,
+            )
+            result.extend(partial)
+            total_tokens += _path_token_cost(partial)
 
     for path in isolated:
         cost = _path_token_cost(path)

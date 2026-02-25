@@ -1,8 +1,37 @@
 import hashlib
 import json
+import re
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+_SAFE_ENTITY_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}$")
+_CYPHER_INJECTION_CHARS = re.compile(r"['\"{};\\`\x00]")
+_MAX_EDGE_REF_LENGTH = 512
+
+
+def validate_entity_identifier(value: str) -> str:
+    if not _SAFE_ENTITY_NAME.match(value):
+        raise ValueError(
+            f"Entity identifier {value!r} contains disallowed characters "
+            f"or exceeds 253 chars. Must match: [a-zA-Z0-9][a-zA-Z0-9._-]{{0,252}}"
+        )
+    return value
+
+
+def validate_edge_reference(value: str) -> str:
+    if not value or len(value) > _MAX_EDGE_REF_LENGTH:
+        raise ValueError(
+            f"Edge reference {value!r} must be non-empty and "
+            f"at most {_MAX_EDGE_REF_LENGTH} characters"
+        )
+    if _CYPHER_INJECTION_CHARS.search(value):
+        raise ValueError(
+            f"Edge reference {value!r} contains disallowed characters "
+            f"(quotes, braces, semicolons, backslashes, backticks, or null bytes)"
+        )
+    return value
 
 
 def compute_content_hash(entity: BaseModel) -> str:
@@ -23,6 +52,11 @@ class ServiceNode(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     content_hash: str = ""
 
+    @field_validator("id", "name")
+    @classmethod
+    def _validate_safe_identifier(cls, v: str) -> str:
+        return validate_entity_identifier(v)
+
 
 class DatabaseNode(BaseModel):
     id: str
@@ -31,6 +65,11 @@ class DatabaseNode(BaseModel):
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
     content_hash: str = ""
+
+    @field_validator("id")
+    @classmethod
+    def _validate_safe_identifier(cls, v: str) -> str:
+        return validate_entity_identifier(v)
 
 
 class KafkaTopicNode(BaseModel):
@@ -42,6 +81,11 @@ class KafkaTopicNode(BaseModel):
     namespace_acl: List[str] = Field(default_factory=list)
     content_hash: str = ""
 
+    @field_validator("name")
+    @classmethod
+    def _validate_safe_identifier(cls, v: str) -> str:
+        return validate_entity_identifier(v)
+
 
 class K8sDeploymentNode(BaseModel):
     id: str
@@ -52,6 +96,11 @@ class K8sDeploymentNode(BaseModel):
     namespace_acl: List[str] = Field(default_factory=list)
     content_hash: str = ""
 
+    @field_validator("id")
+    @classmethod
+    def _validate_safe_identifier(cls, v: str) -> str:
+        return validate_entity_identifier(v)
+
 class CallsEdge(BaseModel):
     source_service_id: str
     target_service_id: str
@@ -60,12 +109,24 @@ class CallsEdge(BaseModel):
     ingestion_id: str = ""
     last_seen_at: str = ""
 
+    @field_validator("source_service_id", "target_service_id")
+    @classmethod
+    def _validate_edge_ref(cls, v: str) -> str:
+        return validate_edge_reference(v)
+
+
 class ProducesEdge(BaseModel):
     service_id: str
     topic_name: str
     event_schema: str
     ingestion_id: str = ""
     last_seen_at: str = ""
+
+    @field_validator("service_id", "topic_name")
+    @classmethod
+    def _validate_edge_ref(cls, v: str) -> str:
+        return validate_edge_reference(v)
+
 
 class ConsumesEdge(BaseModel):
     service_id: str
@@ -74,11 +135,22 @@ class ConsumesEdge(BaseModel):
     ingestion_id: str = ""
     last_seen_at: str = ""
 
+    @field_validator("service_id", "topic_name", "consumer_group")
+    @classmethod
+    def _validate_edge_ref(cls, v: str) -> str:
+        return validate_edge_reference(v)
+
+
 class DeployedInEdge(BaseModel):
     service_id: str
     deployment_id: str
     ingestion_id: str = ""
     last_seen_at: str = ""
+
+    @field_validator("service_id", "deployment_id")
+    @classmethod
+    def _validate_edge_ref(cls, v: str) -> str:
+        return validate_edge_reference(v)
 
 class ServiceExtractionResult(BaseModel):
     services: List[ServiceNode]

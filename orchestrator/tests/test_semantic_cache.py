@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import patch
 
@@ -178,3 +179,66 @@ class TestSemanticQueryCacheStats:
         assert stats.misses == 1
         assert stats.hits == 1
         assert stats.size == 1
+
+
+class TestSingleflightCoalescing:
+
+    @pytest.mark.asyncio
+    async def test_owner_gets_none_and_is_owner_true(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        result, is_owner = await cache.lookup_or_wait(embedding)
+        assert result is None
+        assert is_owner is True
+        cache.notify_complete(embedding)
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_returns_result_and_not_owner(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store("q", embedding, {"answer": "cached"})
+        result, is_owner = await cache.lookup_or_wait(embedding)
+        assert result == {"answer": "cached"}
+        assert is_owner is False
+
+    @pytest.mark.asyncio
+    async def test_waiter_receives_result_after_owner_completes(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+
+        r1, owner1 = await cache.lookup_or_wait(embedding)
+        assert r1 is None and owner1 is True
+
+        async def waiter():
+            return await cache.lookup_or_wait(embedding)
+
+        task = asyncio.create_task(waiter())
+        await asyncio.sleep(0.01)
+
+        cache.store("q", embedding, {"answer": "computed"})
+        cache.notify_complete(embedding)
+
+        r2, owner2 = await task
+        assert r2 == {"answer": "computed"}
+        assert owner2 is False
+
+    @pytest.mark.asyncio
+    async def test_waiter_becomes_owner_on_failure(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+
+        r1, owner1 = await cache.lookup_or_wait(embedding)
+        assert r1 is None and owner1 is True
+
+        async def waiter():
+            return await cache.lookup_or_wait(embedding)
+
+        task = asyncio.create_task(waiter())
+        await asyncio.sleep(0.01)
+
+        cache.notify_complete(embedding, failed=True)
+
+        r2, owner2 = await task
+        assert r2 is None
+        assert owner2 is True
+        cache.notify_complete(embedding)

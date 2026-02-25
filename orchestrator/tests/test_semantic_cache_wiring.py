@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, call
 
 import pytest
 
@@ -96,6 +96,99 @@ class TestSemanticCacheQueryEngineIntegration:
         )
         mock_neo4j.assert_not_called()
 
+        _SEMANTIC_CACHE.invalidate_all()
+
+    @pytest.mark.asyncio
+    async def test_singleflight_notify_complete_on_success(self) -> None:
+        from orchestrator.app.query_engine import (
+            _SEMANTIC_CACHE,
+            cypher_retrieve,
+        )
+
+        _SEMANTIC_CACHE.invalidate_all()
+        embedding = [0.7] * 128
+
+        mock_driver = AsyncMock()
+        mock_session = AsyncMock()
+        mock_driver.session.return_value.__aenter__ = AsyncMock(
+            return_value=mock_session,
+        )
+        mock_driver.session.return_value.__aexit__ = AsyncMock(
+            return_value=False,
+        )
+
+        state = {
+            "query": "singleflight success test",
+            "complexity": "MULTI_HOP",
+            "max_results": 10,
+            "tenant_id": "",
+            "candidates": [],
+            "cypher_query": "",
+            "cypher_results": [],
+            "iteration_count": 0,
+            "answer": "",
+            "sources": [],
+        }
+
+        with patch(
+            "orchestrator.app.query_engine._embed_query",
+            return_value=embedding,
+        ), patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._fetch_candidates",
+            return_value=[{"name": "svc", "id": "svc-1"}],
+        ), patch(
+            "orchestrator.app.query_engine.run_traversal",
+            return_value=[{"source": "svc", "rel": "CALLS", "target": "db"}],
+        ), patch(
+            "orchestrator.app.query_engine._build_traversal_acl_params",
+            return_value={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+        ), patch.object(
+            _SEMANTIC_CACHE, "notify_complete", wraps=_SEMANTIC_CACHE.notify_complete,
+        ) as mock_notify:
+            await cypher_retrieve(state)
+
+        mock_notify.assert_called_once_with(embedding)
+        _SEMANTIC_CACHE.invalidate_all()
+
+    @pytest.mark.asyncio
+    async def test_singleflight_notify_failed_on_error(self) -> None:
+        from orchestrator.app.query_engine import (
+            _SEMANTIC_CACHE,
+            cypher_retrieve,
+        )
+
+        _SEMANTIC_CACHE.invalidate_all()
+        embedding = [0.6] * 128
+
+        state = {
+            "query": "singleflight failure test",
+            "complexity": "MULTI_HOP",
+            "max_results": 10,
+            "tenant_id": "",
+            "candidates": [],
+            "cypher_query": "",
+            "cypher_results": [],
+            "iteration_count": 0,
+            "answer": "",
+            "sources": [],
+        }
+
+        with patch(
+            "orchestrator.app.query_engine._embed_query",
+            return_value=embedding,
+        ), patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            side_effect=RuntimeError("db down"),
+        ), patch.object(
+            _SEMANTIC_CACHE, "notify_complete", wraps=_SEMANTIC_CACHE.notify_complete,
+        ) as mock_notify:
+            with pytest.raises(RuntimeError, match="db down"):
+                await cypher_retrieve(state)
+
+        mock_notify.assert_called_once_with(embedding, failed=True)
         _SEMANTIC_CACHE.invalidate_all()
 
     @pytest.mark.asyncio

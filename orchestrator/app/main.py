@@ -314,7 +314,7 @@ def _build_query_state(
         "answer": "",
         "sources": [],
         "authorization": authorization,
-        "evaluation_score": -1.0,
+        "evaluation_score": None,
         "retrieval_quality": "skipped",
         "query_id": "",
         "tenant_id": tenant_ctx.tenant_id,
@@ -327,7 +327,7 @@ def _result_to_response(result: Dict[str, Any]) -> QueryResponse:
         sources=result.get("sources", []),
         complexity=result.get("complexity", "entity_lookup"),
         retrieval_path=result.get("retrieval_path", "vector"),
-        evaluation_score=result.get("evaluation_score", -1.0),
+        evaluation_score=result.get("evaluation_score"),
         retrieval_quality=result.get("retrieval_quality", "skipped"),
         query_id=result.get("query_id", ""),
     )

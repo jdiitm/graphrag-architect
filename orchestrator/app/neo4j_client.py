@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -269,6 +270,9 @@ def _chunk_list(
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
+DEFAULT_WRITE_CONCURRENCY = 4
+
+
 class GraphRepository:
     def __init__(
         self,
@@ -276,11 +280,13 @@ class GraphRepository:
         circuit_breaker: Optional[CircuitBreaker] = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
         database: Optional[str] = None,
+        write_concurrency: int = DEFAULT_WRITE_CONCURRENCY,
     ) -> None:
         self._driver = driver
         self._cb = circuit_breaker or CircuitBreaker(CircuitBreakerConfig())
         self._batch_size = batch_size
         self._database = database
+        self._write_concurrency = max(1, write_concurrency)
 
     def _session(self, access_mode: Optional[str] = None) -> Any:
         kwargs: Dict[str, Any] = {}
@@ -318,13 +324,27 @@ class GraphRepository:
     async def _execute_batched_commit(
         self, nodes: List[Any], edges: List[Any],
     ) -> None:
+        semaphore = asyncio.Semaphore(self._write_concurrency)
+
+        async def _guarded_write(
+            entity_type: type, records: List[Dict[str, Any]],
+        ) -> None:
+            async with semaphore:
+                await self._write_batches(entity_type, records)
+
         node_groups = _group_by_type(nodes)
-        for entity_type, records in node_groups.items():
-            await self._write_batches(entity_type, records)
+        if node_groups:
+            await asyncio.gather(*(
+                _guarded_write(et, recs)
+                for et, recs in node_groups.items()
+            ))
 
         edge_groups = _group_by_type(edges)
-        for entity_type, records in edge_groups.items():
-            await self._write_batches(entity_type, records)
+        if edge_groups:
+            await asyncio.gather(*(
+                _guarded_write(et, recs)
+                for et, recs in edge_groups.items()
+            ))
 
     async def _write_batches(
         self,
