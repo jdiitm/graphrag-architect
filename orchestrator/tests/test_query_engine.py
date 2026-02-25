@@ -768,6 +768,52 @@ class TestVectorStoreWiring:
         mock_session.execute_read.assert_called_once()
         assert result[0]["name"] == "svc"
 
+    @pytest.mark.asyncio
+    async def test_fulltext_fallback_includes_tenant_filter(self, base_query_state):
+        from orchestrator.app.query_engine import _fetch_candidates
+
+        executed_queries: list[str] = []
+        executed_params: list[dict] = []
+
+        async def _capturing_read(tx_func, **kwargs):
+            class FakeTx:
+                async def run(self, cypher_text, **params):
+                    executed_queries.append(cypher_text)
+                    executed_params.append(params)
+                    mock_result = AsyncMock()
+                    mock_result.data = AsyncMock(return_value=[
+                        {"result": {"name": "svc", "score": 0.9}},
+                    ])
+                    return mock_result
+            return await tx_func(FakeTx())
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = _capturing_read
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        state = _make_state(
+            base_query_state,
+            query="auth-service",
+            tenant_id="tenant-abc",
+        )
+
+        with patch(
+            "orchestrator.app.query_engine._embed_query",
+            new_callable=AsyncMock, return_value=None,
+        ):
+            await _fetch_candidates(mock_driver, state)
+
+        assert len(executed_queries) >= 1, "Fulltext fallback must execute a query"
+        combined_query = " ".join(executed_queries)
+        assert "tenant_id" in combined_query.lower() or "$tenant_id" in combined_query, (
+            "Fulltext fallback query must include tenant_id filtering to "
+            "prevent cross-tenant BM25 side-channel leakage. "
+            f"Query was: {executed_queries[0]}"
+        )
+
 
 class TestHopEdgeLimit:
     @pytest.mark.asyncio
