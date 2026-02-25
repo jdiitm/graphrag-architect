@@ -953,26 +953,30 @@ class TestCircuitBreakerWiring:
 
     @pytest.mark.asyncio
     async def test_llm_synthesize_uses_circuit_breaker(self, base_query_state):
-        from orchestrator.app.query_engine import _do_synthesize, _CB_LLM
+        from orchestrator.app.query_engine import _do_synthesize
+        from orchestrator.app.circuit_breaker import (
+            CircuitBreakerConfig,
+            CircuitBreaker,
+            InMemoryStateStore,
+        )
+
+        test_cb = CircuitBreaker(
+            CircuitBreakerConfig(failure_threshold=1, recovery_timeout=60.0),
+            store=InMemoryStateStore(),
+            name="test-llm-synth",
+        )
+
+        failing = AsyncMock(side_effect=ConnectionError("llm down"))
+        with pytest.raises(ConnectionError):
+            await test_cb.call(failing)
 
         state = _make_state(
             base_query_state,
             candidates=[{"name": "svc-a", "score": 0.9}],
         )
 
-        from orchestrator.app.circuit_breaker import CircuitOpenError
-
-        for _ in range(_CB_LLM._config.failure_threshold):
-            try:
-                await _CB_LLM.call(
-                    AsyncMock(side_effect=ConnectionError("llm down"))
-                )
-            except ConnectionError:
-                pass
-
         with patch(
-            "orchestrator.app.query_engine._build_llm",
-            return_value=MagicMock(),
+            "orchestrator.app.query_engine._CB_LLM", test_cb,
         ):
             result = await _do_synthesize(state)
 
@@ -982,8 +986,8 @@ class TestCircuitBreakerWiring:
         )
 
     @pytest.mark.asyncio
-    async def test_embed_query_uses_circuit_breaker(self):
-        from orchestrator.app.query_engine import _embed_query, _CB_EMBEDDING
+    async def test_embedding_cb_exists_at_module_level(self):
+        from orchestrator.app.query_engine import _CB_EMBEDDING
 
         from orchestrator.app.circuit_breaker import CircuitBreakerConfig
 
@@ -992,6 +996,34 @@ class TestCircuitBreakerWiring:
         )
         assert isinstance(
             _CB_EMBEDDING._config, CircuitBreakerConfig
+        )
+
+    @pytest.mark.asyncio
+    async def test_embed_query_returns_none_on_open_circuit(self):
+        from orchestrator.app.query_engine import _embed_query
+        from orchestrator.app.circuit_breaker import (
+            CircuitBreakerConfig,
+            CircuitBreaker,
+            InMemoryStateStore,
+        )
+
+        test_cb = CircuitBreaker(
+            CircuitBreakerConfig(failure_threshold=1, recovery_timeout=60.0),
+            store=InMemoryStateStore(),
+            name="test-embedding",
+        )
+
+        failing = AsyncMock(side_effect=ConnectionError("embedding down"))
+        with pytest.raises(ConnectionError):
+            await test_cb.call(failing)
+
+        with patch(
+            "orchestrator.app.query_engine._CB_EMBEDDING", test_cb,
+        ):
+            result = await _embed_query("test query")
+
+        assert result is None, (
+            "_embed_query must return None when embedding circuit breaker is open"
         )
 
     @pytest.mark.asyncio
@@ -1035,7 +1067,10 @@ class TestCircuitBreakerWiring:
         ):
             result = await _do_synthesize(state)
 
-        assert result["answer"] != "", (
-            "Synthesis must return a non-empty response even when CB is open"
+        assert "circuit" in result["answer"].lower() or "unavailable" in result["answer"].lower(), (
+            "Synthesis must mention circuit/unavailable when CB is open, "
+            f"got: {result['answer']}"
         )
-        assert len(result["sources"]) >= 0
+        assert len(result["sources"]) > 0, (
+            "Sources must contain reranked candidates even when LLM CB is open"
+        )
