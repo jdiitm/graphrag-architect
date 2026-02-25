@@ -98,15 +98,28 @@ workers/ingestion/
   cmd/
     main.go                            # Entry point + signal handling
     kafka.go                           # KafkaJobSource + LogDLQSink
+    dlq_sink.go                        # DLQ sink implementation
   internal/
+    blobstore/blobstore.go             # Blob storage abstraction
+    blobstore/memory.go                # In-memory blob store for testing
     consumer/consumer.go               # JobSource interface + Consumer loop
-    domain/job.go                      # Job, Result value types
+    dedup/dedup.go                     # Content-hash deduplication
     dispatcher/dispatcher.go           # Worker pool + retry logic
     dlq/handler.go                     # DLQ handler goroutine
+    dlq/file_sink.go                   # File-based DLQ fallback sink
+    domain/job.go                      # Job, Result value types
+    healthz/checker.go                 # Liveness/readiness probe checker
     metrics/metrics.go                 # Prometheus metrics
     metrics/observer.go                # PipelineObserver interface
+    outbox/outbox.go                   # Transactional outbox pattern
+    parser/parser.go                   # Go/Python file AST parsing
     processor/processor.go             # DocumentProcessor interface
     processor/forwarding.go            # HTTP POST to orchestrator
+    processor/kafka_forwarding.go      # Kafka topic forwarding
+    processor/blob_forwarding.go       # Blob store + event forwarding
+    processor/ast_processor.go         # Go AST parsing processor
+    processor/staging.go               # Stage-and-emit processor
+    ratelimit/ratelimit.go             # Token-bucket rate limiter
     telemetry/telemetry.go             # OpenTelemetry TracerProvider + spans
 ```
 
@@ -143,34 +156,41 @@ workers/ingestion/
 
 ```
 orchestrator/
-  app/
+  app/                       # 62 Python modules
     access_control.py        # SecurityPrincipal, CypherPermissionFilter
+    agentic_traversal.py     # Incremental 1-hop LLM-guided traversal (FR-15)
+    ast_extraction.py        # Go/Python AST parsing for code extraction
     circuit_breaker.py       # Three-state async circuit breaker
     config.py                # ExtractionConfig, Neo4jConfig (frozen dataclasses)
+    context_manager.py       # Token budget management for synthesis (FR-11)
+    cypher_sandbox.py        # Cypher query sandboxing
     cypher_validator.py      # Read-only Cypher query validation
+    entity_resolver.py       # Fuzzy cross-repo name deduplication
     extraction_models.py     # Pydantic models: 4 nodes, 4 edges
-    graph_builder.py         # LangGraph ingestion DAG (6 nodes)
+    graph_builder.py         # LangGraph ingestion DAG (7 nodes)
+    graph_embeddings.py      # Node2Vec structural embeddings (FR-17)
     ingest_models.py         # IngestRequest/Response Pydantic models
     llm_extraction.py        # ServiceExtractor (Gemini, structured output)
     main.py                  # FastAPI endpoints (/health, /metrics, /ingest, /query)
     manifest_parser.py       # K8s + Kafka YAML parsing
     neo4j_client.py          # Cypher MERGE operations
+    neo4j_pool.py            # Connection pooling for Neo4j
+    node_sink.py             # IncrementalNodeSink with namespace partitioning
     observability.py         # OpenTelemetry tracing + Prometheus metrics export
     query_classifier.py      # Keyword-based query complexity classifier
-    query_engine.py          # LangGraph query DAG (6 nodes)
+    query_engine.py          # LangGraph query DAG (7 nodes)
     query_models.py          # QueryRequest/Response/State models
     query_templates.py       # Parameterized Cypher template catalog (FR-10)
-    context_manager.py       # Token budget management for synthesis (FR-11)
-    reranker.py              # Cross-encoder/BM25 reranking before synthesis (FR-11)
     rag_evaluator.py         # Faithfulness/groundedness/hallucination evaluation (FR-12)
-    vector_store.py          # VectorStore protocol + Neo4j/Qdrant backends (FR-13)
-    agentic_traversal.py     # Incremental 1-hop LLM-guided traversal (FR-15)
-    graph_embeddings.py      # Node2Vec structural embeddings (FR-17)
-    semantic_partitioner.py  # Leiden community detection partitioning (FR-18)
+    reranker.py              # Cross-encoder/BM25 reranking before synthesis (FR-11)
     schema_init.cypher       # Neo4j constraints and indexes
     schema_validation.py     # Topology validation + correction loop
+    semantic_partitioner.py  # Leiden community detection partitioning (FR-18)
+    tenant_isolation.py      # TenantAwareDriverPool (FR-9)
+    vector_store.py          # VectorStore protocol + Neo4j/Qdrant backends (FR-13)
     workspace_loader.py      # Filesystem workspace scanner
-  tests/                     # 68+ test files
+    # ... plus 30 additional modules (guardrails, caching, audit, etc.)
+  tests/                     # 117 test files, 1542 tests
   requirements.txt
 ```
 
@@ -380,8 +400,9 @@ This diagram represents the compiled `StateGraph` from `orchestrator/app/graph_b
 ```mermaid
 stateDiagram-v2
     [*] --> load_workspace
-    load_workspace --> parse_services: raw_files
-    parse_services --> parse_manifests: extracted_nodes (services + calls)
+    load_workspace --> parse_source_ast: raw_files
+    parse_source_ast --> enrich_with_llm: AST-extracted nodes
+    enrich_with_llm --> parse_manifests: LLM-enriched nodes
     parse_manifests --> validate_schema: extracted_nodes (full topology)
 
     state validate_schema <<choice>>
@@ -401,14 +422,19 @@ stateDiagram-v2
 | `raw_files` | `List[Dict[str, str]]` | `[{"path": "...", "content": "..."}]` loaded from workspace |
 | `extracted_nodes` | `List[Any]` | Mixed list of Pydantic node and edge model instances |
 | `extraction_errors` | `List[str]` | Validation error messages from schema check |
+| `validation_retries` | `int` | Number of validation retry attempts so far |
 | `commit_status` | `str` | Terminal state: `"success"` or `"failed"` |
+| `extraction_checkpoint` | `Dict[str, str]` | Checkpoint data for resumable extraction |
+| `skipped_files` | `List[str]` | Files skipped during workspace loading |
+| `tenant_id` | `str` | Tenant identifier for multi-tenant ingestion |
 
 **Node implementations:**
 
 | Node | Description |
 |---|---|
 | `load_workspace` | Recursively reads directory into `raw_files` |
-| `parse_services` | Async `ServiceExtractor.extract_all()` via Gemini |
+| `parse_source_ast` | AST-based extraction of services, calls, and structure from source code |
+| `enrich_with_llm` | Async `ServiceExtractor.extract_all()` via Gemini for LLM enrichment |
 | `parse_manifests` | Extracts `K8sDeploymentNode`, `KafkaTopicNode` from YAML |
 | `validate_schema` | Pydantic validation of all extracted models |
 | `fix_errors` | LLM re-extraction with error context (max 3 retries) |

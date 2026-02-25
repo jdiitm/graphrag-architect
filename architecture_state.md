@@ -41,7 +41,8 @@ hybrid Vector + Cypher retrieval over Neo4j.
               │   (FastAPI + LangGraph)    │
               │                            │
               │  load_workspace            │
-              │  parse_services  (Gemini)  │
+              │  parse_source_ast          │
+              │  enrich_with_llm (Gemini)  │
               │  parse_manifests           │
               │  validate_schema           │
               │  commit_graph              │
@@ -66,8 +67,13 @@ High-throughput Kafka consumer with a concurrent worker pool.
 
 - **Consumer**: Reads from `raw-documents` topic via franz-go. Ack timeouts are non-fatal (consumer stays alive).
 - **Dispatcher**: Manages N goroutines, channels, and retry logic.
-- **DocumentProcessor**: Interface with three implementations: `ForwardingProcessor` (HTTP POST), `KafkaForwardingProcessor` (writes to parsed-documents topic), and `BlobForwardingProcessor` (blob store + event). Controlled by `PROCESSOR_MODE` env var.
+- **DocumentProcessor**: Interface with five implementations: `ForwardingProcessor` (HTTP POST), `KafkaForwardingProcessor` (writes to parsed-documents topic), `BlobForwardingProcessor` (blob store + event), `ASTProcessor` (Go AST parsing), and `StageAndEmitProcessor` (staging + event). Controlled by `PROCESSOR_MODE` env var.
 - **DLQ Handler**: Routes permanently failed jobs to `raw-documents.dlq` with file fallback.
+- **Blobstore**: Blob storage abstraction with in-memory implementation for testing.
+- **Dedup**: Content-hash deduplication to prevent redundant processing.
+- **Healthz**: Liveness/readiness probe checker.
+- **Outbox**: Transactional outbox pattern for reliable event publishing.
+- **Rate Limiter**: Token-bucket rate limiting for downstream calls.
 - **Shutdown**: Graceful via `context.Context` + `sync.WaitGroup`. No message loss.
 
 ### 2. Python Orchestrator (`orchestrator/`)
@@ -75,7 +81,7 @@ High-throughput Kafka consumer with a concurrent worker pool.
 LangGraph-based extraction pipeline.
 
 - **ServiceExtractor**: Async LLM extraction (Gemini) of ServiceNode and CallsEdge from .go/.py files.
-- **Graph Builder**: LangGraph ingestion DAG: load → parse_services → parse_manifests → validate → entity_resolution → commit. Streaming chunked loading with configurable max bytes.
+- **Graph Builder**: LangGraph ingestion DAG: load → parse_source_ast → enrich_with_llm → parse_manifests → validate → fix_errors → commit. Streaming chunked loading with configurable max bytes.
 - **Entity Resolver**: Fuzzy cross-repo name matching (Levenshtein-based) to deduplicate services across repositories before commit.
 - **Query Engine**: LangGraph query DAG: classify → route → [vector|single_hop|cypher|hybrid] → synthesize. Agentic Cypher iteration (max 3), DRIFT-inspired hybrid retrieval. Async job-based execution via `POST /query?async_mode=true` + `GET /query/{job_id}`.
 - **Query Cost Estimation**: Pre-execution Cypher complexity analysis — rejects unbounded variable-length paths, enforces max depth.
@@ -107,23 +113,23 @@ LangGraph-based extraction pipeline.
 **Nodes:** Service, Database, KafkaTopic, K8sDeployment (all carry `team_owner`, `namespace_acl`)
 **Edges:** CALLS, PRODUCES, CONSUMES, DEPLOYED_IN (all carry `ingestion_id`, `last_seen_at`)
 
-## Planned Components (External Audit Mitigation)
+## Feature Requirements Status
 
 | FR | Component | Status | Module |
 |---|---|---|---|
-| FR-9 | Physical Tenant Isolation | Planned | `tenant_isolation.py`, `extraction_models.py` |
-| FR-10 | Parameterized Query Templates | Planned | `query_templates.py`, `query_engine.py` |
-| FR-11 | Context Token Budget + Reranking | Planned | `context_manager.py`, `reranker.py` |
-| FR-12 | Faithfulness RAG Evaluation | Planned | `rag_evaluator.py` |
-| FR-13 | Decoupled Vector Store (Qdrant) | Planned | `vector_store.py` |
-| FR-14 | Streaming Ingestion Pipeline | Planned | `graph_builder.py` |
-| FR-15 | Agentic Graph Traversal | Planned | `agentic_traversal.py` |
-| FR-16 | Tombstone Edge Cleanup | Planned | `neo4j_client.py`, `node_sink.py` |
-| FR-17 | Graph-Native Embeddings (Node2Vec) | Planned | `graph_embeddings.py` |
-| FR-18 | Semantic Graph Partitioning | Planned | `semantic_partitioner.py` |
+| FR-9 | Physical Tenant Isolation | Implemented | `tenant_isolation.py`, `extraction_models.py` |
+| FR-10 | Parameterized Query Templates | Implemented | `query_templates.py`, `query_engine.py` |
+| FR-11 | Context Token Budget + Reranking | Implemented | `context_manager.py`, `reranker.py` |
+| FR-12 | Faithfulness RAG Evaluation | Implemented | `rag_evaluator.py` |
+| FR-13 | Decoupled Vector Store (Qdrant) | Implemented | `vector_store.py` |
+| FR-14 | Streaming Ingestion Pipeline | Implemented | `graph_builder.py` |
+| FR-15 | Agentic Graph Traversal | Implemented | `agentic_traversal.py` |
+| FR-16 | Tombstone Edge Cleanup | Implemented | `neo4j_client.py`, `node_sink.py` |
+| FR-17 | Graph-Native Embeddings (Node2Vec) | Implemented | `graph_embeddings.py` |
+| FR-18 | Semantic Graph Partitioning | Implemented | `semantic_partitioner.py` |
 
 ## Test Coverage
 
-- **Python**: 952 tests (unit + integration)
-- **Go**: 100 tests across 10 packages
-- **Quality gates**: Pylint 9.98/10, all Python tests, all Go tests
+- **Python**: 1542 tests (unit + integration)
+- **Go**: 152 tests across 13 packages
+- **Quality gates**: Pylint 10.00/10, all Python tests, all Go tests

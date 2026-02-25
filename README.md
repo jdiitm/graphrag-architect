@@ -5,21 +5,23 @@ A production-grade GraphRAG system that analyzes distributed systems by building
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   LangGraph Orchestrator             │
-│                                                      │
-│  load_workspace ─► parse_services ─► parse_manifests │
-│                                          │           │
-│                                    validate_schema   │
-│                                      ╱         ╲     │
-│                              fix_errors    commit_graph
-└──────────────────────────────────┬───────────────────┘
-                                   │
-                    ┌──────────────┼──────────────┐
-                    ▼              ▼              ▼
-                 Neo4j          Kafka          Gemini
-              (Knowledge      (Event Bus)     (LLM Entity
-               Graph)                        Extraction)
+┌──────────────────────────────────────────────────────────────┐
+│                      LangGraph Orchestrator                   │
+│                                                               │
+│  load_workspace ─► parse_source_ast ─► enrich_with_llm       │
+│                                             │                 │
+│                                       parse_manifests         │
+│                                             │                 │
+│                                       validate_schema         │
+│                                         ╱         ╲           │
+│                                 fix_errors    commit_graph    │
+└─────────────────────────────────────┬────────────────────────┘
+                                      │
+                       ┌──────────────┼──────────────┐
+                       ▼              ▼              ▼
+                    Neo4j          Kafka          Gemini
+                 (Knowledge      (Event Bus)     (LLM Entity
+                  Graph)                        Extraction)
 ```
 
 **Extraction pipeline** — LLM-powered structured extraction from `.go` and `.py` source files into typed Pydantic models (`ServiceNode`, `CallsEdge`, etc.), committed as Neo4j nodes and relationships.
@@ -28,7 +30,7 @@ A production-grade GraphRAG system that analyzes distributed systems by building
 
 **Access Control** — Zanzibar-inspired permission filtering: `SecurityPrincipal` resolved from request headers, `CypherPermissionFilter` injects ACL `WHERE` clauses into all Cypher queries at query-time. Permission metadata (`team_owner`, `namespace_acl`) persisted on graph nodes at ingestion-time.
 
-**Observability** — OpenTelemetry distributed tracing across the full pipeline: FastAPI auto-instrumentation, manual spans on all 12 LangGraph DAG nodes, Go spans on Kafka poll/dispatch/process/DLQ/commit, trace context propagation via `traceparent` headers across Go-HTTP-Python boundary.
+**Observability** — OpenTelemetry distributed tracing across the full pipeline: FastAPI auto-instrumentation, manual spans on all 14 LangGraph DAG nodes, Go spans on Kafka poll/dispatch/process/DLQ/commit, trace context propagation via `traceparent` headers across Go-HTTP-Python boundary.
 
 ## Tech Stack
 
@@ -46,28 +48,47 @@ A production-grade GraphRAG system that analyzes distributed systems by building
 ```
 graphrag-architect/
 ├── orchestrator/                        # Python LLM extraction pipeline
-│   ├── app/
+│   ├── app/                             # 62 Python modules
 │   │   ├── access_control.py            # SecurityPrincipal, CypherPermissionFilter (FR-7)
-│   │   ├── config.py                    # ExtractionConfig, Neo4jConfig
+│   │   ├── agentic_traversal.py         # Incremental 1-hop LLM-guided traversal (FR-15)
+│   │   ├── ast_extraction.py            # Go/Python AST parsing for code extraction
+│   │   ├── circuit_breaker.py           # Three-state circuit breaker (NFR-6)
+│   │   ├── config.py                    # ExtractionConfig, Neo4jConfig, RedisConfig
+│   │   ├── context_manager.py           # Token budget management for synthesis (FR-11)
+│   │   ├── cypher_sandbox.py            # Cypher query sandboxing
+│   │   ├── cypher_validator.py          # Read-only Cypher query validation
+│   │   ├── entity_resolver.py           # Fuzzy cross-repo name deduplication
 │   │   ├── extraction_models.py         # Pydantic schemas (ServiceNode, CallsEdge, etc.)
-│   │   ├── graph_builder.py             # LangGraph ingestion DAG (6 nodes)
+│   │   ├── graph_builder.py             # LangGraph ingestion DAG (7 nodes)
+│   │   ├── graph_embeddings.py          # Node2Vec structural embeddings (FR-17)
 │   │   ├── ingest_models.py             # IngestRequest/Response Pydantic models
 │   │   ├── llm_extraction.py            # ServiceExtractor (filter, batch, extract)
 │   │   ├── main.py                      # FastAPI endpoints (/health, /ingest, /query)
 │   │   ├── manifest_parser.py           # K8s + Kafka YAML parsing
 │   │   ├── neo4j_client.py              # Cypher MERGE operations
+│   │   ├── neo4j_pool.py               # Connection pooling for Neo4j
+│   │   ├── node_sink.py                # IncrementalNodeSink with namespace partitioning
 │   │   ├── observability.py             # OpenTelemetry TracerProvider + metrics (FR-8)
 │   │   ├── query_classifier.py          # Keyword-based query complexity classifier (FR-4)
-│   │   ├── query_engine.py              # LangGraph query DAG (6 nodes) (FR-4)
+│   │   ├── query_engine.py              # LangGraph query DAG (7 nodes) (FR-4)
 │   │   ├── query_models.py              # QueryRequest/Response/State models (FR-4)
+│   │   ├── query_templates.py           # Parameterized Cypher template catalog (FR-10)
+│   │   ├── rag_evaluator.py             # Faithfulness/groundedness evaluation (FR-12)
+│   │   ├── reranker.py                  # Cross-encoder/BM25 reranking (FR-11)
 │   │   ├── schema_validation.py         # Pydantic validation + correction loop
+│   │   ├── semantic_partitioner.py      # Leiden community detection partitioning (FR-18)
+│   │   ├── tenant_isolation.py          # TenantAwareDriverPool (FR-9)
+│   │   ├── vector_store.py              # VectorStore protocol + Neo4j/Qdrant (FR-13)
 │   │   ├── workspace_loader.py          # Filesystem workspace scanner
-│   │   ├── circuit_breaker.py           # Three-state circuit breaker (NFR-6)
 │   │   └── schema_init.cypher           # Neo4j constraints and indexes
-│   ├── tests/
+│   │   # ... plus 30 additional modules (guardrails, caching, audit, etc.)
+│   ├── tests/                           # 117 test files, 1542 tests
 │   │   ├── conftest.py                  # Shared fixtures (query state, mock helpers)
 │   │   ├── test_access_control.py
+│   │   ├── test_agentic_traversal.py
 │   │   ├── test_circuit_breaker.py
+│   │   ├── test_graph_builder.py
+│   │   ├── test_graph_embeddings.py
 │   │   ├── test_ingest_api.py
 │   │   ├── test_integration.py
 │   │   ├── test_manifest_parser.py
@@ -76,26 +97,43 @@ graphrag-architect/
 │   │   ├── test_query_api.py
 │   │   ├── test_query_classifier.py
 │   │   ├── test_query_engine.py
+│   │   ├── test_query_templates.py
+│   │   ├── test_rag_evaluator.py
 │   │   ├── test_schema_validation.py
+│   │   ├── test_semantic_partitioner.py
 │   │   ├── test_service_extractor.py
-│   │   └── test_workspace_loader.py
+│   │   ├── test_tenant_isolation.py
+│   │   ├── test_vector_store.py
+│   │   ├── test_workspace_loader.py
+│   │   └── ... (96 more test files)
 │   └── requirements.txt
 ├── workers/                             # Go high-throughput ingestion
 │   └── ingestion/
 │       ├── cmd/                          # Entry point + Kafka wiring
 │       │   ├── main.go
-│       │   └── kafka.go
+│       │   ├── kafka.go
+│       │   └── dlq_sink.go
 │       ├── internal/
+│       │   ├── blobstore/               # Blob storage abstraction
 │       │   ├── consumer/consumer.go      # JobSource interface + Consumer loop
-│       │   ├── domain/job.go             # Job, Result value types
-│       │   ├── processor/                # DocumentProcessor interface + ForwardingProcessor
-│       │   ├── dispatcher/               # Worker pool (dispatcher + tests)
-│       │   ├── dlq/                      # Dead Letter Queue (handler + tests)
+│       │   ├── dedup/                   # Content-hash deduplication
+│       │   ├── dispatcher/              # Worker pool (dispatcher + tests)
+│       │   ├── dlq/                     # Dead Letter Queue (handler + file sink)
+│       │   ├── domain/job.go            # Job, Result value types
+│       │   ├── healthz/                 # Liveness/readiness probes
 │       │   ├── metrics/                 # Prometheus metrics (consumer lag, batch duration, DLQ, jobs)
-│       │   └── telemetry/               # OpenTelemetry TracerProvider + span helpers (FR-8)
+│       │   ├── outbox/                  # Transactional outbox pattern
+│       │   ├── parser/                  # Go/Python file AST parsing
+│       │   ├── processor/              # DocumentProcessor interface (5 implementations)
+│       │   ├── ratelimit/              # Token-bucket rate limiting
+│       │   └── telemetry/              # OpenTelemetry TracerProvider + span helpers (FR-8)
 │       └── go.mod
 ├── infrastructure/
 │   ├── docker-compose.yml               # Neo4j + Kafka
+│   ├── helm/graphrag/                   # Helm chart for production deployment
+│   │   ├── Chart.yaml
+│   │   ├── values.yaml
+│   │   └── templates/
 │   └── k8s/                             # Kubernetes deployment manifests
 │       ├── namespace.yaml
 │       ├── configmap.yaml
