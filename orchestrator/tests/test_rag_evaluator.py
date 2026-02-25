@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from orchestrator.app.config import RAGEvalConfig
 from orchestrator.app.rag_evaluator import (
     EvaluationResult,
+    EvaluationStore,
     RAGEvaluator,
+    RedisEvaluationStore,
     RelevanceScore,
     _compute_faithfulness,
     _compute_groundedness,
     _extract_entity_names_from_context,
     _extract_entity_names_from_text,
+    create_evaluation_store,
     evaluate_relevance,
 )
 
@@ -321,3 +324,80 @@ class TestRAGEvalConfig:
             cfg = RAGEvalConfig.from_env()
             assert cfg.low_relevance_threshold == 0.6
             assert cfg.enable_evaluation is False
+
+
+class TestRedisEvaluationStore:
+    @pytest.mark.asyncio
+    async def test_put_writes_to_redis_and_local(self) -> None:
+        mock_redis = AsyncMock()
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            store = RedisEvaluationStore(redis_url="redis://localhost:6379", ttl_seconds=120)
+        data = {"faithfulness": 0.9, "groundedness": 0.8}
+        await store.put("q1", data)
+        assert store._local.get("q1") == data
+        mock_redis.setex.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_get_local_hit_avoids_redis(self) -> None:
+        mock_redis = AsyncMock()
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            store = RedisEvaluationStore(redis_url="redis://localhost:6379")
+        store._local.put("q2", {"score": 0.7})
+        result = await store.get("q2")
+        assert result == {"score": 0.7}
+        mock_redis.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_falls_back_to_redis_on_local_miss(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.get = AsyncMock(return_value='{"score": 0.5}')
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            store = RedisEvaluationStore(redis_url="redis://localhost:6379")
+        result = await store.get("q3")
+        assert result == {"score": 0.5}
+        assert store._local.get("q3") == {"score": 0.5}
+
+    @pytest.mark.asyncio
+    async def test_get_returns_none_on_full_miss(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.get = AsyncMock(return_value=None)
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            store = RedisEvaluationStore(redis_url="redis://localhost:6379")
+        result = await store.get("missing")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_redis_get_error_falls_back_gracefully(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.get = AsyncMock(side_effect=ConnectionError("down"))
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            store = RedisEvaluationStore(redis_url="redis://localhost:6379")
+        result = await store.get("q4")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_redis_put_error_still_writes_local(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.setex = AsyncMock(side_effect=ConnectionError("down"))
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            store = RedisEvaluationStore(redis_url="redis://localhost:6379")
+        data = {"score": 0.6}
+        await store.put("q5", data)
+        assert store._local.get("q5") == data
+
+
+class TestCreateEvaluationStore:
+    def test_returns_redis_store_when_url_set(self) -> None:
+        mock_redis = AsyncMock()
+        with patch("redis.asyncio.from_url", return_value=mock_redis), \
+             patch.dict("os.environ", {"REDIS_URL": "redis://localhost:6379"}):
+            store = create_evaluation_store()
+        assert isinstance(store, RedisEvaluationStore)
+
+    def test_returns_in_memory_when_no_url(self) -> None:
+        import os
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("REDIS_URL", None)
+            store = create_evaluation_store()
+        assert isinstance(store, EvaluationStore)
+        assert not isinstance(store, RedisEvaluationStore)
