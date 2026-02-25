@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/blobstore"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/consumer"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dispatcher"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dlq"
@@ -71,8 +72,12 @@ func main() {
 			log.Fatalf("create kafka producer for parsed topic: %v", prodErr)
 		}
 		defer producer.Close()
-		fp = processor.NewKafkaForwardingProcessor(producer, parsedTopic)
-		log.Printf("processor mode: kafka (topic=%s)", parsedTopic)
+		blobBucket := envOrDefault("BLOB_BUCKET", "graphrag-ingestion")
+		blobThreshold := envIntOrDefault("BLOB_THRESHOLD", processor.DefaultBlobThreshold)
+		store := blobstore.NewInMemoryBlobStore()
+		fp = processor.NewBlobForwardingProcessor(producer, store, parsedTopic, blobBucket, blobThreshold)
+		log.Printf("processor mode: kafka with blob offload (topic=%s, bucket=%s, threshold=%d)",
+			parsedTopic, blobBucket, blobThreshold)
 	} else {
 		var fpOpts []processor.ForwardingOption
 		if authToken := os.Getenv("AUTH_TOKEN"); authToken != "" {

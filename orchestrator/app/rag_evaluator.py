@@ -319,7 +319,7 @@ class RedisEvaluationStore:
                 value = json.loads(raw)
                 self._local.put(query_id, value)
                 return value
-        except Exception:  # pylint: disable=broad-except
+        except Exception:
             logger.debug("Redis eval-store get failed, falling back to local miss")
         return None
 
@@ -328,7 +328,7 @@ class RedisEvaluationStore:
         try:
             raw = json.dumps(result, default=str)
             await self._redis.setex(self._rkey(query_id), self._ttl, raw)
-        except Exception:  # pylint: disable=broad-except
+        except Exception:
             logger.debug("Redis eval-store put failed, local still updated")
 
 
