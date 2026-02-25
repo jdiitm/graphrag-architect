@@ -185,6 +185,68 @@ class TestCreateSubgraphCache:
         assert isinstance(cache, SubgraphCache)
 
 
+class TestRedisInvalidateAllPrefixScoped:
+    @pytest.mark.asyncio
+    async def test_invalidate_all_does_not_call_flushdb(self) -> None:
+        from orchestrator.app.subgraph_cache import RedisSubgraphCache
+        mock_redis = AsyncMock()
+        mock_redis.scan = AsyncMock(return_value=(0, []))
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            cache = RedisSubgraphCache(redis_url="redis://localhost:6379")
+        await cache.invalidate_all()
+        mock_redis.flushdb.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_invalidate_all_scans_with_prefix(self) -> None:
+        from orchestrator.app.subgraph_cache import RedisSubgraphCache
+        mock_redis = AsyncMock()
+        prefix = "graphrag:sgcache:"
+        matching_keys = [f"{prefix}key1".encode(), f"{prefix}key2".encode()]
+        mock_redis.scan = AsyncMock(return_value=(0, matching_keys))
+        mock_redis.delete = AsyncMock()
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            cache = RedisSubgraphCache(
+                redis_url="redis://localhost:6379",
+                key_prefix=prefix,
+            )
+        await cache.invalidate_all()
+        mock_redis.scan.assert_called()
+        scan_kwargs = mock_redis.scan.call_args
+        assert prefix in str(scan_kwargs)
+        mock_redis.delete.assert_called_once_with(*matching_keys)
+
+    @pytest.mark.asyncio
+    async def test_invalidate_all_handles_multiple_scan_pages(self) -> None:
+        from orchestrator.app.subgraph_cache import RedisSubgraphCache
+        mock_redis = AsyncMock()
+        prefix = "graphrag:sgcache:"
+        batch1 = [f"{prefix}a".encode()]
+        batch2 = [f"{prefix}b".encode()]
+        mock_redis.scan = AsyncMock(
+            side_effect=[(42, batch1), (0, batch2)]
+        )
+        mock_redis.delete = AsyncMock()
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            cache = RedisSubgraphCache(
+                redis_url="redis://localhost:6379",
+                key_prefix=prefix,
+            )
+        await cache.invalidate_all()
+        assert mock_redis.scan.call_count == 2
+        assert mock_redis.delete.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_invalidate_all_clears_l1_even_on_redis_error(self) -> None:
+        from orchestrator.app.subgraph_cache import RedisSubgraphCache
+        mock_redis = AsyncMock()
+        mock_redis.scan = AsyncMock(side_effect=ConnectionError("redis down"))
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            cache = RedisSubgraphCache(redis_url="redis://localhost:6379")
+        cache._l1.put("k1", [{"a": 1}])
+        await cache.invalidate_all()
+        assert cache._l1.get("k1") is None
+
+
 class TestRedisSubgraphCache:
     @pytest.mark.asyncio
     async def test_l1_hit_avoids_redis(self) -> None:

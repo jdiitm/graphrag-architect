@@ -178,12 +178,15 @@ class RedisConfig:
 class RAGEvalConfig:
     low_relevance_threshold: float = 0.3
     enable_evaluation: bool = True
+    use_llm_judge: bool = True
 
     @classmethod
     def from_env(cls) -> RAGEvalConfig:
         threshold_str = os.environ.get("RAG_LOW_RELEVANCE_THRESHOLD", "0.3")
         enable_str = os.environ.get("RAG_ENABLE_EVALUATION", "true").lower()
+        llm_judge_str = os.environ.get("RAG_USE_LLM_JUDGE", "true").lower()
         return cls(
             low_relevance_threshold=float(threshold_str),
             enable_evaluation=enable_str in ("true", "1", "yes"),
+            use_llm_judge=llm_judge_str in ("true", "1", "yes"),
         )

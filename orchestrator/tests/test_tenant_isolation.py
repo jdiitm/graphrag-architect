@@ -17,7 +17,7 @@ class TestTenantConfig:
 
     def test_defaults(self) -> None:
         cfg = TenantConfig(tenant_id="acme")
-        assert cfg.isolation_mode == IsolationMode.LOGICAL
+        assert cfg.isolation_mode == IsolationMode.PHYSICAL
         assert cfg.database_name == "neo4j"
         assert cfg.max_concurrent_queries == 50
 
@@ -65,7 +65,7 @@ class TestTenantRegistry:
 
 class TestTenantRouterInline:
 
-    def test_returns_default_database_for_logical(self) -> None:
+    def test_returns_default_database_for_physical_default(self) -> None:
         registry = TenantRegistry()
         registry.register(TenantConfig(tenant_id="acme"))
         router = TenantRouter(registry)
@@ -100,7 +100,7 @@ class TestTenantAwarePoolIntegration:
         assert cfg is not None
         assert cfg.database_name == "bigcorp_db"
 
-    def test_get_database_for_logical_tenant_uses_default(self) -> None:
+    def test_get_database_for_default_tenant_uses_default(self) -> None:
         registry = TenantRegistry()
         registry.register(TenantConfig(tenant_id="smallco"))
         cfg = registry.get("smallco")
@@ -119,7 +119,7 @@ class TestTenantAwarePoolIntegration:
         assert resolve_database_for_tenant(registry, "acme") == "acme_db"
         assert resolve_database_for_tenant(registry, "unknown") == "neo4j"
 
-    def test_pool_resolves_logical_to_default(self) -> None:
+    def test_pool_resolves_default_to_default_db(self) -> None:
         from orchestrator.app.neo4j_pool import resolve_database_for_tenant
 
         registry = TenantRegistry()

@@ -48,7 +48,7 @@ from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
 from orchestrator.app.observability import QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
-from orchestrator.app.rag_evaluator import EvaluationStore, RAGEvaluator
+from orchestrator.app.rag_evaluator import EvaluationStore, LLMEvaluator, RAGEvaluator
 
 try:
     import openai as _openai_module
@@ -70,6 +70,7 @@ _TEMPLATE_CATALOG = TemplateCatalog()
 _TEMPLATE_REGISTRY = TemplateHashRegistry(_TEMPLATE_CATALOG)
 _SANDBOX = SandboxedQueryExecutor(registry=_TEMPLATE_REGISTRY)
 _SUBGRAPH_CACHE = SubgraphCache(maxsize=default_cache_maxsize())
+_SEMANTIC_CACHE = None
 
 _VS_CFG = VectorStoreConfig.from_env()
 _VECTOR_STORE = create_vector_store(
@@ -214,6 +215,19 @@ def _build_llm() -> ChatGoogleGenerativeAI:
         model=config.model_name,
         google_api_key=config.google_api_key,
     )
+
+
+def _build_llm_judge_fn() -> Optional[Any]:
+    try:
+        llm = _build_llm()
+    except (KeyError, Exception):
+        return None
+
+    async def _judge(prompt: str) -> str:
+        response = await llm.ainvoke(prompt)
+        return response.content.strip()
+
+    return _judge
 
 
 async def _raw_llm_synthesize(
@@ -607,6 +621,62 @@ def get_eval_store() -> EvaluationStore:
     return _EVAL_STORE
 
 
+def _collect_context_embeddings(state: dict) -> List[List[float]]:
+    embeddings: List[List[float]] = []
+    for source in state.get("sources", []):
+        if isinstance(source, dict):
+            emb = source.get("embedding")
+            if isinstance(emb, list):
+                embeddings.append(emb)
+    return embeddings
+
+
+def _classify_quality(score: float, threshold: float) -> str:
+    if score >= 0.7:
+        return "high"
+    if score < threshold:
+        return "low"
+    return "adequate"
+
+
+async def _select_and_run_evaluator(
+    eval_config: RAGEvalConfig,
+    state: dict,
+    query_embedding: List[float],
+    context_embeddings: List[List[float]],
+) -> Tuple[float, str]:
+    judge_fn = _build_llm_judge_fn() if eval_config.use_llm_judge else None
+
+    if judge_fn is not None:
+        llm_result = await LLMEvaluator(judge_fn=judge_fn).evaluate(
+            query=state["query"],
+            answer=state.get("answer", ""),
+            sources=state.get("sources", []),
+            query_embedding=query_embedding,
+            context_embeddings=context_embeddings or None,
+        )
+        quality = _classify_quality(llm_result.score, eval_config.low_relevance_threshold)
+        _query_logger.info(
+            "RAG evaluation (LLM judge): score=%.3f quality=%s contexts=%d",
+            llm_result.score, quality, llm_result.context_count,
+        )
+        return llm_result.score, quality
+
+    evaluator = RAGEvaluator(low_relevance_threshold=eval_config.low_relevance_threshold)
+    result = evaluator.evaluate(
+        query=state["query"],
+        query_embedding=query_embedding,
+        context_embeddings=context_embeddings,
+        retrieval_path=state.get("retrieval_path", "vector"),
+    )
+    quality = _classify_quality(result.score, eval_config.low_relevance_threshold)
+    _query_logger.info(
+        "RAG evaluation: score=%.3f quality=%s path=%s contexts=%d",
+        result.score, quality, result.retrieval_path, result.context_count,
+    )
+    return result.score, quality
+
+
 async def _run_background_evaluation(
     query_id: str,
     state: dict,
@@ -625,35 +695,12 @@ async def _run_background_evaluation(
                 })
                 return
 
-            context_embeddings: List[List[float]] = []
-            for source in state.get("sources", []):
-                if isinstance(source, dict):
-                    emb = source.get("embedding")
-                    if isinstance(emb, list):
-                        context_embeddings.append(emb)
-
-            evaluator = RAGEvaluator(
-                low_relevance_threshold=eval_config.low_relevance_threshold,
-            )
-            result = evaluator.evaluate(
-                query=state["query"],
-                query_embedding=query_embedding,
-                context_embeddings=context_embeddings,
-                retrieval_path=state.get("retrieval_path", "vector"),
-            )
-            quality = "low" if evaluator.is_low_relevance(result) else "adequate"
-            if result.score >= 0.7:
-                quality = "high"
-
-            _query_logger.info(
-                "RAG evaluation: score=%.3f quality=%s path=%s contexts=%d",
-                result.score,
-                quality,
-                result.retrieval_path,
-                result.context_count,
+            context_embeddings = _collect_context_embeddings(state)
+            score, quality = await _select_and_run_evaluator(
+                eval_config, state, query_embedding, context_embeddings,
             )
             _EVAL_STORE.put(query_id, {
-                "evaluation_score": result.score,
+                "evaluation_score": score,
                 "retrieval_quality": quality,
                 "query_id": query_id,
             })

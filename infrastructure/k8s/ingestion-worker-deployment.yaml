@@ -29,6 +29,9 @@ spec:
           ports:
             - containerPort: 9090
               name: metrics
+          env:
+            - name: PROCESSOR_MODE
+              value: "kafka"
           envFrom:
             - configMapRef:
                 name: graphrag-config

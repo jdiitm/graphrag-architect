@@ -75,6 +75,7 @@ class TestPruneStaleEdges:
         async def _capture_write(fn, **kwargs):
             query = kwargs.get("query", "")
             executed_queries.append(query)
+            return 0, []
 
         mock_session.execute_write = _capture_write
 
@@ -114,6 +115,7 @@ class TestScopedTombstoning:
         async def _capture_write(fn, **kwargs):
             query = kwargs.get("query", "")
             executed_queries.append(query)
+            return 0, []
 
         mock_session.execute_write = _capture_write
 
@@ -146,6 +148,7 @@ class TestScopedTombstoning:
         async def _capture_write(fn, **kwargs):
             query = kwargs.get("query", "")
             executed_queries.append(query)
+            return 0, []
 
         mock_session.execute_write = _capture_write
 
@@ -193,7 +196,7 @@ class TestScopedTombstoning:
 
         async def _tracking_prune(self_repo, current_ingestion_id="", max_age_hours=24):
             prune_called["count"] += 1
-            return 0
+            return 0, []
 
         mock_driver = MagicMock()
         mock_driver.close = AsyncMock()

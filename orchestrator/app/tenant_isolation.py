@@ -16,7 +16,7 @@ class IsolationMode(Enum):
 @dataclass(frozen=True)
 class TenantConfig:
     tenant_id: str
-    isolation_mode: IsolationMode = IsolationMode.LOGICAL
+    isolation_mode: IsolationMode = IsolationMode.PHYSICAL
     database_name: str = "neo4j"
     label_prefix: str = ""
     max_concurrent_queries: int = 50
@@ -25,8 +25,18 @@ class TenantConfig:
 @dataclass(frozen=True)
 class TenantContext:
     tenant_id: str
-    isolation_mode: IsolationMode = IsolationMode.LOGICAL
+    isolation_mode: IsolationMode = IsolationMode.PHYSICAL
     database_name: str = "neo4j"
+
+    def __post_init__(self) -> None:
+        if self.isolation_mode == IsolationMode.LOGICAL:
+            logger.warning(
+                "TenantContext for %s uses LOGICAL isolation. "
+                "LOGICAL mode is not recommended for production or "
+                "compliance-sensitive environments (SOC2/FedRAMP). "
+                "Use PHYSICAL isolation with dedicated databases.",
+                self.tenant_id,
+            )
 
     @classmethod
     def from_config(cls, config: TenantConfig) -> TenantContext:

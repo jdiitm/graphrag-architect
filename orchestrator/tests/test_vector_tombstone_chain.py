@@ -1,0 +1,187 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from orchestrator.app.extraction_models import CallsEdge, ServiceNode
+
+
+_ENV_VARS = {
+    "NEO4J_PASSWORD": "test",
+    "NEO4J_URI": "bolt://localhost:7687",
+    "GOOGLE_API_KEY": "test-key",
+}
+
+
+def _make_services(count: int) -> List[ServiceNode]:
+    return [
+        ServiceNode(
+            id=f"svc-{i}", name=f"service-{i}", language="go",
+            framework="gin", opentelemetry_enabled=False, confidence=1.0,
+            tenant_id="test-tenant",
+        )
+        for i in range(count)
+    ]
+
+
+class TestTombstoneReturnsNodeIds:
+
+    @pytest.mark.asyncio
+    async def test_tombstone_stale_edges_returns_affected_ids(self) -> None:
+        from orchestrator.app.neo4j_client import GraphRepository
+
+        mock_session = AsyncMock()
+
+        async def _fake_write(fn, **kwargs):
+            return 3, ["svc-old-1", "svc-old-2", "svc-old-3"]
+
+        mock_session.execute_write = _fake_write
+
+        mock_driver = MagicMock()
+
+        @asynccontextmanager
+        async def session_ctx(**kwargs):
+            yield mock_session
+
+        mock_driver.session = session_ctx
+
+        repo = GraphRepository(mock_driver)
+        count, ids = await repo.tombstone_stale_edges("run-new")
+
+        assert count >= 0
+        assert isinstance(ids, list)
+
+    @pytest.mark.asyncio
+    async def test_prune_stale_edges_returns_tuple(self) -> None:
+        from orchestrator.app.neo4j_client import GraphRepository
+
+        mock_session = AsyncMock()
+
+        async def _fake_write(fn, **kwargs):
+            return 0, []
+
+        mock_session.execute_write = _fake_write
+
+        mock_driver = MagicMock()
+
+        @asynccontextmanager
+        async def session_ctx(**kwargs):
+            yield mock_session
+
+        mock_driver.session = session_ctx
+
+        repo = GraphRepository(mock_driver)
+        result = await repo.prune_stale_edges("run-123")
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        count, ids = result
+        assert isinstance(count, int)
+        assert isinstance(ids, list)
+
+
+class TestVectorStoreCleanupOnPrune:
+
+    @pytest.mark.asyncio
+    async def test_commit_calls_vector_delete_after_prune(self) -> None:
+        from orchestrator.app.graph_builder import commit_to_neo4j
+
+        vector_delete_calls: List[tuple] = []
+
+        async def _tracking_commit(self_repo, entities):
+            pass
+
+        async def _tracking_prune(self_repo, current_ingestion_id="", max_age_hours=24):
+            return 2, ["svc-stale-1", "svc-stale-2"]
+
+        async def _tracking_vector_delete(collection, ids):
+            vector_delete_calls.append((collection, ids))
+            return len(ids)
+
+        mock_driver = MagicMock()
+        mock_driver.close = AsyncMock()
+        entities = _make_services(3)
+
+        mock_vector_store = AsyncMock()
+        mock_vector_store.delete = _tracking_vector_delete
+
+        with (
+            patch.dict("os.environ", _ENV_VARS),
+            patch(
+                "orchestrator.app.graph_builder.get_driver",
+                return_value=mock_driver,
+            ),
+            patch(
+                "orchestrator.app.neo4j_client.GraphRepository.commit_topology",
+                _tracking_commit,
+            ),
+            patch(
+                "orchestrator.app.neo4j_client.GraphRepository.prune_stale_edges",
+                _tracking_prune,
+            ),
+            patch(
+                "orchestrator.app.graph_builder.get_vector_store",
+                return_value=mock_vector_store,
+            ),
+        ):
+            result = await commit_to_neo4j({"extracted_nodes": entities})
+
+        assert result["commit_status"] == "success"
+        assert len(vector_delete_calls) >= 1, (
+            "commit_to_neo4j must call VectorStore.delete after prune_stale_edges "
+            "returns tombstoned node IDs"
+        )
+        deleted_ids = vector_delete_calls[0][1]
+        assert "svc-stale-1" in deleted_ids
+        assert "svc-stale-2" in deleted_ids
+
+    @pytest.mark.asyncio
+    async def test_commit_skips_vector_delete_when_no_pruned_ids(self) -> None:
+        from orchestrator.app.graph_builder import commit_to_neo4j
+
+        vector_delete_calls: List[tuple] = []
+
+        async def _tracking_commit(self_repo, entities):
+            pass
+
+        async def _tracking_prune(self_repo, current_ingestion_id="", max_age_hours=24):
+            return 0, []
+
+        async def _tracking_vector_delete(collection, ids):
+            vector_delete_calls.append((collection, ids))
+            return 0
+
+        mock_driver = MagicMock()
+        mock_driver.close = AsyncMock()
+        entities = _make_services(1)
+
+        mock_vector_store = AsyncMock()
+        mock_vector_store.delete = _tracking_vector_delete
+
+        with (
+            patch.dict("os.environ", _ENV_VARS),
+            patch(
+                "orchestrator.app.graph_builder.get_driver",
+                return_value=mock_driver,
+            ),
+            patch(
+                "orchestrator.app.neo4j_client.GraphRepository.commit_topology",
+                _tracking_commit,
+            ),
+            patch(
+                "orchestrator.app.neo4j_client.GraphRepository.prune_stale_edges",
+                _tracking_prune,
+            ),
+            patch(
+                "orchestrator.app.graph_builder.get_vector_store",
+                return_value=mock_vector_store,
+            ),
+        ):
+            result = await commit_to_neo4j({"extracted_nodes": entities})
+
+        assert result["commit_status"] == "success"
+        assert len(vector_delete_calls) == 0, (
+            "commit_to_neo4j must NOT call VectorStore.delete when no IDs were pruned"
+        )
