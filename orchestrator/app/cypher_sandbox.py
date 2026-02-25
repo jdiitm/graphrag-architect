@@ -6,6 +6,12 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Optional
 
+from orchestrator.app.cypher_tokenizer import (
+    TokenType,
+    tokenize_cypher,
+    reconstruct_cypher,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +35,13 @@ def _normalize_cypher(cypher: str) -> str:
 def _hash_cypher(cypher: str) -> str:
     normalized = _normalize_cypher(cypher)
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _strip_comments(cypher: str) -> str:
+    tokens = tokenize_cypher(cypher)
+    return reconstruct_cypher(
+        [t for t in tokens if t.token_type != TokenType.COMMENT]
+    )
 
 
 class TemplateHashRegistry:
@@ -66,9 +79,10 @@ class SandboxedQueryExecutor:
                 return f"LIMIT {self._config.max_results}"
             return match.group(0)
 
-        if _LIMIT_PATTERN.search(cypher):
-            return _LIMIT_PATTERN.sub(_cap_limit, cypher)
-        return f"{cypher.rstrip().rstrip(';')} LIMIT {self._config.max_results}"
+        cleaned = _strip_comments(cypher)
+        if _LIMIT_PATTERN.search(cleaned):
+            return _LIMIT_PATTERN.sub(_cap_limit, cleaned)
+        return f"{cleaned.rstrip().rstrip(';')} LIMIT {self._config.max_results}"
 
     def validate(self, cypher: str) -> None:
         if self._registry is not None and not self._registry.is_allowed(cypher):

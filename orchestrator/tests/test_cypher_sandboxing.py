@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from orchestrator.app.cypher_sandbox import SandboxedQueryExecutor, CypherSandboxConfig
+from orchestrator.app.cypher_tokenizer import TokenType, tokenize_cypher
 
 
 class TestLimitInjection:
@@ -142,6 +143,95 @@ class TestTimeoutEnforcement:
     def test_default_timeout(self) -> None:
         config = CypherSandboxConfig()
         assert config.query_timeout_seconds > 0
+
+
+class TestCommentBypassDefeatTests:
+
+    def test_line_comment_limit_bypass(self) -> None:
+        config = CypherSandboxConfig(max_results=1000)
+        executor = SandboxedQueryExecutor(config)
+        cypher = "MATCH (n) RETURN n // LIMIT 10"
+        result = executor.inject_limit(cypher)
+        effective_limits = re.findall(
+            r"(?<!//)(?<!/\*)\bLIMIT\s+(\d+)", result, re.IGNORECASE,
+        )
+        assert len(effective_limits) >= 1, (
+            "A commented-out LIMIT must not suppress real limit injection. "
+            f"Got: {result}"
+        )
+        for val in effective_limits:
+            assert int(val) <= 1000
+
+    def test_block_comment_limit_bypass(self) -> None:
+        config = CypherSandboxConfig(max_results=500)
+        executor = SandboxedQueryExecutor(config)
+        cypher = "MATCH (n) RETURN n /* LIMIT 10 */"
+        result = executor.inject_limit(cypher)
+        tokens = tokenize_cypher(result)
+        real_limits = [
+            t for t in tokens
+            if t.token_type == TokenType.KEYWORD
+            and t.value.upper() == "LIMIT"
+        ]
+        assert len(real_limits) >= 1, (
+            "A block-commented LIMIT must not suppress real limit injection. "
+            f"Got: {result}"
+        )
+
+    def test_real_limit_preserved_alongside_line_comment(self) -> None:
+        config = CypherSandboxConfig(max_results=1000)
+        executor = SandboxedQueryExecutor(config)
+        cypher = "MATCH (n) RETURN n LIMIT 5 // some comment"
+        result = executor.inject_limit(cypher)
+        tokens = tokenize_cypher(result)
+        real_limits = [
+            t for t in tokens
+            if t.token_type == TokenType.KEYWORD
+            and t.value.upper() == "LIMIT"
+        ]
+        assert len(real_limits) >= 1, (
+            "Real LIMIT must be preserved when a line comment follows. "
+            f"Got: {result}"
+        )
+
+    def test_only_comment_limit_injects_real_limit(self) -> None:
+        config = CypherSandboxConfig(max_results=200)
+        executor = SandboxedQueryExecutor(config)
+        cypher = "MATCH (n) RETURN n // LIMIT 999999"
+        result = executor.inject_limit(cypher)
+        tokens = tokenize_cypher(result)
+        non_comment_tokens = [
+            t for t in tokens if t.token_type != TokenType.COMMENT
+        ]
+        reconstructed = "".join(t.value for t in non_comment_tokens)
+        effective_limits = re.findall(
+            r"\bLIMIT\s+(\d+)", reconstructed, re.IGNORECASE,
+        )
+        assert len(effective_limits) >= 1, (
+            "When only a commented LIMIT exists, a real LIMIT must be injected. "
+            f"Got: {result}"
+        )
+        for val in effective_limits:
+            assert int(val) <= 200, (
+                f"Injected LIMIT must respect max_results (200), got {val}"
+            )
+
+    def test_mixed_block_comment_and_real_limit(self) -> None:
+        config = CypherSandboxConfig(max_results=100)
+        executor = SandboxedQueryExecutor(config)
+        cypher = "MATCH (n) /* LIMIT 99999 */ RETURN n LIMIT 50"
+        result = executor.inject_limit(cypher)
+        tokens = tokenize_cypher(result)
+        non_comment_tokens = [
+            t for t in tokens if t.token_type != TokenType.COMMENT
+        ]
+        reconstructed = "".join(t.value for t in non_comment_tokens)
+        effective_limits = re.findall(
+            r"\bLIMIT\s+(\d+)", reconstructed, re.IGNORECASE,
+        )
+        assert len(effective_limits) >= 1
+        for val in effective_limits:
+            assert int(val) <= 100
 
 
 class TestSandboxConfig:
