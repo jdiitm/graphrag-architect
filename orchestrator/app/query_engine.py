@@ -432,11 +432,15 @@ async def _try_template_match(
     if template is None:
         return None
     _SANDBOX.validate(template.cypher)
-    acl_cypher, acl_params = _apply_acl(template.cypher, state)
     tenant_id = state.get("tenant_id", "")
-    merged_params = {**tmatch.params, **acl_params, "tenant_id": tenant_id}
+    acl_params = _build_traversal_acl_params(state)
+    merged_params = {
+        **tmatch.params,
+        **acl_params,
+        "tenant_id": tenant_id,
+    }
     records = await _execute_sandboxed_read(
-        driver, acl_cypher, merged_params,
+        driver, template.cypher, merged_params,
     )
     if records is None or not records:
         return None
@@ -556,17 +560,15 @@ async def hybrid_retrieve(state: QueryState) -> dict:
                     template = _TEMPLATE_CATALOG.get(tmatch.template_name)
                     if template is not None:
                         _SANDBOX.validate(template.cypher)
-                        acl_cypher, acl_params = _apply_acl(
-                            template.cypher, state,
-                        )
                         tenant_id = state.get("tenant_id", "")
+                        acl_params = _build_traversal_acl_params(state)
                         merged = {
                             **tmatch.params,
                             **acl_params,
                             "tenant_id": tenant_id,
                         }
                         agg_records = await _execute_sandboxed_read(
-                            driver, acl_cypher, merged,
+                            driver, template.cypher, merged,
                         )
                         return {
                             "candidates": candidates,
