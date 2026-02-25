@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -315,14 +317,178 @@ class QdrantVectorStore:
         ]
 
 
+class QdrantClientPool:
+    def __init__(
+        self,
+        max_size: int = 4,
+        url: str = "http://localhost:6333",
+        api_key: str = "",
+    ) -> None:
+        if max_size < 1:
+            raise ValueError(
+                f"max_size must be >= 1, got {max_size}"
+            )
+        self._max_size = max_size
+        self._url = url
+        self._api_key = api_key
+        self._semaphore = asyncio.Semaphore(max_size)
+        self._idle: deque[Any] = deque()
+        self._active_count = 0
+        self._factory: Callable[[], Any] = self._default_factory
+
+    def _default_factory(self) -> Any:
+        try:
+            from qdrant_client import AsyncQdrantClient
+            return AsyncQdrantClient(
+                url=self._url,
+                api_key=self._api_key or None,
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "qdrant-client is required for QdrantClientPool"
+            ) from exc
+
+    @property
+    def max_size(self) -> int:
+        return self._max_size
+
+    async def acquire(self) -> Any:
+        await self._semaphore.acquire()
+        if self._idle:
+            client = self._idle.popleft()
+        else:
+            client = self._factory()
+        self._active_count += 1
+        return client
+
+    async def release(self, client: Any) -> None:
+        self._active_count -= 1
+        self._idle.append(client)
+        self._semaphore.release()
+
+    def stats(self) -> Dict[str, int]:
+        return {
+            "active": self._active_count,
+            "idle": len(self._idle),
+            "max_size": self._max_size,
+        }
+
+
+class PooledQdrantVectorStore:
+    is_read_replica: bool = True
+
+    def __init__(
+        self,
+        url: str = "http://localhost:6333",
+        api_key: str = "",
+        pool_size: int = 4,
+    ) -> None:
+        self._pool = QdrantClientPool(
+            max_size=pool_size, url=url, api_key=api_key,
+        )
+
+    async def upsert(
+        self, collection: str, vectors: List[VectorRecord],
+    ) -> int:
+        client = await self._pool.acquire()
+        try:
+            from qdrant_client.models import PointStruct
+            points = [
+                PointStruct(
+                    id=record.id,
+                    vector=record.vector,
+                    payload=record.metadata,
+                )
+                for record in vectors
+            ]
+            await client.upsert(collection_name=collection, points=points)
+            return len(vectors)
+        finally:
+            await self._pool.release(client)
+
+    async def search(
+        self,
+        collection: str,
+        query_vector: List[float],
+        limit: int = 10,
+    ) -> List[SearchResult]:
+        client = await self._pool.acquire()
+        try:
+            results = await client.search(
+                collection_name=collection,
+                query_vector=query_vector,
+                limit=limit,
+            )
+            return [
+                SearchResult(
+                    id=str(hit.id),
+                    score=hit.score,
+                    metadata=hit.payload or {},
+                )
+                for hit in results
+            ]
+        finally:
+            await self._pool.release(client)
+
+    async def delete(self, collection: str, ids: List[str]) -> int:
+        client = await self._pool.acquire()
+        try:
+            from qdrant_client.models import PointIdsList
+            await client.delete(
+                collection_name=collection,
+                points_selector=PointIdsList(points=ids),
+            )
+            return len(ids)
+        finally:
+            await self._pool.release(client)
+
+    async def search_with_tenant(
+        self,
+        collection: str,
+        query_vector: List[float],
+        tenant_id: str,
+        limit: int = 10,
+    ) -> List[SearchResult]:
+        client = await self._pool.acquire()
+        try:
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+            query_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="tenant_id",
+                        match=MatchValue(value=tenant_id),
+                    ),
+                ],
+            )
+            results = await client.search(
+                collection_name=collection,
+                query_vector=query_vector,
+                query_filter=query_filter,
+                limit=limit,
+            )
+            return [
+                SearchResult(
+                    id=str(hit.id),
+                    score=hit.score,
+                    metadata=hit.payload or {},
+                )
+                for hit in results
+            ]
+        finally:
+            await self._pool.release(client)
+
+
 def create_vector_store(
     backend: str = "memory",
     url: str = "",
     api_key: str = "",
     driver: Any = None,
+    pool_size: int = 4,
 ) -> Any:
     if backend == "neo4j":
         return Neo4jVectorStore(driver=driver)
     if backend == "qdrant":
-        return QdrantVectorStore(url=url, api_key=api_key)
+        return PooledQdrantVectorStore(
+            url=url, api_key=api_key, pool_size=pool_size,
+        )
     return InMemoryVectorStore()

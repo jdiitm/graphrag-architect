@@ -76,6 +76,7 @@ _SEMANTIC_CACHE = SemanticQueryCache()
 _VS_CFG = VectorStoreConfig.from_env()
 _VECTOR_STORE = create_vector_store(
     backend=_VS_CFG.backend, url=_VS_CFG.qdrant_url, api_key=_VS_CFG.qdrant_api_key,
+    pool_size=_VS_CFG.pool_size,
 )
 
 _VECTOR_COLLECTION = "service_embeddings"

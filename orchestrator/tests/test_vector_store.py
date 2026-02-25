@@ -179,9 +179,9 @@ class TestCreateVectorStore:
         assert isinstance(store, InMemoryVectorStore)
 
     def test_qdrant_backend(self) -> None:
-        from orchestrator.app.vector_store import create_vector_store, QdrantVectorStore
+        from orchestrator.app.vector_store import create_vector_store, PooledQdrantVectorStore
         store = create_vector_store(backend="qdrant", url="http://localhost:6333")
-        assert isinstance(store, QdrantVectorStore)
+        assert isinstance(store, PooledQdrantVectorStore)
 
 
 class TestVectorStoreConfig:
@@ -206,3 +206,75 @@ class TestVectorStoreConfig:
             assert cfg.backend == "qdrant"
             assert cfg.qdrant_url == "http://localhost:6333"
             assert cfg.qdrant_api_key == "secret"
+
+    def test_pool_size_from_env(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"QDRANT_POOL_SIZE": "8"},
+            clear=True,
+        ):
+            cfg = VectorStoreConfig.from_env()
+            assert cfg.pool_size == 8
+
+    def test_pool_size_default(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            cfg = VectorStoreConfig.from_env()
+            assert cfg.pool_size == 4
+
+
+@pytest.mark.asyncio
+class TestQdrantClientPool:
+
+    async def test_pool_respects_max_size(self) -> None:
+        from orchestrator.app.vector_store import QdrantClientPool
+        pool = QdrantClientPool(max_size=2, url="http://localhost:6333")
+        assert pool.max_size == 2
+
+    async def test_pool_acquire_release_cycle(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+        from orchestrator.app.vector_store import QdrantClientPool
+
+        mock_client = MagicMock()
+        pool = QdrantClientPool(max_size=2, url="http://localhost:6333")
+        pool._factory = lambda: mock_client
+
+        client = await pool.acquire()
+        assert client is not None
+        await pool.release(client)
+
+    async def test_pool_stats_tracks_active(self) -> None:
+        from unittest.mock import MagicMock
+        from orchestrator.app.vector_store import QdrantClientPool
+
+        mock_client = MagicMock()
+        pool = QdrantClientPool(max_size=4, url="http://localhost:6333")
+        pool._factory = lambda: mock_client
+
+        stats_before = pool.stats()
+        assert stats_before["active"] == 0
+
+        client = await pool.acquire()
+        stats_during = pool.stats()
+        assert stats_during["active"] == 1
+
+        await pool.release(client)
+        stats_after = pool.stats()
+        assert stats_after["active"] == 0
+
+    async def test_pooled_qdrant_store_delegates_to_pool(self) -> None:
+        from orchestrator.app.vector_store import PooledQdrantVectorStore
+        store = PooledQdrantVectorStore(
+            url="http://localhost:6333",
+            pool_size=4,
+        )
+        assert store._pool.max_size == 4
+
+    async def test_pool_rejects_zero_max_size(self) -> None:
+        from orchestrator.app.vector_store import QdrantClientPool
+        with pytest.raises(ValueError, match="max_size must be >= 1"):
+            QdrantClientPool(max_size=0)
+
+    async def test_pool_rejects_negative_max_size(self) -> None:
+        from orchestrator.app.vector_store import QdrantClientPool
+        with pytest.raises(ValueError, match="max_size must be >= 1"):
+            QdrantClientPool(max_size=-1)

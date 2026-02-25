@@ -79,6 +79,7 @@ def get_vector_store() -> Any:
             backend=vs_cfg.backend,
             url=vs_cfg.qdrant_url,
             api_key=vs_cfg.qdrant_api_key,
+            pool_size=vs_cfg.pool_size,
         )
     return _VectorStoreHolder.value
 
