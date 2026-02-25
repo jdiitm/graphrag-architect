@@ -22,8 +22,84 @@ class CacheStats:
     maxsize: int
 
 
+def _prev_non_ws(tokens: list, idx: int) -> "CypherToken | None":
+    for i in range(idx - 1, -1, -1):
+        if tokens[i].token_type.value != "whitespace":
+            return tokens[i]
+    return None
+
+
+def _next_non_ws(tokens: list, idx: int) -> "CypherToken | None":
+    for i in range(idx + 1, len(tokens)):
+        if tokens[i].token_type.value != "whitespace":
+            return tokens[i]
+    return None
+
+
+def _is_variable_position(tokens: list, idx: int) -> bool:
+    from orchestrator.app.cypher_tokenizer import TokenType
+
+    tok = tokens[idx]
+    prev = _prev_non_ws(tokens, idx)
+    nxt = _next_non_ws(tokens, idx)
+
+    if (
+        prev is not None
+        and prev.token_type == TokenType.PUNCTUATION
+        and prev.value == ":"
+        and prev.brace_depth == 0
+    ):
+        return False
+
+    if (
+        prev is not None
+        and prev.token_type == TokenType.PUNCTUATION
+        and prev.value == "."
+    ):
+        return False
+
+    if (
+        tok.brace_depth > 0
+        and nxt is not None
+        and nxt.token_type == TokenType.PUNCTUATION
+        and nxt.value == ":"
+    ):
+        return False
+
+    if (
+        nxt is not None
+        and nxt.token_type == TokenType.PUNCTUATION
+        and nxt.value == "("
+    ):
+        return False
+
+    return True
+
+
+def _normalize_variable_aliases(cypher: str) -> str:
+    from orchestrator.app.cypher_tokenizer import TokenType, tokenize_cypher
+
+    tokens = tokenize_cypher(cypher)
+    alias_map: dict[str, str] = {}
+    counter = 0
+    result_parts: list[str] = []
+
+    for i, tok in enumerate(tokens):
+        if tok.token_type == TokenType.IDENTIFIER and _is_variable_position(tokens, i):
+            lowered = tok.value.lower()
+            if lowered not in alias_map:
+                alias_map[lowered] = f"_v{counter}"
+                counter += 1
+            result_parts.append(alias_map[lowered])
+        else:
+            result_parts.append(tok.value)
+
+    return "".join(result_parts)
+
+
 def normalize_cypher(query: str) -> str:
-    normalized = query.lower().strip()
+    aliased = _normalize_variable_aliases(query)
+    normalized = aliased.lower().strip()
     normalized = " ".join(normalized.split())
     if normalized.endswith(";"):
         normalized = normalized[:-1].rstrip()

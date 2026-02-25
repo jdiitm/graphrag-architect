@@ -34,3 +34,130 @@ class TestSemanticCacheAsL0:
         removed = cache.invalidate_tenant("tenant-a")
         assert removed == 1
         assert cache.stats().size == 1
+
+
+class TestSemanticCacheQueryEngineIntegration:
+
+    def test_semantic_cache_is_initialized(self) -> None:
+        from orchestrator.app.query_engine import _SEMANTIC_CACHE
+        assert _SEMANTIC_CACHE is not None, (
+            "_SEMANTIC_CACHE must be initialized as a SemanticQueryCache instance"
+        )
+
+    def test_semantic_cache_is_correct_type(self) -> None:
+        from orchestrator.app.query_engine import _SEMANTIC_CACHE
+        assert isinstance(_SEMANTIC_CACHE, SemanticQueryCache)
+
+    @pytest.mark.asyncio
+    async def test_cypher_retrieve_checks_semantic_cache(self) -> None:
+        from orchestrator.app.query_engine import (
+            _SEMANTIC_CACHE,
+            cypher_retrieve,
+        )
+
+        cached_result = {
+            "cypher_query": "cached_template",
+            "cypher_results": [{"cached": True}],
+            "iteration_count": 0,
+        }
+
+        embedding = [0.5] * 128
+        _SEMANTIC_CACHE.store(
+            query="which services call auth",
+            query_embedding=embedding,
+            result=cached_result,
+            tenant_id="",
+        )
+
+        state = {
+            "query": "which services call auth",
+            "complexity": "MULTI_HOP",
+            "max_results": 10,
+            "tenant_id": "",
+            "candidates": [],
+            "cypher_query": "",
+            "cypher_results": [],
+            "iteration_count": 0,
+            "answer": "",
+            "sources": [],
+        }
+
+        with patch(
+            "orchestrator.app.query_engine._embed_query",
+            return_value=embedding,
+        ), patch(
+            "orchestrator.app.query_engine._neo4j_session",
+        ) as mock_neo4j:
+            result = await cypher_retrieve(state)
+
+        assert result.get("cypher_results") == [{"cached": True}], (
+            "Expected cached result from semantic cache but got: "
+            f"{result.get('cypher_results')!r}"
+        )
+        mock_neo4j.assert_not_called()
+
+        _SEMANTIC_CACHE.invalidate_all()
+
+    @pytest.mark.asyncio
+    async def test_semantic_cache_stores_result_on_miss(self) -> None:
+        from orchestrator.app.query_engine import (
+            _SEMANTIC_CACHE,
+            cypher_retrieve,
+        )
+
+        _SEMANTIC_CACHE.invalidate_all()
+        assert _SEMANTIC_CACHE.stats().size == 0, (
+            "Semantic cache should start empty after invalidation"
+        )
+
+        embedding = [0.9] * 128
+        mock_driver = AsyncMock()
+        mock_session = AsyncMock()
+        mock_driver.session.return_value.__aenter__ = AsyncMock(
+            return_value=mock_session,
+        )
+        mock_driver.session.return_value.__aexit__ = AsyncMock(
+            return_value=False,
+        )
+        mock_session.execute_read = AsyncMock(
+            return_value=[{"name": "auth-service", "id": "auth-1"}],
+        )
+
+        state = {
+            "query": "unique store on miss query",
+            "complexity": "MULTI_HOP",
+            "max_results": 10,
+            "tenant_id": "",
+            "candidates": [],
+            "cypher_query": "",
+            "cypher_results": [],
+            "iteration_count": 0,
+            "answer": "",
+            "sources": [],
+        }
+
+        with patch(
+            "orchestrator.app.query_engine._embed_query",
+            return_value=embedding,
+        ), patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._fetch_candidates",
+            return_value=[{"name": "auth-service", "id": "auth-1"}],
+        ), patch(
+            "orchestrator.app.query_engine.run_traversal",
+            return_value=[{"source": "auth", "rel": "CALLS", "target": "db"}],
+        ), patch(
+            "orchestrator.app.query_engine._build_traversal_acl_params",
+            return_value={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+        ):
+            result = await cypher_retrieve(state)
+
+        assert result.get("cypher_results") is not None
+        assert _SEMANTIC_CACHE.stats().size == 1, (
+            "Semantic cache should contain 1 entry after a cache miss triggers "
+            f"store; got size={_SEMANTIC_CACHE.stats().size}"
+        )
+
+        _SEMANTIC_CACHE.invalidate_all()
