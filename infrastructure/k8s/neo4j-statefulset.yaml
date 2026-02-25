@@ -30,6 +30,10 @@ spec:
               containerPort: 7474
             - name: discovery
               containerPort: 5000
+            - name: tx
+              containerPort: 6000
+            - name: routing
+              containerPort: 7688
           env:
             - name: NEO4J_PASSWORD
               valueFrom:
@@ -109,6 +113,12 @@ spec:
     - name: discovery
       port: 5000
       targetPort: discovery
+    - name: tx
+      port: 6000
+      targetPort: tx
+    - name: routing
+      port: 7688
+      targetPort: routing
 ---
 apiVersion: v1
 kind: Service
