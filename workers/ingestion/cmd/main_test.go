@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,9 +43,9 @@ func (s *stubJobSource) Commit(_ context.Context) error { return nil }
 func (s *stubJobSource) Close() {}
 
 func TestEndToEnd_ConsumerDispatcherForwarding(t *testing.T) {
-	var received int
+	var received atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		received++
+		received.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"committed","entities_extracted":1,"errors":[]}`))
 	}))
@@ -105,8 +106,8 @@ func TestEndToEnd_ConsumerDispatcherForwarding(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	cancel()
 
-	if received != 2 {
-		t.Errorf("orchestrator received %d requests, want 2", received)
+	if got := received.Load(); got != 2 {
+		t.Errorf("orchestrator received %d requests, want 2", got)
 	}
 }
 
