@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-ingestion
+  labels:
+    app: graphrag-ingestion
+    chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+spec:
+  replicas: {{ .Values.ingestionWorker.replicas }}
+  selector:
+    matchLabels:
+      app: graphrag-ingestion
+  template:
+    metadata:
+      labels:
+        app: graphrag-ingestion
+    spec:
+      containers:
+        - name: ingestion
+          image: "{{ .Values.ingestionWorker.image.repository }}:{{ .Values.ingestionWorker.image.tag }}"
+          imagePullPolicy: {{ .Values.ingestionWorker.image.pullPolicy }}
+          ports:
+            - containerPort: 8081
+              name: health
+          resources:
+            {{- toYaml .Values.ingestionWorker.resources | nindent 12 }}
+          envFrom:
+            - secretRef:
+                name: {{ .Release.Name }}-secrets
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 15
