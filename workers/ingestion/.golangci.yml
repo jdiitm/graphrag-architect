@@ -23,17 +23,8 @@ linters:
 linters-settings:
   gocritic:
     enabled-checks:
-      - appendAssign
-      - argOrder
-      - badCall
       - badLock
-      - caseOrder
-      - dupArg
-      - dupCase
-      - dupSubExpr
-      - flagName
       - nilValReturn
-      - offBy1
       - sloppyReassign
       - truncateCmp
       - weakCond

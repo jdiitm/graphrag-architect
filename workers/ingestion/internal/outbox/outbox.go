@@ -63,7 +63,7 @@ func (f *FileOutbox) Store(rec Record) error {
 	if err != nil {
 		return fmt.Errorf("marshal outbox record: %w", err)
 	}
-	return os.WriteFile(p, data, 0o644)
+	return os.WriteFile(p, data, 0o600)
 }
 
 func (f *FileOutbox) MarkEmitted(id string) error {
@@ -86,7 +86,7 @@ func (f *FileOutbox) MarkEmitted(id string) error {
 	if err != nil {
 		return fmt.Errorf("marshal updated record: %w", err)
 	}
-	return os.WriteFile(p, updated, 0o644)
+	return os.WriteFile(p, updated, 0o600)
 }
 
 func (f *FileOutbox) PendingOlderThan(age time.Duration) ([]Record, error) {
@@ -99,7 +99,7 @@ func (f *FileOutbox) PendingOlderThan(age time.Duration) ([]Record, error) {
 	}
 
 	cutoff := time.Now().Add(-age)
-	var result []Record
+	result := make([]Record, 0, len(entries))
 
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
