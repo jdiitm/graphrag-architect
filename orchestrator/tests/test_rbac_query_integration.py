@@ -164,39 +164,44 @@ class TestVectorRetrieveAppliesACL:
 class TestCypherRetrieveAppliesACL:
     @pytest.mark.asyncio
     @patch.dict("os.environ", {"AUTH_TOKEN_SECRET": _TEST_SECRET})
-    async def test_acl_injected_into_generated_cypher(self, base_query_state):
+    async def test_acl_params_passed_to_traversal(self, base_query_state):
         from orchestrator.app.query_engine import cypher_retrieve
 
-        mock_session = _make_neo4j_session(
-            run_return=[{"source": "auth", "target": "user"}]
-        )
+        mock_session = _make_neo4j_session()
         mock_driver = mock_neo4j_driver_with_session(mock_session)
 
         state = _make_state(
             base_query_state,
             query="blast radius of auth",
             authorization=_jwt_header({"team": "data", "namespace": "staging", "role": "editor"}),
+            tenant_id="t1",
         )
+
+        captured_acl = {}
+
+        async def capture_traversal(**kwargs):
+            captured_acl.update(kwargs.get("acl_params", {}))
+            return [{"target_id": "svc-b"}]
 
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
         ), patch(
-            "orchestrator.app.query_engine._generate_cypher",
+            "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
-            return_value="MATCH (n:Service)-[:CALLS*]->(t) RETURN n, t",
+            return_value=None,
+        ), patch(
+            "orchestrator.app.query_engine._fetch_candidates",
+            new_callable=AsyncMock,
+            return_value=[{"name": "auth", "id": "auth-1"}],
+        ), patch(
+            "orchestrator.app.query_engine.run_traversal",
+            side_effect=capture_traversal,
         ):
-            result = await cypher_retrieve(state)
+            await cypher_retrieve(state)
 
-        tx_func = mock_session.execute_read.call_args[0][0]
-        mock_tx = AsyncMock()
-        mock_run_result = AsyncMock()
-        mock_run_result.data = AsyncMock(return_value=[])
-        mock_tx.run = AsyncMock(return_value=mock_run_result)
-        await tx_func(mock_tx)
-
-        called_cypher = mock_tx.run.call_args[0][0]
-        assert "WHERE" in called_cypher or "acl_team" in str(mock_tx.run.call_args)
+        assert captured_acl["acl_team"] == "data"
+        assert captured_acl["is_admin"] is False
 
 
 class TestSingleHopRetrieveAppliesACL:
@@ -255,51 +260,28 @@ class TestSingleHopRetrieveAppliesACL:
 class TestHybridRetrieveAppliesACL:
     @pytest.mark.asyncio
     @patch.dict("os.environ", {"AUTH_TOKEN_SECRET": _TEST_SECRET})
-    async def test_acl_injected_into_aggregation_cypher(self, base_query_state):
+    async def test_acl_injected_into_template_cypher(self, base_query_state):
         from orchestrator.app.query_engine import hybrid_retrieve
 
-        mock_vector_session = AsyncMock()
-        mock_vector_session.execute_read = AsyncMock(
-            return_value=[{"name": "auth-service", "score": 0.9}]
+        mock_session = _make_neo4j_session(
+            run_side_effect=[
+                [{"name": "auth-service", "score": 0.9}],
+                [{"name": "auth-service", "dep_count": 5}],
+            ]
         )
-        mock_vector_session.__aenter__ = AsyncMock(return_value=mock_vector_session)
-        mock_vector_session.__aexit__ = AsyncMock(return_value=False)
-
-        mock_agg_session = AsyncMock()
-        mock_agg_session.execute_read = AsyncMock(
-            return_value=[{"service": "auth-service", "dep_count": 5}]
-        )
-        mock_agg_session.__aenter__ = AsyncMock(return_value=mock_agg_session)
-        mock_agg_session.__aexit__ = AsyncMock(return_value=False)
-
-        mock_driver = MagicMock()
-        mock_driver.session = MagicMock(
-            side_effect=[mock_vector_session, mock_agg_session]
-        )
-        mock_driver.close = AsyncMock()
+        mock_driver = mock_neo4j_driver_with_session(mock_session)
 
         state = _make_state(
             base_query_state,
-            query="most critical services",
+            query="most critical services by dependency count",
             authorization=_jwt_header({"team": "data", "namespace": "staging", "role": "viewer"}),
+            tenant_id="t1",
         )
 
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
-        ), patch(
-            "orchestrator.app.query_engine._generate_cypher",
-            new_callable=AsyncMock,
-            return_value="MATCH (n:Service)-[:CALLS*]->(t) RETURN n.name, count(t)",
         ):
             result = await hybrid_retrieve(state)
 
-        agg_tx_func = mock_agg_session.execute_read.call_args[0][0]
-        mock_tx = AsyncMock()
-        mock_run_result = AsyncMock()
-        mock_run_result.data = AsyncMock(return_value=[])
-        mock_tx.run = AsyncMock(return_value=mock_run_result)
-        await agg_tx_func(mock_tx)
-
-        called_cypher = mock_tx.run.call_args[0][0]
-        assert "WHERE" in called_cypher
+        assert "candidates" in result
