@@ -56,7 +56,7 @@ class TestEvaluateResponseFiresBackground:
                 mock_embed.return_value = [0.1, 0.2]
                 result = await evaluate_response(state)
 
-        assert result["evaluation_score"] == -1.0
+        assert result["evaluation_score"] is None
         assert result["retrieval_quality"] == "pending"
 
     @pytest.mark.asyncio

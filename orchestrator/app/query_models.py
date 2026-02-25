@@ -31,7 +31,7 @@ class QueryResponse(BaseModel):
     sources: List[Dict[str, Any]]
     complexity: QueryComplexity
     retrieval_path: str
-    evaluation_score: float = -1.0
+    evaluation_score: Optional[float] = None
     retrieval_quality: str = "skipped"
     query_id: str = ""
 

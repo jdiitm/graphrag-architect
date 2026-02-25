@@ -61,7 +61,7 @@ class TestStubProvider:
             services=[
                 ServiceNode(
                     id="svc-a",
-                    name="Service A",
+                    name="service-a",
                     language="go",
                     framework="gin",
                     opentelemetry_enabled=True,

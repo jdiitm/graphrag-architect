@@ -918,7 +918,7 @@ class TestAsyncEvaluation:
         ):
             result = await evaluate_response(state)
 
-        assert result["evaluation_score"] == -1.0
+        assert result["evaluation_score"] is None
 
 
 class TestLLMJudgeSelection:

@@ -1,8 +1,21 @@
 import hashlib
 import json
+import re
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+_SAFE_ENTITY_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}$")
+
+
+def validate_entity_identifier(value: str) -> str:
+    if not _SAFE_ENTITY_NAME.match(value):
+        raise ValueError(
+            f"Entity identifier {value!r} contains disallowed characters "
+            f"or exceeds 253 chars. Must match: [a-zA-Z0-9][a-zA-Z0-9._-]{{0,252}}"
+        )
+    return value
 
 
 def compute_content_hash(entity: BaseModel) -> str:
@@ -23,6 +36,11 @@ class ServiceNode(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     content_hash: str = ""
 
+    @field_validator("id", "name")
+    @classmethod
+    def _validate_safe_identifier(cls, v: str) -> str:
+        return validate_entity_identifier(v)
+
 
 class DatabaseNode(BaseModel):
     id: str
@@ -31,6 +49,11 @@ class DatabaseNode(BaseModel):
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
     content_hash: str = ""
+
+    @field_validator("id")
+    @classmethod
+    def _validate_safe_identifier(cls, v: str) -> str:
+        return validate_entity_identifier(v)
 
 
 class KafkaTopicNode(BaseModel):
@@ -42,6 +65,11 @@ class KafkaTopicNode(BaseModel):
     namespace_acl: List[str] = Field(default_factory=list)
     content_hash: str = ""
 
+    @field_validator("name")
+    @classmethod
+    def _validate_safe_identifier(cls, v: str) -> str:
+        return validate_entity_identifier(v)
+
 
 class K8sDeploymentNode(BaseModel):
     id: str
@@ -51,6 +79,11 @@ class K8sDeploymentNode(BaseModel):
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
     content_hash: str = ""
+
+    @field_validator("id")
+    @classmethod
+    def _validate_safe_identifier(cls, v: str) -> str:
+        return validate_entity_identifier(v)
 
 class CallsEdge(BaseModel):
     source_service_id: str

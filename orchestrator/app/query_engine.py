@@ -32,7 +32,7 @@ from orchestrator.app.context_manager import (
     truncate_context_topology,
 )
 from orchestrator.app.prompt_sanitizer import sanitize_query_input
-from orchestrator.app.graph_embeddings import rerank_with_structural
+from orchestrator.app.graph_embeddings import compute_centroid, rerank_with_structural
 from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.agentic_traversal import run_traversal
 from orchestrator.app.query_templates import (
@@ -665,10 +665,7 @@ def _apply_structural_rerank(
     if not available:
         return candidates
 
-    dim = len(available[0])
-    query_structural = [
-        sum(v[i] for v in available) / len(available) for i in range(dim)
-    ]
+    query_structural = compute_centroid(available)
 
     reranked = rerank_with_structural(
         search_results, _STRUCTURAL_EMBEDDINGS, query_structural,
@@ -773,7 +770,7 @@ async def _run_background_evaluation(
             query_embedding = await _embed_query(state["query"])
             if query_embedding is None:
                 _EVAL_STORE.put(query_id, {
-                    "evaluation_score": -1.0,
+                    "evaluation_score": None,
                     "retrieval_quality": "no_embedding",
                     "query_id": query_id,
                 })
@@ -793,7 +790,7 @@ async def _run_background_evaluation(
                 "RAG evaluation failed, continuing without score", exc_info=True,
             )
             _EVAL_STORE.put(query_id, {
-                "evaluation_score": -1.0,
+                "evaluation_score": None,
                 "retrieval_quality": "error",
                 "query_id": query_id,
             })
@@ -814,14 +811,14 @@ def _on_eval_task_done(task: asyncio.Task) -> None:
 async def evaluate_response(state: QueryState) -> dict:
     eval_config = RAGEvalConfig.from_env()
     if not eval_config.enable_evaluation:
-        return {"evaluation_score": -1.0, "retrieval_quality": "skipped", "query_id": ""}
+        return {"evaluation_score": None, "retrieval_quality": "skipped", "query_id": ""}
 
     query_id = f"eval-{id(state)}-{time.monotonic_ns()}"
     task = asyncio.create_task(
         _run_background_evaluation(query_id, dict(state)),
     )
     task.add_done_callback(_on_eval_task_done)
-    return {"evaluation_score": -1.0, "retrieval_quality": "pending", "query_id": query_id}
+    return {"evaluation_score": None, "retrieval_quality": "pending", "query_id": query_id}
 
 
 builder = StateGraph(QueryState)

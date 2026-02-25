@@ -273,6 +273,17 @@ class LLMEvaluator:
         )
 
 
+_INVALID_QUALITIES = frozenset({"error", "skipped", "pending", "no_embedding"})
+
+
+def is_valid_evaluation(entry: Dict[str, Any]) -> bool:
+    quality = entry.get("retrieval_quality", "")
+    if quality in _INVALID_QUALITIES:
+        return False
+    score = entry.get("evaluation_score")
+    return score is not None and isinstance(score, (int, float))
+
+
 class EvaluationStore:
     def __init__(self, ttl_seconds: float = 600.0) -> None:
         self._data: Dict[str, Dict[str, Any]] = {}
@@ -287,6 +298,17 @@ class EvaluationStore:
     def get(self, query_id: str) -> Optional[Dict[str, Any]]:
         self._evict_expired()
         return self._data.get(query_id)
+
+    def get_valid_scores(self) -> List[Dict[str, Any]]:
+        self._evict_expired()
+        return [v for v in self._data.values() if is_valid_evaluation(v)]
+
+    def average_score(self) -> Optional[float]:
+        valid = self.get_valid_scores()
+        if not valid:
+            return None
+        total = sum(v["evaluation_score"] for v in valid)
+        return total / len(valid)
 
     def _evict_expired(self) -> None:
         now = time.monotonic()

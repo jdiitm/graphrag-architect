@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import math
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,20 @@ def _embedding_hash(embedding: List[float]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+class _InflightRequest:
+    def __init__(self) -> None:
+        self._event = asyncio.Event()
+        self._failed = False
+
+    async def wait(self) -> bool:
+        await self._event.wait()
+        return not self._failed
+
+    def complete(self, failed: bool = False) -> None:
+        self._failed = failed
+        self._event.set()
+
+
 class SemanticQueryCache:
     def __init__(self, config: CacheConfig | None = None) -> None:
         self._config = config or CacheConfig()
@@ -70,6 +85,40 @@ class SemanticQueryCache:
         self._hits = 0
         self._misses = 0
         self._evictions = 0
+        self._inflight: Dict[str, _InflightRequest] = {}
+
+    async def lookup_or_wait(
+        self,
+        query_embedding: List[float],
+        tenant_id: str = "",
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
+        cached = self.lookup(query_embedding, tenant_id=tenant_id)
+        if cached is not None:
+            return cached, False
+
+        key_hash = _embedding_hash(query_embedding)
+
+        if key_hash in self._inflight:
+            inflight = self._inflight[key_hash]
+            succeeded = await inflight.wait()
+            if succeeded:
+                result = self.lookup(query_embedding, tenant_id=tenant_id)
+                if result is not None:
+                    return result, False
+            return None, True
+
+        self._inflight[key_hash] = _InflightRequest()
+        return None, True
+
+    def notify_complete(
+        self,
+        query_embedding: List[float],
+        failed: bool = False,
+    ) -> None:
+        key_hash = _embedding_hash(query_embedding)
+        inflight = self._inflight.pop(key_hash, None)
+        if inflight is not None:
+            inflight.complete(failed=failed)
 
     def lookup(
         self,

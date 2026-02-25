@@ -5,6 +5,8 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_WALK_LENGTH = 80
@@ -157,14 +159,23 @@ class Node2VecEmbedder:
         return result
 
 
+def compute_centroid(vectors: List[List[float]]) -> List[float]:
+    if not vectors:
+        return []
+    arr = np.array(vectors, dtype=np.float64)
+    return np.mean(arr, axis=0).tolist()
+
+
 def _cosine_sim(a: List[float], b: List[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
-    from orchestrator.app.vector_store import _cosine_similarity
-    try:
-        return _cosine_similarity(a, b)
-    except ValueError:
+    va = np.asarray(a, dtype=np.float64)
+    vb = np.asarray(b, dtype=np.float64)
+    norm_a = np.linalg.norm(va)
+    norm_b = np.linalg.norm(vb)
+    if norm_a == 0.0 or norm_b == 0.0:
         return 0.0
+    return float(np.dot(va, vb) / (norm_a * norm_b))
 
 
 def hybrid_score(
@@ -183,6 +194,34 @@ class _ScoredResult:
     metadata: Dict[str, Any]
 
 
+def _batch_cosine_similarities(
+    ids: List[str],
+    structural_embeddings: Dict[str, List[float]],
+    query_vec: "np.ndarray",
+    dim: int,
+) -> "np.ndarray":
+    emb_matrix = []
+    has_emb = []
+    for rid in ids:
+        emb = structural_embeddings.get(rid)
+        if emb is not None:
+            emb_matrix.append(emb)
+            has_emb.append(True)
+        else:
+            emb_matrix.append([0.0] * dim)
+            has_emb.append(False)
+
+    emb_arr = np.array(emb_matrix, dtype=np.float64)
+    norms = np.linalg.norm(emb_arr, axis=1)
+    sims = np.zeros(len(ids), dtype=np.float64)
+    query_norm = np.linalg.norm(query_vec)
+    valid = np.array(has_emb) & (norms > 0.0) & (query_norm > 0.0)
+    if valid.any():
+        dots = emb_arr[valid] @ query_vec
+        sims[valid] = np.maximum(0.0, dots / (norms[valid] * query_norm))
+    return sims
+
+
 def rerank_with_structural(
     text_results: List[Any],
     structural_embeddings: Dict[str, List[float]],
@@ -193,23 +232,27 @@ def rerank_with_structural(
     if not text_results:
         return []
 
-    scored = []
-    for r in text_results:
-        struct_emb = structural_embeddings.get(r.id)
-        struct_sim = 0.0
-        if struct_emb is not None and query_structural:
-            struct_sim = max(0.0, _cosine_sim(struct_emb, query_structural))
-        combined = hybrid_score(
-            r.score, struct_sim,
-            text_weight=text_weight,
-            structural_weight=structural_weight,
-        )
-        scored.append(_ScoredResult(id=r.id, score=combined, metadata=r.metadata))
-
-    scored.sort(key=lambda s: s.score, reverse=True)
-
     from orchestrator.app.vector_store import SearchResult
+
+    ids = [r.id for r in text_results]
+    text_scores = np.array([r.score for r in text_results], dtype=np.float64)
+    metadatas = [r.metadata for r in text_results]
+
+    if not query_structural:
+        order = np.argsort(-text_scores)
+        return [
+            SearchResult(id=ids[i], score=float(text_scores[i]), metadata=metadatas[i])
+            for i in order
+        ]
+
+    query_vec = np.asarray(query_structural, dtype=np.float64)
+    struct_sims = _batch_cosine_similarities(
+        ids, structural_embeddings, query_vec, len(query_structural),
+    )
+    combined = text_weight * text_scores + structural_weight * struct_sims
+    order = np.argsort(-combined)
+
     return [
-        SearchResult(id=s.id, score=s.score, metadata=s.metadata)
-        for s in scored
+        SearchResult(id=ids[i], score=float(combined[i]), metadata=metadatas[i])
+        for i in order
     ]
