@@ -43,6 +43,12 @@ class UnionQuery:
 
 
 @dataclass
+class UnwindClause:
+    tokens: List[CypherToken] = field(default_factory=list)
+    expression_text: Optional[str] = None
+
+
+@dataclass
 class GenericClause:
     tokens: List[CypherToken] = field(default_factory=list)
 
@@ -107,6 +113,7 @@ class CypherParser:
             "RETURN": self._parse_return,
             "WITH": self._parse_with,
             "CALL": self._parse_call,
+            "UNWIND": self._parse_unwind,
         }
         parser = dispatch.get(upper)
         if parser is not None:
@@ -175,6 +182,20 @@ class CypherParser:
         tokens = [kw_tok]
         tokens.extend(self._collect_until_clause_keyword(kw_tok.brace_depth))
         return WithClause(tokens=tokens)
+
+    def _parse_unwind(self) -> UnwindClause:
+        kw_tok = self._advance()
+        tokens = [kw_tok]
+        body_tokens = self._collect_until_clause_keyword(kw_tok.brace_depth)
+        tokens.extend(body_tokens)
+        expr_parts = []
+        for t in body_tokens:
+            if (t.token_type == TokenType.KEYWORD
+                    and t.value.upper() == "AS"):
+                break
+            expr_parts.append(t.value)
+        expression_text = "".join(expr_parts).strip() or None
+        return UnwindClause(tokens=tokens, expression_text=expression_text)
 
     def _parse_call(self) -> CallSubquery:
         call_token = self._advance()
@@ -340,3 +361,72 @@ def _strip_where_keyword(text: str) -> str:
     if stripped.upper().startswith("WHERE"):
         return stripped[5:]
     return text
+
+
+def _is_limit_clause(clause: Any) -> bool:
+    if not hasattr(clause, "tokens") or not clause.tokens:
+        return False
+    for t in clause.tokens:
+        if t.token_type == TokenType.WHITESPACE:
+            continue
+        return (
+            t.token_type == TokenType.KEYWORD
+            and t.value.upper() == "LIMIT"
+        )
+    return False
+
+
+def _has_amplification_in_clauses(clauses: List[Any]) -> bool:
+    seen_with = False
+    seen_limit_after_with = False
+
+    for clause in clauses:
+        if isinstance(clause, WithClause):
+            seen_with = True
+            continue
+
+        if seen_with and _is_limit_clause(clause):
+            seen_limit_after_with = True
+            continue
+
+        if isinstance(clause, CallSubquery) and clause.body:
+            if seen_limit_after_with and _has_unwind_in_clauses(clause.body):
+                return True
+            if _has_amplification_in_clauses(clause.body):
+                return True
+
+        if isinstance(clause, UnwindClause) and seen_limit_after_with:
+            return True
+
+        if isinstance(clause, GenericClause):
+            has_unwind = any(
+                t.token_type == TokenType.KEYWORD
+                and t.value.upper() == "UNWIND"
+                for t in clause.tokens
+            )
+            if has_unwind and seen_limit_after_with:
+                return True
+
+    return False
+
+
+def _has_unwind_in_clauses(clauses: List[Any]) -> bool:
+    for clause in clauses:
+        if isinstance(clause, UnwindClause):
+            return True
+        if isinstance(clause, GenericClause):
+            if any(
+                t.token_type == TokenType.KEYWORD
+                and t.value.upper() == "UNWIND"
+                for t in clause.tokens
+            ):
+                return True
+        if isinstance(clause, CallSubquery) and clause.body:
+            if _has_unwind_in_clauses(clause.body):
+                return True
+    return False
+
+
+def validate_query_structure(cypher: str) -> bool:
+    ast = CypherParser(cypher).parse()
+    return not _has_amplification_in_clauses(ast.clauses)
