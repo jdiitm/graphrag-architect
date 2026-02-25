@@ -15,9 +15,11 @@ import (
 )
 
 const (
-	maxRetries       = 3
-	initialBackoff   = 1 * time.Second
-	backoffMultiplier = 2
+	maxRetries            = 3
+	initialBackoff        = 1 * time.Second
+	backoffMultiplier     = 2
+	DefaultMaxPayloadSize = 10 * 1024 * 1024
+	DefaultRetryTimeout   = 25 * time.Second
 )
 
 type ingestDocument struct {
@@ -37,6 +39,8 @@ type ForwardingProcessor struct {
 	client          *http.Client
 	authToken       string
 	retryBackoff    time.Duration
+	maxPayloadSize  int
+	retryTimeout    time.Duration
 }
 
 type ForwardingOption func(*ForwardingProcessor)
@@ -53,11 +57,25 @@ func WithRetryBackoff(d time.Duration) ForwardingOption {
 	}
 }
 
+func WithMaxPayloadSize(size int) ForwardingOption {
+	return func(fp *ForwardingProcessor) {
+		fp.maxPayloadSize = size
+	}
+}
+
+func WithRetryTimeout(d time.Duration) ForwardingOption {
+	return func(fp *ForwardingProcessor) {
+		fp.retryTimeout = d
+	}
+}
+
 func NewForwardingProcessor(orchestratorURL string, client *http.Client, opts ...ForwardingOption) *ForwardingProcessor {
 	fp := &ForwardingProcessor{
 		orchestratorURL: orchestratorURL,
 		client:          client,
 		retryBackoff:    initialBackoff,
+		maxPayloadSize:  DefaultMaxPayloadSize,
+		retryTimeout:    DefaultRetryTimeout,
 	}
 	for _, o := range opts {
 		o(fp)
@@ -66,6 +84,16 @@ func NewForwardingProcessor(orchestratorURL string, client *http.Client, opts ..
 }
 
 func (f *ForwardingProcessor) Process(ctx context.Context, job domain.Job) error {
+	if f.maxPayloadSize > 0 && len(job.Value) > f.maxPayloadSize {
+		return fmt.Errorf("payload size %d exceeds maximum %d bytes", len(job.Value), f.maxPayloadSize)
+	}
+
+	if f.retryTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, f.retryTimeout)
+		defer cancel()
+	}
+
 	ctx, span := telemetry.StartForwardSpan(ctx, job)
 	defer span.End()
 
