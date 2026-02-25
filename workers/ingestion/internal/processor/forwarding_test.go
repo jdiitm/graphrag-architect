@@ -329,6 +329,77 @@ func TestForwardingProcessor_429MaxRetriesExhausted(t *testing.T) {
 	}
 }
 
+func TestForwardingProcessor_503TriggersRetry(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Retry-After", "2")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client(), processor.WithRetryBackoff(time.Millisecond))
+	err := fp.Process(context.Background(), validJob())
+	if err == nil {
+		t.Fatal("expected error after 503 retries exhausted, got nil")
+	}
+	if attempts.Load() != 4 {
+		t.Errorf("expected 4 attempts (1 initial + 3 retries), got %d", attempts.Load())
+	}
+}
+
+func TestForwardingProcessor_503RetrySucceedsAfterBackpressure(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count := attempts.Add(1)
+		if count <= 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"committed","entities_extracted":1,"errors":[]}`))
+	}))
+	defer srv.Close()
+
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client(), processor.WithRetryBackoff(time.Millisecond))
+	err := fp.Process(context.Background(), validJob())
+	if err != nil {
+		t.Fatalf("expected success after transient 503, got %v", err)
+	}
+	if attempts.Load() != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts.Load())
+	}
+}
+
+func TestForwardingProcessor_503UsesRetryAfterHeader(t *testing.T) {
+	var timestamps []time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		timestamps = append(timestamps, time.Now())
+		if len(timestamps) <= 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"committed","entities_extracted":1,"errors":[]}`))
+	}))
+	defer srv.Close()
+
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client(), processor.WithRetryBackoff(500*time.Millisecond))
+	err := fp.Process(context.Background(), validJob())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(timestamps) < 2 {
+		t.Fatal("expected at least 2 requests")
+	}
+	gap := timestamps[1].Sub(timestamps[0])
+	if gap < 900*time.Millisecond {
+		t.Errorf("expected at least ~1s gap from Retry-After header, got %v", gap)
+	}
+}
+
 func TestForwardingProcessor_OptionalHeadersOmitted(t *testing.T) {
 	var captured []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
