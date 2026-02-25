@@ -8,6 +8,55 @@ metadata:
     role: alert-rules
 spec:
   groups:
+    - name: graphrag.slo.recording
+      interval: 30s
+      rules:
+        - record: graphrag:query_success_rate:5m
+          expr: >
+            1 - (
+              sum(rate(http_server_request_duration_seconds_count{route="/query",status_code=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(http_server_request_duration_seconds_count{route="/query"}[5m])), 1)
+            )
+
+        - record: graphrag:query_latency_slo:5m
+          expr: >
+            1 - (
+              sum(rate(http_server_request_duration_seconds_bucket{route="/query",le="3"}[5m]))
+              /
+              clamp_min(sum(rate(http_server_request_duration_seconds_count{route="/query"}[5m])), 1)
+            )
+
+        - record: graphrag:ingestion_success_rate:5m
+          expr: >
+            1 - (
+              sum(rate(http_server_request_duration_seconds_count{route="/ingest",status_code=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(http_server_request_duration_seconds_count{route="/ingest"}[5m])), 1)
+            )
+
+    - name: graphrag.slo.alerts
+      rules:
+        - alert: QueryAvailabilityBurnRateHigh
+          expr: graphrag:query_success_rate:5m < 0.995
+          for: 5m
+          labels:
+            severity: warning
+            channel: slack
+          annotations:
+            summary: "Query SLO burn rate: availability below 99.5% over 5m"
+            description: "Success rate is {{ $value | humanizePercentage }}"
+
+        - alert: QueryLatencyBurnRateHigh
+          expr: graphrag:query_latency_slo:5m > 0.01
+          for: 5m
+          labels:
+            severity: warning
+            channel: slack
+          annotations:
+            summary: "Query SLO burn rate: >1% of queries exceeding 3s latency"
+            description: "Latency SLO violation rate: {{ $value | humanizePercentage }}"
+
     - name: graphrag.ingestion
       rules:
         - alert: HighDLQRate
