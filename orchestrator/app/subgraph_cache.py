@@ -22,8 +22,30 @@ class CacheStats:
     maxsize: int
 
 
+def _normalize_variable_aliases(cypher: str) -> str:
+    from orchestrator.app.cypher_tokenizer import TokenType, tokenize_cypher
+
+    tokens = tokenize_cypher(cypher)
+    alias_map: dict[str, str] = {}
+    counter = 0
+    result_parts: list[str] = []
+
+    for tok in tokens:
+        if tok.token_type == TokenType.IDENTIFIER:
+            lowered = tok.value.lower()
+            if lowered not in alias_map:
+                alias_map[lowered] = f"_v{counter}"
+                counter += 1
+            result_parts.append(alias_map[lowered])
+        else:
+            result_parts.append(tok.value)
+
+    return "".join(result_parts)
+
+
 def normalize_cypher(query: str) -> str:
-    normalized = query.lower().strip()
+    aliased = _normalize_variable_aliases(query)
+    normalized = aliased.lower().strip()
     normalized = " ".join(normalized.split())
     if normalized.endswith(";"):
         normalized = normalized[:-1].rstrip()

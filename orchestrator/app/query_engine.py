@@ -49,6 +49,7 @@ from orchestrator.app.observability import QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
 from orchestrator.app.rag_evaluator import EvaluationStore, LLMEvaluator, RAGEvaluator
+from orchestrator.app.semantic_cache import SemanticQueryCache
 
 try:
     import openai as _openai_module
@@ -70,7 +71,7 @@ _TEMPLATE_CATALOG = TemplateCatalog()
 _TEMPLATE_REGISTRY = TemplateHashRegistry(_TEMPLATE_CATALOG)
 _SANDBOX = SandboxedQueryExecutor(registry=_TEMPLATE_REGISTRY)
 _SUBGRAPH_CACHE = SubgraphCache(maxsize=default_cache_maxsize())
-_SEMANTIC_CACHE = None
+_SEMANTIC_CACHE = SemanticQueryCache()
 
 _VS_CFG = VectorStoreConfig.from_env()
 _VECTOR_STORE = create_vector_store(
@@ -445,14 +446,54 @@ async def _try_template_match(
     }
 
 
+async def _check_semantic_cache(
+    query: str, tenant_id: str,
+) -> Optional[dict]:
+    if _SEMANTIC_CACHE is None:
+        return None
+    query_embedding = await _embed_query(query)
+    if query_embedding is None:
+        return None
+    return _SEMANTIC_CACHE.lookup(query_embedding, tenant_id=tenant_id)
+
+
+def _store_in_semantic_cache(
+    query: str,
+    query_embedding: Optional[list],
+    result: dict,
+    tenant_id: str,
+    complexity: str = "",
+) -> None:
+    if _SEMANTIC_CACHE is None or query_embedding is None:
+        return
+    _SEMANTIC_CACHE.store(
+        query=query,
+        query_embedding=query_embedding,
+        result=result,
+        tenant_id=tenant_id,
+        complexity=complexity,
+    )
+
+
 async def cypher_retrieve(state: QueryState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("query.cypher_retrieve"):
         start = time.monotonic()
         try:
+            tenant_id = state.get("tenant_id", "")
+            cached = await _check_semantic_cache(state["query"], tenant_id)
+            if cached is not None:
+                _query_logger.debug("Semantic cache hit for cypher_retrieve")
+                return cached
+
             async with _neo4j_session() as driver:
                 template_result = await _try_template_match(state, driver)
                 if template_result is not None:
+                    query_embedding = await _embed_query(state["query"])
+                    _store_in_semantic_cache(
+                        state["query"], query_embedding,
+                        template_result, tenant_id,
+                    )
                     return template_result
 
                 candidates = await _fetch_candidates(driver, state)
@@ -469,16 +510,23 @@ async def cypher_retrieve(state: QueryState) -> dict:
                 context = await run_traversal(
                     driver=driver,
                     start_node_id=start_node_id,
-                    tenant_id=state.get("tenant_id", ""),
+                    tenant_id=tenant_id,
                     acl_params=acl_params,
                     timeout=_get_query_timeout(),
                 )
 
-                return {
+                result = {
                     "cypher_query": "agentic_traversal",
                     "cypher_results": context,
                     "iteration_count": 0,
                 }
+                query_embedding = await _embed_query(state["query"])
+                _store_in_semantic_cache(
+                    state["query"], query_embedding,
+                    result, tenant_id,
+                    complexity=str(state.get("complexity", "")),
+                )
+                return result
         finally:
             QUERY_DURATION.record(
                 (time.monotonic() - start) * 1000, {"node": "cypher_retrieve"}

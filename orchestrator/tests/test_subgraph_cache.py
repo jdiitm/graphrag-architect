@@ -146,6 +146,24 @@ class TestNormalizeCypher:
         q2 = "match (n) return n"
         assert normalize_cypher(q1) == normalize_cypher(q2)
 
+    def test_normalize_cypher_aliases_produce_same_key(self) -> None:
+        q1 = "MATCH (s:Service) RETURN s"
+        q2 = "MATCH (node:Service) RETURN node"
+        assert normalize_cypher(q1) == normalize_cypher(q2), (
+            "Variable aliases should be normalized to positional placeholders "
+            "so structurally identical queries produce the same cache key"
+        )
+
+    def test_normalize_cypher_preserves_labels_and_properties(self) -> None:
+        q1 = "MATCH (x:Service {name: 'auth'}) RETURN x"
+        q2 = "MATCH (y:Service {name: 'auth'}) RETURN y"
+        assert normalize_cypher(q1) == normalize_cypher(q2)
+
+    def test_normalize_cypher_relationship_aliases(self) -> None:
+        q1 = "MATCH (a)-[r:CALLS]->(b) RETURN a, b"
+        q2 = "MATCH (x)-[e:CALLS]->(y) RETURN x, y"
+        assert normalize_cypher(q1) == normalize_cypher(q2)
+
 
 class TestCacheKey:
     def test_same_query_same_acl_same_key(self) -> None:
