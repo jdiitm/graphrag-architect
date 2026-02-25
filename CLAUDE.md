@@ -44,8 +44,11 @@ python -m pytest orchestrator/tests/ -v
 
 # 3. Go tests (from module root)
 cd workers/ingestion && go test ./... -v -count=1 -timeout 30s
+
+# 4. Go lint (from module root)
+cd workers/ingestion && golangci-lint run ./...
 ```
 
 * If ANY gate fails, stop. Fix it, re-run ALL gates, then proceed.
 * Never skip, disable, or add inline suppression comments to bypass a gate.
-* Always report results (e.g., "Pylint: 10/10, Python: 11/11, Go: 8/8").
+* Always report results (e.g., "Pylint: 10/10, Python: 11/11, Go: 8/8, Go lint: clean").

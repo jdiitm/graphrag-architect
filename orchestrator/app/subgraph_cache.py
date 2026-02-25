@@ -9,7 +9,11 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from orchestrator.app.redis_client import create_async_redis, require_redis
+from orchestrator.app.redis_client import (
+    create_async_redis,
+    delete_keys_by_prefix,
+    require_redis,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -264,14 +268,7 @@ class RedisSubgraphCache:
     async def invalidate_all(self) -> None:
         self._l1.invalidate_all()
         try:
-            cursor = None
-            pattern = f"{self._prefix}*"
-            while cursor != 0:
-                cursor, keys = await self._redis.scan(
-                    cursor=cursor or 0, match=pattern, count=100,
-                )
-                if keys:
-                    await self._redis.delete(*keys)
+            await delete_keys_by_prefix(self._redis, self._prefix)
         except Exception:
             logger.debug("Redis prefix-scoped invalidation failed during invalidate_all")
 

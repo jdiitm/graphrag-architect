@@ -51,9 +51,11 @@ class TestKafkaConsumerLifecycleWiring:
             ),
             patch(
                 "orchestrator.app.main.init_checkpointer",
+                new_callable=AsyncMock,
             ),
             patch(
                 "orchestrator.app.main.close_checkpointer",
+                new_callable=AsyncMock,
             ),
             patch(
                 "orchestrator.app.main.configure_telemetry",
@@ -92,8 +94,8 @@ class TestKafkaConsumerLifecycleWiring:
             patch.dict("os.environ", env),
             patch("orchestrator.app.main.init_driver"),
             patch("orchestrator.app.main.close_driver", new_callable=AsyncMock),
-            patch("orchestrator.app.main.init_checkpointer"),
-            patch("orchestrator.app.main.close_checkpointer"),
+            patch("orchestrator.app.main.init_checkpointer", new_callable=AsyncMock),
+            patch("orchestrator.app.main.close_checkpointer", new_callable=AsyncMock),
             patch("orchestrator.app.main.configure_telemetry"),
             patch("orchestrator.app.main.configure_metrics"),
             patch("orchestrator.app.main.shutdown_pool"),
@@ -154,8 +156,8 @@ class TestIngestEndpointDeprecation:
             patch.dict("os.environ", _ENV_VARS),
             patch("orchestrator.app.main.init_driver"),
             patch("orchestrator.app.main.close_driver", new_callable=AsyncMock),
-            patch("orchestrator.app.main.init_checkpointer"),
-            patch("orchestrator.app.main.close_checkpointer"),
+            patch("orchestrator.app.main.init_checkpointer", new_callable=AsyncMock),
+            patch("orchestrator.app.main.close_checkpointer", new_callable=AsyncMock),
             patch("orchestrator.app.main.configure_telemetry"),
             patch("orchestrator.app.main.configure_metrics"),
             patch("orchestrator.app.main.shutdown_pool"),

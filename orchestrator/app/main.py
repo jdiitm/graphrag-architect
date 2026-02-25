@@ -83,7 +83,7 @@ async def lifespan(_app: FastAPI):
     auth = _validate_startup_security()
     configure_telemetry()
     configure_metrics()
-    init_checkpointer()
+    await init_checkpointer()
     init_driver()
     set_ingestion_semaphore(
         asyncio.Semaphore(RateLimitConfig.from_env().max_concurrent_ingestions)
@@ -109,7 +109,7 @@ async def lifespan(_app: FastAPI):
             _STATE["kafka_task"] = None
         shutdown_pool()
         await close_driver()
-        close_checkpointer()
+        await close_checkpointer()
 
 
 def _validate_startup_security() -> AuthConfig:

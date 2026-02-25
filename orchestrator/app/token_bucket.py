@@ -150,7 +150,7 @@ class RedisRateLimiter:
                 return False
             return True
         except Exception:
-            logger.debug("Redis rate limiter failed, allowing request")
+            logger.warning("Redis rate limiter failed, allowing request")
             return True
 
 

@@ -1,7 +1,8 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.checkpoint.postgres import PostgresSaver
 
 from orchestrator.app.checkpoint_store import (
     CheckpointStoreConfig,
@@ -12,47 +13,89 @@ from orchestrator.app.checkpoint_store import (
 )
 
 
-def test_postgres_checkpointer_returns_postgres_saver():
+@pytest.mark.asyncio
+async def test_postgres_checkpointer_returns_async_saver():
+    mock_conn = AsyncMock()
+    mock_saver_cls = MagicMock()
+    mock_saver_instance = AsyncMock()
+    mock_saver_cls.return_value = mock_saver_instance
+
     with patch("orchestrator.app.checkpoint_store.psycopg") as mock_psycopg, \
-         patch.object(PostgresSaver, "setup"):
-        mock_psycopg.connect.return_value = MagicMock()
-        cp = _create_postgres_checkpointer("postgresql://u:p@localhost:5432/db")
-    assert isinstance(cp, PostgresSaver)
+         patch(
+             "langgraph.checkpoint.postgres.aio.AsyncPostgresSaver",
+             mock_saver_cls,
+         ):
+        mock_psycopg.AsyncConnection.connect = AsyncMock(return_value=mock_conn)
+        cp = await _create_postgres_checkpointer("postgresql://u:p@localhost:5432/db")
+
+    assert cp is mock_saver_instance
+    mock_saver_instance.setup.assert_awaited_once()
     assert not isinstance(cp, MemorySaver)
 
 
-def test_init_with_postgres_backend_produces_non_memory_saver():
+@pytest.mark.asyncio
+async def test_init_with_postgres_backend_produces_non_memory_saver():
+    env = {
+        "CHECKPOINT_BACKEND": "postgres",
+        "CHECKPOINT_POSTGRES_DSN": "postgresql://u:p@localhost:5432/db",
+    }
+    mock_conn = AsyncMock()
+    mock_saver_cls = MagicMock()
+    mock_saver_instance = AsyncMock()
+    mock_saver_cls.return_value = mock_saver_instance
+
+    with patch.dict("os.environ", env, clear=False), \
+         patch("orchestrator.app.checkpoint_store.psycopg") as mock_psycopg, \
+         patch(
+             "langgraph.checkpoint.postgres.aio.AsyncPostgresSaver",
+             mock_saver_cls,
+         ):
+        mock_psycopg.AsyncConnection.connect = AsyncMock(return_value=mock_conn)
+        await init_checkpointer()
+        cp = get_checkpointer()
+        assert not isinstance(cp, MemorySaver)
+        await close_checkpointer()
+
+
+@pytest.mark.asyncio
+async def test_init_with_memory_backend_returns_memory_saver():
+    env = {"CHECKPOINT_BACKEND": "memory", "CHECKPOINT_POSTGRES_DSN": ""}
+    with patch.dict("os.environ", env, clear=False):
+        await init_checkpointer()
+        cp = get_checkpointer()
+        assert isinstance(cp, MemorySaver)
+        await close_checkpointer()
+
+
+@pytest.mark.asyncio
+async def test_close_checkpointer_clears_state():
+    await init_checkpointer()
+    await close_checkpointer()
+    with pytest.raises(RuntimeError):
+        get_checkpointer()
+
+
+@pytest.mark.asyncio
+async def test_close_checkpointer_closes_connection():
+    mock_conn = AsyncMock()
+    mock_saver_cls = MagicMock()
+    mock_saver_instance = AsyncMock()
+    mock_saver_cls.return_value = mock_saver_instance
+
     env = {
         "CHECKPOINT_BACKEND": "postgres",
         "CHECKPOINT_POSTGRES_DSN": "postgresql://u:p@localhost:5432/db",
     }
     with patch.dict("os.environ", env, clear=False), \
          patch("orchestrator.app.checkpoint_store.psycopg") as mock_psycopg, \
-         patch.object(PostgresSaver, "setup"):
-        mock_psycopg.connect.return_value = MagicMock()
-        init_checkpointer()
-        cp = get_checkpointer()
-        assert not isinstance(cp, MemorySaver)
-        close_checkpointer()
-
-
-def test_init_with_memory_backend_returns_memory_saver():
-    env = {"CHECKPOINT_BACKEND": "memory", "CHECKPOINT_POSTGRES_DSN": ""}
-    with patch.dict("os.environ", env, clear=False):
-        init_checkpointer()
-        cp = get_checkpointer()
-        assert isinstance(cp, MemorySaver)
-        close_checkpointer()
-
-
-def test_close_checkpointer_clears_state():
-    init_checkpointer()
-    close_checkpointer()
-    try:
-        get_checkpointer()
-        assert False, "Should have raised RuntimeError"
-    except RuntimeError:
-        pass
+         patch(
+             "langgraph.checkpoint.postgres.aio.AsyncPostgresSaver",
+             mock_saver_cls,
+         ):
+        mock_psycopg.AsyncConnection.connect = AsyncMock(return_value=mock_conn)
+        await init_checkpointer()
+    await close_checkpointer()
+    mock_conn.close.assert_awaited_once()
 
 
 def test_config_from_env_defaults():
@@ -62,10 +105,8 @@ def test_config_from_env_defaults():
     assert cfg.postgres_dsn == ""
 
 
-def test_postgres_import_error_gives_helpful_message():
-    with patch.dict("sys.modules", {"langgraph.checkpoint.postgres": None}):
-        try:
-            _create_postgres_checkpointer("postgresql://localhost/db")
-            assert False, "Should have raised ImportError"
-        except ImportError as exc:
-            assert "langgraph-checkpoint-postgres" in str(exc)
+@pytest.mark.asyncio
+async def test_postgres_import_error_gives_helpful_message():
+    with patch.dict("sys.modules", {"langgraph.checkpoint.postgres.aio": None}):
+        with pytest.raises(ImportError, match="langgraph-checkpoint-postgres"):
+            await _create_postgres_checkpointer("postgresql://localhost/db")

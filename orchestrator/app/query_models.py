@@ -145,7 +145,8 @@ class RedisQueryJobStore:
                 self._rkey(job.job_id), self._ttl, job.model_dump_json(),
             )
         except Exception:
-            logger.debug("Redis job-store create failed")
+            logger.error("Redis job-store create failed; job %s unreachable", job.job_id)
+            raise
         return job
 
     async def get(self, job_id: str) -> Optional[QueryJobResponse]:
@@ -154,7 +155,7 @@ class RedisQueryJobStore:
             if raw is not None:
                 return QueryJobResponse.model_validate_json(raw)
         except Exception:
-            logger.debug("Redis job-store get failed")
+            logger.warning("Redis job-store get failed")
         return None
 
     async def mark_running(self, job_id: str) -> None:
@@ -167,7 +168,7 @@ class RedisQueryJobStore:
                 self._rkey(job_id), self._ttl, job.model_dump_json(),
             )
         except Exception:
-            logger.debug("Redis job-store mark_running failed")
+            logger.warning("Redis job-store mark_running failed")
 
     async def complete(self, job_id: str, result: QueryResponse) -> None:
         job = await self.get(job_id)
@@ -181,7 +182,7 @@ class RedisQueryJobStore:
                 self._rkey(job_id), self._ttl, job.model_dump_json(),
             )
         except Exception:
-            logger.debug("Redis job-store complete failed")
+            logger.warning("Redis job-store complete failed")
 
     async def fail(self, job_id: str, error: str) -> None:
         job = await self.get(job_id)
@@ -195,7 +196,7 @@ class RedisQueryJobStore:
                 self._rkey(job_id), self._ttl, job.model_dump_json(),
             )
         except Exception:
-            logger.debug("Redis job-store fail failed")
+            logger.warning("Redis job-store fail failed")
 
 
 def create_job_store(ttl_seconds: float = 300.0) -> Any:
