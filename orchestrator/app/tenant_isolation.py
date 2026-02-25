@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import json
 import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol
 
 logger = logging.getLogger(__name__)
+_audit_logger = logging.getLogger("graphrag.tenant_audit")
 
 
 class IsolationMode(Enum):
     LOGICAL = "logical"
     PHYSICAL = "physical"
+
+
+class LogicalIsolationInProductionError(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -27,9 +34,16 @@ class TenantContext:
     tenant_id: str
     isolation_mode: IsolationMode = IsolationMode.PHYSICAL
     database_name: str = "neo4j"
+    deployment_mode: str = "dev"
 
     def __post_init__(self) -> None:
         if self.isolation_mode == IsolationMode.LOGICAL:
+            if self.deployment_mode == "production":
+                raise LogicalIsolationInProductionError(
+                    f"LOGICAL isolation is forbidden in production for "
+                    f"tenant {self.tenant_id!r}. Use PHYSICAL isolation "
+                    f"with dedicated databases for SOC2/FedRAMP compliance."
+                )
             logger.warning(
                 "TenantContext for %s uses LOGICAL isolation. "
                 "LOGICAL mode is not recommended for production or "
@@ -39,11 +53,14 @@ class TenantContext:
             )
 
     @classmethod
-    def from_config(cls, config: TenantConfig) -> TenantContext:
+    def from_config(
+        cls, config: TenantConfig, deployment_mode: str = "dev",
+    ) -> TenantContext:
         return cls(
             tenant_id=config.tenant_id,
             isolation_mode=config.isolation_mode,
             database_name=config.database_name,
+            deployment_mode=deployment_mode,
         )
 
     @classmethod
@@ -77,6 +94,34 @@ class TenantRegistry:
             del self._tenants[tenant_id]
             return True
         return False
+
+
+class TenantAuditLogger(Protocol):
+    def log_query(
+        self,
+        tenant_id: str,
+        query_hash: str,
+        result_count: int,
+    ) -> None: ...
+
+
+class StructuredTenantAuditLogger:
+    def __init__(self) -> None:
+        self._logger = logging.getLogger("graphrag.tenant_audit")
+
+    def log_query(
+        self,
+        tenant_id: str,
+        query_hash: str,
+        result_count: int,
+    ) -> None:
+        entry = json.dumps({
+            "tenant_id": tenant_id,
+            "query_hash": query_hash,
+            "result_count": result_count,
+            "timestamp": time.time(),
+        })
+        self._logger.info(entry)
 
 
 _DEFAULT_DATABASE = "neo4j"
