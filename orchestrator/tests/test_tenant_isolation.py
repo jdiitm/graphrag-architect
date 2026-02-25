@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import logging.handlers
 import os
 
 import pytest
@@ -125,6 +126,97 @@ class TestTenantAwarePoolIntegration:
         registry = TenantRegistry()
         registry.register(TenantConfig(tenant_id="smallco"))
         assert resolve_database_for_tenant(registry, "smallco") == "neo4j"
+
+
+class TestProductionIsolationEnforcement:
+
+    def test_logical_mode_rejected_in_production(self) -> None:
+        from orchestrator.app.tenant_isolation import (
+            LogicalIsolationInProductionError,
+            TenantContext,
+        )
+        with pytest.raises(LogicalIsolationInProductionError):
+            TenantContext(
+                tenant_id="acme",
+                isolation_mode=IsolationMode.LOGICAL,
+                database_name="neo4j",
+                deployment_mode="production",
+            )
+
+    def test_logical_mode_allowed_in_dev(self) -> None:
+        from orchestrator.app.tenant_isolation import TenantContext
+        ctx = TenantContext(
+            tenant_id="dev-tenant",
+            isolation_mode=IsolationMode.LOGICAL,
+            database_name="neo4j",
+            deployment_mode="dev",
+        )
+        assert ctx.isolation_mode == IsolationMode.LOGICAL
+
+    def test_physical_mode_allowed_in_production(self) -> None:
+        from orchestrator.app.tenant_isolation import TenantContext
+        ctx = TenantContext(
+            tenant_id="prod-tenant",
+            isolation_mode=IsolationMode.PHYSICAL,
+            database_name="prod_db",
+            deployment_mode="production",
+        )
+        assert ctx.isolation_mode == IsolationMode.PHYSICAL
+
+
+class TestTenantAuditLogger:
+
+    def test_audit_logger_emits_structured_log(self) -> None:
+        import json
+        import logging
+        from orchestrator.app.tenant_isolation import StructuredTenantAuditLogger
+
+        handler = logging.handlers.MemoryHandler(capacity=100)
+        audit_logger = StructuredTenantAuditLogger()
+        audit_logger._logger.addHandler(handler)
+        audit_logger._logger.setLevel(logging.INFO)
+
+        audit_logger.log_query(
+            tenant_id="acme",
+            query_hash="abc123",
+            result_count=42,
+        )
+
+        handler.flush()
+        assert len(handler.buffer) >= 1
+        record = handler.buffer[-1]
+        assert "acme" in record.getMessage()
+        audit_logger._logger.removeHandler(handler)
+
+    def test_audit_logger_includes_all_fields(self) -> None:
+        import json
+        import logging
+        from orchestrator.app.tenant_isolation import StructuredTenantAuditLogger
+
+        captured: list[str] = []
+
+        class _CaptureHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(record.getMessage())
+
+        audit_logger = StructuredTenantAuditLogger()
+        handler = _CaptureHandler()
+        audit_logger._logger.addHandler(handler)
+        audit_logger._logger.setLevel(logging.INFO)
+
+        audit_logger.log_query(
+            tenant_id="bigcorp",
+            query_hash="def456",
+            result_count=10,
+        )
+
+        assert len(captured) == 1
+        parsed = json.loads(captured[0])
+        assert parsed["tenant_id"] == "bigcorp"
+        assert parsed["query_hash"] == "def456"
+        assert parsed["result_count"] == 10
+        assert "timestamp" in parsed
+        audit_logger._logger.removeHandler(handler)
 
 
 class TestDeadCodeRemoved:
