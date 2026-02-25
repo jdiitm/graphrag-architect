@@ -28,6 +28,7 @@ class EvaluationResult:
     ungrounded_claims: List[str] = field(default_factory=list)
     context_count: int = 0
     retrieval_path: str = "vector"
+    used_fallback: bool = False
 
     @property
     def score(self) -> float:
@@ -219,11 +220,14 @@ class LLMEvaluator:
         query: str,
         answer: str,
         sources: List[Dict[str, Any]],
+        query_embedding: Optional[List[float]] = None,
+        context_embeddings: Optional[List[List[float]]] = None,
     ) -> EvaluationResult:
         sources_text = json.dumps(sources, indent=2, default=str)[:4000]
         prompt = _JUDGE_PROMPT_TEMPLATE.format(
             query=query, answer=answer, sources=sources_text,
         )
+        used_fallback = False
         try:
             raw_response = await self._judge_fn(prompt)
             scores = json.loads(raw_response)
@@ -231,6 +235,7 @@ class LLMEvaluator:
             groundedness = float(scores.get("groundedness", 0.5))
         except (json.JSONDecodeError, ValueError, TypeError, KeyError):
             logger.warning("LLM judge returned unparseable response, using lexical fallback")
+            used_fallback = True
             faithfulness_score, _ = _compute_faithfulness(answer, sources)
             groundedness = _compute_groundedness(answer, sources)
             faithfulness = faithfulness_score
@@ -238,11 +243,16 @@ class LLMEvaluator:
         faithfulness = max(0.0, min(1.0, faithfulness))
         groundedness = max(0.0, min(1.0, groundedness))
 
+        context_relevance = 0.0
+        if query_embedding is not None and context_embeddings is not None:
+            context_relevance = evaluate_relevance(query_embedding, context_embeddings)
+
         return EvaluationResult(
-            context_relevance=0.0,
+            context_relevance=context_relevance,
             faithfulness=faithfulness,
             groundedness=groundedness,
             context_count=len(sources),
+            used_fallback=used_fallback,
         )
 
 

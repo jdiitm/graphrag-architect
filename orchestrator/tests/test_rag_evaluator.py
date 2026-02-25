@@ -250,6 +250,57 @@ class TestLLMEvaluator:
         assert 0.0 <= result.faithfulness <= 1.0
         assert 0.0 <= result.groundedness <= 1.0
 
+    @pytest.mark.asyncio
+    async def test_llm_evaluator_fallback_sets_used_fallback_flag(self) -> None:
+        from orchestrator.app.rag_evaluator import LLMEvaluator
+
+        async def _broken_judge(prompt: str) -> str:
+            return "not valid json at all"
+
+        evaluator = LLMEvaluator(judge_fn=_broken_judge)
+        result = await evaluator.evaluate(
+            query="test",
+            answer="auth-service is running",
+            sources=[{"name": "auth-service"}],
+        )
+        assert result.used_fallback is True
+
+    @pytest.mark.asyncio
+    async def test_llm_evaluator_fallback_computes_context_relevance(self) -> None:
+        from orchestrator.app.rag_evaluator import LLMEvaluator
+
+        async def _broken_judge(prompt: str) -> str:
+            return "{malformed"
+
+        query_emb = [1.0, 0.0, 0.0]
+        context_embs = [[1.0, 0.0, 0.0]]
+
+        evaluator = LLMEvaluator(judge_fn=_broken_judge)
+        result = await evaluator.evaluate(
+            query="test",
+            answer="auth-service is running",
+            sources=[{"name": "auth-service"}],
+            query_embedding=query_emb,
+            context_embeddings=context_embs,
+        )
+        assert result.used_fallback is True
+        assert result.context_relevance > 0.0
+
+    @pytest.mark.asyncio
+    async def test_llm_evaluator_normal_path_no_fallback_flag(self) -> None:
+        from orchestrator.app.rag_evaluator import LLMEvaluator
+
+        async def _good_judge(prompt: str) -> str:
+            return '{"faithfulness": 0.9, "groundedness": 0.8}'
+
+        evaluator = LLMEvaluator(judge_fn=_good_judge)
+        result = await evaluator.evaluate(
+            query="test",
+            answer="auth-service is running",
+            sources=[{"name": "auth-service"}],
+        )
+        assert result.used_fallback is False
+
 
 class TestRAGEvalConfig:
     def test_from_env_defaults(self) -> None:
