@@ -14,6 +14,11 @@ from orchestrator.app.access_control import (
     CypherPermissionFilter,
     SecurityPrincipal,
 )
+from orchestrator.app.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitOpenError,
+)
 from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfig, RAGEvalConfig
 from orchestrator.app.cypher_sandbox import (
     SandboxedQueryExecutor,
@@ -73,6 +78,15 @@ _VECTOR_STORE = create_vector_store(
 
 _VECTOR_COLLECTION = "service_embeddings"
 
+_CB_LLM = CircuitBreaker(
+    CircuitBreakerConfig(failure_threshold=3, recovery_timeout=30.0),
+    name="llm-synthesize",
+)
+_CB_EMBEDDING = CircuitBreaker(
+    CircuitBreakerConfig(failure_threshold=5, recovery_timeout=20.0),
+    name="embedding",
+)
+
 
 def _sandbox_inject_limit(cypher: str) -> str:
     return _SANDBOX.inject_limit(cypher)
@@ -103,14 +117,22 @@ def _get_embedding_resources() -> Tuple[Optional[EmbeddingConfig], Any]:
     return cfg, _EMBEDDING_STATE["client"]
 
 
+async def _raw_embed_query(text: str) -> Optional[List[float]]:
+    cfg, client = _get_embedding_resources()
+    if cfg is not None and cfg.provider == "openai" and client is not None:
+        response = await client.embeddings.create(
+            input=[text], model=cfg.model_name
+        )
+        return response.data[0].embedding
+    return None
+
+
 async def _embed_query(text: str) -> Optional[List[float]]:
     try:
-        cfg, client = _get_embedding_resources()
-        if cfg is not None and cfg.provider == "openai" and client is not None:
-            response = await client.embeddings.create(
-                input=[text], model=cfg.model_name
-            )
-            return response.data[0].embedding
+        return await _CB_EMBEDDING.call(_raw_embed_query, text)
+    except CircuitOpenError:
+        _query_logger.warning("Embedding circuit open, falling back to fulltext")
+        return None
     except Exception:
         _query_logger.warning(
             "Embedding unavailable, falling back to fulltext", exc_info=True,
@@ -194,7 +216,7 @@ def _build_llm() -> ChatGoogleGenerativeAI:
     )
 
 
-async def _llm_synthesize(
+async def _raw_llm_synthesize(
     query: str,
     context: List[Dict[str, Any]],
 ) -> str:
@@ -210,6 +232,20 @@ async def _llm_synthesize(
     )
     response = await llm.ainvoke(prompt)
     return response.content.strip()
+
+
+async def _llm_synthesize(
+    query: str,
+    context: List[Dict[str, Any]],
+) -> str:
+    try:
+        return await _CB_LLM.call(_raw_llm_synthesize, query, context)
+    except CircuitOpenError:
+        _query_logger.warning("LLM circuit open, returning degraded response")
+        return (
+            "The LLM synthesis service is temporarily unavailable due to "
+            "circuit breaker activation. Please retry shortly."
+        )
 
 
 def classify_query_node(state: QueryState) -> dict:

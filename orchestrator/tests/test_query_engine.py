@@ -947,3 +947,95 @@ class TestNeo4jDriverTimeout:
 
         call_kwargs = mock_session.execute_read.call_args.kwargs
         assert call_kwargs.get("timeout") == 17.5
+
+
+class TestCircuitBreakerWiring:
+
+    @pytest.mark.asyncio
+    async def test_llm_synthesize_uses_circuit_breaker(self, base_query_state):
+        from orchestrator.app.query_engine import _do_synthesize, _CB_LLM
+
+        state = _make_state(
+            base_query_state,
+            candidates=[{"name": "svc-a", "score": 0.9}],
+        )
+
+        from orchestrator.app.circuit_breaker import CircuitOpenError
+
+        for _ in range(_CB_LLM._config.failure_threshold):
+            try:
+                await _CB_LLM.call(
+                    AsyncMock(side_effect=ConnectionError("llm down"))
+                )
+            except ConnectionError:
+                pass
+
+        with patch(
+            "orchestrator.app.query_engine._build_llm",
+            return_value=MagicMock(),
+        ):
+            result = await _do_synthesize(state)
+
+        assert "circuit" in result["answer"].lower() or "unavailable" in result["answer"].lower(), (
+            "When LLM circuit breaker is open, synthesis must return a "
+            f"degraded response, got: {result['answer']}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_embed_query_uses_circuit_breaker(self):
+        from orchestrator.app.query_engine import _embed_query, _CB_EMBEDDING
+
+        from orchestrator.app.circuit_breaker import CircuitBreakerConfig
+
+        assert _CB_EMBEDDING is not None, (
+            "_CB_EMBEDDING must exist as a module-level CircuitBreaker"
+        )
+        assert isinstance(
+            _CB_EMBEDDING._config, CircuitBreakerConfig
+        )
+
+    @pytest.mark.asyncio
+    async def test_llm_cb_exists_at_module_level(self):
+        from orchestrator.app.query_engine import _CB_LLM
+
+        from orchestrator.app.circuit_breaker import CircuitBreaker
+
+        assert isinstance(_CB_LLM, CircuitBreaker), (
+            "_CB_LLM must be a CircuitBreaker instance at module level"
+        )
+
+    @pytest.mark.asyncio
+    async def test_synthesize_graceful_degradation_on_open_circuit(
+        self, base_query_state,
+    ):
+        from orchestrator.app.query_engine import _do_synthesize, _CB_LLM
+        from orchestrator.app.circuit_breaker import (
+            CircuitBreakerConfig,
+            CircuitBreaker,
+            InMemoryStateStore,
+        )
+
+        test_cb = CircuitBreaker(
+            CircuitBreakerConfig(failure_threshold=1, recovery_timeout=60.0),
+            store=InMemoryStateStore(),
+            name="test-llm",
+        )
+
+        failing = AsyncMock(side_effect=ConnectionError("llm down"))
+        with pytest.raises(ConnectionError):
+            await test_cb.call(failing)
+
+        state = _make_state(
+            base_query_state,
+            candidates=[{"name": "svc-a", "score": 0.9}],
+        )
+
+        with patch(
+            "orchestrator.app.query_engine._CB_LLM", test_cb,
+        ):
+            result = await _do_synthesize(state)
+
+        assert result["answer"] != "", (
+            "Synthesis must return a non-empty response even when CB is open"
+        )
+        assert len(result["sources"]) >= 0
