@@ -54,7 +54,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", m.Handler())
 	mux.Handle("/healthz", healthChecker)
-	metricsSrv := &http.Server{Addr: metricsAddr, Handler: mux}
+	metricsSrv := &http.Server{Addr: metricsAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		log.Printf("metrics server listening on %s", metricsAddr)
 		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -115,7 +115,8 @@ func main() {
 		dlqTopic := envOrDefault("DLQ_TOPIC", "raw-documents.dlq")
 		kafkaSink, err := NewKafkaDLQSink(kafkaBrokers, dlqTopic)
 		if err != nil {
-			log.Fatalf("create kafka dlq sink: %v", err)
+			log.Printf("FATAL: create kafka dlq sink: %v", err)
+			return
 		}
 		defer kafkaSink.Close()
 		sink = kafkaSink
@@ -126,7 +127,8 @@ func main() {
 	if fallbackPath := os.Getenv("DLQ_FALLBACK_PATH"); fallbackPath != "" {
 		fileSink, err := dlq.NewFileSink(fallbackPath)
 		if err != nil {
-			log.Fatalf("create dlq file fallback: %v", err)
+			log.Printf("FATAL: create dlq file fallback: %v", err)
+			return
 		}
 		dlqOpts = append(dlqOpts, dlq.WithFallback(fileSink))
 		log.Printf("DLQ fallback: file=%s", fallbackPath)

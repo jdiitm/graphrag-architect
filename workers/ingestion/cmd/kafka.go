@@ -94,7 +94,7 @@ func NewKafkaProducerClient(brokers, topic string) (*KafkaProducerClient, error)
 }
 
 func (p *KafkaProducerClient) Produce(ctx context.Context, topic string, key, value []byte, headers map[string]string) error {
-	var kgoHeaders []kgo.RecordHeader
+	kgoHeaders := make([]kgo.RecordHeader, 0, len(headers))
 	for k, v := range headers {
 		kgoHeaders = append(kgoHeaders, kgo.RecordHeader{Key: k, Value: []byte(v)})
 	}

@@ -2,9 +2,10 @@ package dispatcher
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"math"
-	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -181,12 +182,20 @@ func (d *Dispatcher) processWithRetry(ctx context.Context, job domain.Job) domai
 	return domain.Result{Job: job, Err: lastErr, Attempts: d.cfg.MaxRetries}
 }
 
+func cryptoFloat64() float64 {
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return 0.5
+	}
+	return float64(binary.LittleEndian.Uint64(b[:])>>11) / (1 << 53)
+}
+
 func backoffWithJitter(base, maxDelay time.Duration, attempt int) time.Duration {
 	exp := math.Pow(2, float64(attempt-1))
 	delay := time.Duration(float64(base) * exp)
 	if delay > maxDelay {
 		delay = maxDelay
 	}
-	jitter := 0.5 + rand.Float64()
+	jitter := 0.5 + cryptoFloat64()
 	return time.Duration(float64(delay) * jitter)
 }

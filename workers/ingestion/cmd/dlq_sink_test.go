@@ -8,21 +8,7 @@ import (
 	"time"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
-	"github.com/twmb/franz-go/pkg/kgo"
 )
-
-type recordCapture struct {
-	records []*kgo.Record
-	err     error
-}
-
-func (r *recordCapture) produce(_ context.Context, rec *kgo.Record) error {
-	if r.err != nil {
-		return r.err
-	}
-	r.records = append(r.records, rec)
-	return nil
-}
 
 func buildTestResult() domain.Result {
 	return domain.Result{
