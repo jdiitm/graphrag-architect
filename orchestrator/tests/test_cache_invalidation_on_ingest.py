@@ -71,12 +71,13 @@ class TestCacheInvalidationOnCommit:
             ),
             patch(
                 "orchestrator.app.graph_builder.invalidate_caches_after_ingest",
+                new_callable=AsyncMock,
             ) as mock_invalidate,
         ):
             result = await commit_to_neo4j({"extracted_nodes": _make_services(2)})
 
         assert result["commit_status"] == "success"
-        mock_invalidate.assert_called_once()
+        mock_invalidate.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_failed_commit_does_not_invalidate_caches(self) -> None:
@@ -108,12 +109,13 @@ class TestCacheInvalidationOnCommit:
             ),
             patch(
                 "orchestrator.app.graph_builder.invalidate_caches_after_ingest",
+                new_callable=AsyncMock,
             ) as mock_invalidate,
         ):
             result = await commit_to_neo4j({"extracted_nodes": _make_services(1)})
 
         assert result["commit_status"] == "failed"
-        mock_invalidate.assert_not_called()
+        mock_invalidate.assert_not_awaited()
 
 
 class TestRedisSubgraphCacheInvalidateAll:

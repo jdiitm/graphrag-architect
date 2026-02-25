@@ -30,17 +30,17 @@ from orchestrator.app.observability import configure_metrics, configure_telemetr
 from orchestrator.app.query_engine import get_eval_store, query_graph
 from orchestrator.app.query_models import (
     QueryJobResponse,
-    QueryJobStore,
     QueryRequest,
     QueryResponse,
+    create_job_store,
 )
-from orchestrator.app.token_bucket import TenantRateLimiter
+from orchestrator.app.token_bucket import create_rate_limiter
 
 logger = logging.getLogger(__name__)
 
 _STATE: Dict[str, Any] = {"semaphore": None, "kafka_consumer": None, "kafka_task": None}
-_JOB_STORE = QueryJobStore(ttl_seconds=300.0)
-_TENANT_LIMITER = TenantRateLimiter(
+_JOB_STORE = create_job_store(ttl_seconds=300.0)
+_TENANT_LIMITER = create_rate_limiter(
     capacity=int(os.environ.get("RATE_LIMIT_CAPACITY", "20")),
     refill_rate=float(os.environ.get("RATE_LIMIT_REFILL_RATE", "10.0")),
 )
@@ -83,7 +83,7 @@ async def lifespan(_app: FastAPI):
     auth = _validate_startup_security()
     configure_telemetry()
     configure_metrics()
-    init_checkpointer()
+    await init_checkpointer()
     init_driver()
     set_ingestion_semaphore(
         asyncio.Semaphore(RateLimitConfig.from_env().max_concurrent_ingestions)
@@ -109,7 +109,7 @@ async def lifespan(_app: FastAPI):
             _STATE["kafka_task"] = None
         shutdown_pool()
         await close_driver()
-        close_checkpointer()
+        await close_checkpointer()
 
 
 def _validate_startup_security() -> AuthConfig:
@@ -277,9 +277,14 @@ async def _run_ingestion(request: IngestRequest) -> IngestResponse:
 
 
 def _resolve_tenant_context(authorization: Optional[str]) -> TenantContext:
-    if not authorization:
-        return TenantContext.default()
     auth = AuthConfig.from_env()
+    if not authorization:
+        if auth.require_tokens:
+            raise HTTPException(
+                status_code=401,
+                detail="authorization header required",
+            )
+        return TenantContext.default()
     if not auth.token_secret:
         if auth.require_tokens:
             raise HTTPException(
@@ -350,7 +355,7 @@ async def query(
     tenant_ctx = _resolve_tenant_context(authorization)
     await _enforce_rate_limit(tenant_ctx.tenant_id)
     if async_mode:
-        job = _JOB_STORE.create()
+        job = await _JOB_STORE.create()
         initial_state = _build_query_state(request, authorization or "")
         asyncio.create_task(
             _run_query_job(job.job_id, initial_state)
@@ -377,19 +382,19 @@ async def query(
 
 
 async def _run_query_job(job_id: str, initial_state: Dict[str, Any]) -> None:
-    _JOB_STORE.mark_running(job_id)
+    await _JOB_STORE.mark_running(job_id)
     try:
         result = await query_graph.ainvoke(initial_state)
         response = _result_to_response(result)
-        _JOB_STORE.complete(job_id, response)
+        await _JOB_STORE.complete(job_id, response)
     except Exception as exc:
         logger.exception("Background query job %s failed", job_id)
-        _JOB_STORE.fail(job_id, str(exc))
+        await _JOB_STORE.fail(job_id, str(exc))
 
 
 @app.get("/query/{job_id}", response_model=QueryJobResponse)
 async def get_query_job(job_id: str) -> JSONResponse:
-    job = _JOB_STORE.get(job_id)
+    job = await _JOB_STORE.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return JSONResponse(content=job.model_dump(), status_code=200)

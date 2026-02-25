@@ -9,6 +9,24 @@ services:
     volumes:
       - neo4j_data:/data
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=graphrag
+      - POSTGRES_PASSWORD=graphrag
+      - POSTGRES_DB=graphrag
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   kafka:
     image: apache/kafka:3.9.0
     ports:
@@ -26,3 +44,5 @@ services:
 
 volumes:
   neo4j_data:
+  redis_data:
+  postgres_data:

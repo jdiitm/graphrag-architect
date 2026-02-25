@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import math
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Tuple
+
+from orchestrator.app.redis_client import (
+    create_async_redis,
+    delete_keys_by_prefix,
+    require_redis,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +89,35 @@ class SemanticQueryCache:
     def __init__(self, config: CacheConfig | None = None) -> None:
         self._config = config or CacheConfig()
         self._entries: Dict[str, CacheEntry] = {}
+        self._entry_generations: Dict[str, int] = {}
+        self._generation = 0
         self._hits = 0
         self._misses = 0
         self._evictions = 0
         self._inflight: Dict[str, _InflightRequest] = {}
+
+    @property
+    def similarity_threshold(self) -> float:
+        return self._config.similarity_threshold
+
+    @property
+    def generation(self) -> int:
+        return self._generation
+
+    def advance_generation(self) -> int:
+        self._generation += 1
+        return self._generation
+
+    def has_inflight(self, key_hash: str) -> bool:
+        return key_hash in self._inflight
+
+    def get_inflight(self, key_hash: str) -> Optional[_InflightRequest]:
+        return self._inflight.get(key_hash)
+
+    def set_inflight(self, key_hash: str) -> _InflightRequest:
+        request = _InflightRequest()
+        self._inflight[key_hash] = request
+        return request
 
     async def lookup_or_wait(
         self,
@@ -98,8 +130,8 @@ class SemanticQueryCache:
 
         key_hash = _embedding_hash(query_embedding)
 
-        if key_hash in self._inflight:
-            inflight = self._inflight[key_hash]
+        inflight = self.get_inflight(key_hash)
+        if inflight is not None:
             succeeded = await inflight.wait()
             if succeeded:
                 result = self.lookup(query_embedding, tenant_id=tenant_id)
@@ -107,7 +139,7 @@ class SemanticQueryCache:
                     return result, False
             return None, True
 
-        self._inflight[key_hash] = _InflightRequest()
+        self.set_inflight(key_hash)
         return None, True
 
     def notify_complete(
@@ -174,6 +206,7 @@ class SemanticQueryCache:
             tenant_id=tenant_id,
         )
         self._entries[key_hash] = entry
+        self._entry_generations[key_hash] = self._generation
 
     def invalidate_tenant(self, tenant_id: str) -> int:
         to_remove = [
@@ -181,11 +214,24 @@ class SemanticQueryCache:
         ]
         for k in to_remove:
             del self._entries[k]
+            self._entry_generations.pop(k, None)
         return len(to_remove)
+
+    def invalidate_stale(self) -> int:
+        stale = [
+            k for k, gen in self._entry_generations.items()
+            if gen < self._generation
+        ]
+        for k in stale:
+            self._entries.pop(k, None)
+            self._entry_generations.pop(k, None)
+            self._evictions += 1
+        return len(stale)
 
     def invalidate_all(self) -> int:
         count = len(self._entries)
         self._entries.clear()
+        self._entry_generations.clear()
         return count
 
     def stats(self) -> CacheStats:
@@ -201,6 +247,7 @@ class SemanticQueryCache:
         expired = [k for k, v in self._entries.items() if v.is_expired]
         for k in expired:
             del self._entries[k]
+            self._entry_generations.pop(k, None)
             self._evictions += 1
 
     def _enforce_max_size(self) -> None:
@@ -209,4 +256,178 @@ class SemanticQueryCache:
                 self._entries, key=lambda k: self._entries[k].created_at,
             )
             del self._entries[oldest_key]
+            self._entry_generations.pop(oldest_key, None)
             self._evictions += 1
+
+
+class RedisSemanticQueryCache:
+    def __init__(
+        self,
+        redis_url: str,
+        config: CacheConfig | None = None,
+        ttl_seconds: int = 300,
+        key_prefix: str = "graphrag:semcache:",
+        password: str = "",
+        db: int = 0,
+    ) -> None:
+        require_redis("RedisSemanticQueryCache")
+        self._redis = create_async_redis(redis_url, password=password, db=db)
+        self._ttl = ttl_seconds
+        self._prefix = key_prefix
+        self._l1 = SemanticQueryCache(config=config)
+
+    @property
+    def generation(self) -> int:
+        return self._l1.generation
+
+    def advance_generation(self) -> int:
+        return self._l1.advance_generation()
+
+    async def invalidate_stale(self) -> int:
+        count = self._l1.invalidate_stale()
+        try:
+            await delete_keys_by_prefix(self._redis, self._prefix)
+        except Exception:
+            logger.warning("Redis semantic cache invalidate_stale failed (non-fatal)")
+        return count
+
+    async def _redis_lookup(
+        self,
+        query_embedding: List[float],
+        tenant_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            cursor = None
+            pattern = f"{self._prefix}*"
+            threshold = self._l1.similarity_threshold
+            best_result: Optional[Dict[str, Any]] = None
+            best_sim = 0.0
+
+            while cursor != 0:
+                cursor, keys = await self._redis.scan(
+                    cursor=cursor or 0, match=pattern, count=100,
+                )
+                for key in keys:
+                    raw = await self._redis.get(key)
+                    if raw is None:
+                        continue
+                    entry = json.loads(raw)
+                    if tenant_id and entry.get("tenant_id") and entry["tenant_id"] != tenant_id:
+                        continue
+                    stored_emb = entry.get("embedding", [])
+                    sim = _cosine_similarity(query_embedding[:32], stored_emb)
+                    if sim >= threshold and sim > best_sim:
+                        best_sim = sim
+                        best_result = entry.get("result")
+
+            if best_result is not None:
+                self._l1.store(
+                    query=best_result.get("query", ""),
+                    query_embedding=query_embedding,
+                    result=best_result,
+                    tenant_id=tenant_id,
+                )
+            return best_result
+        except Exception:
+            logger.warning("Redis semantic cache L2 lookup failed (non-fatal)")
+            return None
+
+    async def lookup_or_wait(
+        self,
+        query_embedding: List[float],
+        tenant_id: str = "",
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
+        cached = self._l1.lookup(query_embedding, tenant_id=tenant_id)
+        if cached is not None:
+            return cached, False
+
+        redis_hit = await self._redis_lookup(query_embedding, tenant_id=tenant_id)
+        if redis_hit is not None:
+            return redis_hit, False
+
+        key_hash = _embedding_hash(query_embedding)
+        inflight = self._l1.get_inflight(key_hash)
+        if inflight is not None:
+            succeeded = await inflight.wait()
+            if succeeded:
+                result = self._l1.lookup(query_embedding, tenant_id=tenant_id)
+                if result is not None:
+                    return result, False
+            return None, True
+
+        self._l1.set_inflight(key_hash)
+        return None, True
+
+    def notify_complete(
+        self,
+        query_embedding: List[float],
+        failed: bool = False,
+    ) -> None:
+        self._l1.notify_complete(query_embedding, failed=failed)
+
+    def lookup(
+        self,
+        query_embedding: List[float],
+        tenant_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        return self._l1.lookup(query_embedding, tenant_id=tenant_id)
+
+    def store(
+        self,
+        query: str,
+        query_embedding: List[float],
+        result: Dict[str, Any],
+        tenant_id: str = "",
+        complexity: str = "",
+    ) -> None:
+        self._l1.store(
+            query=query, query_embedding=query_embedding,
+            result=result, tenant_id=tenant_id, complexity=complexity,
+        )
+        key_hash = _embedding_hash(query_embedding)
+        try:
+            payload = json.dumps({
+                "query": query,
+                "embedding": query_embedding[:32],
+                "result": result,
+                "tenant_id": tenant_id,
+            }, default=str)
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                self._redis.setex(
+                    f"{self._prefix}{key_hash}", self._ttl, payload,
+                )
+            )
+        except RuntimeError:
+            pass
+        except Exception:
+            logger.debug("Redis semantic cache store failed (non-fatal)")
+
+    def invalidate_tenant(self, tenant_id: str) -> int:
+        return self._l1.invalidate_tenant(tenant_id)
+
+    async def invalidate_all(self) -> int:
+        count = self._l1.invalidate_all()
+        try:
+            await delete_keys_by_prefix(self._redis, self._prefix)
+        except Exception:
+            logger.debug("Redis semantic cache invalidate_all failed (non-fatal)")
+        return count
+
+    def stats(self) -> CacheStats:
+        return self._l1.stats()
+
+
+def create_semantic_cache(
+    config: CacheConfig | None = None,
+) -> Any:
+    from orchestrator.app.config import RedisConfig
+    redis_cfg = RedisConfig.from_env()
+    if redis_cfg.url:
+        return RedisSemanticQueryCache(
+            redis_url=redis_cfg.url,
+            password=redis_cfg.password,
+            db=redis_cfg.db,
+            config=config,
+        )
+    return SemanticQueryCache(config=config)

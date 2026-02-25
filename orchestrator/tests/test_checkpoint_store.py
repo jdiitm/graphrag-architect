@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+import pytest_asyncio
 
 from orchestrator.app.checkpoint_store import (
     CheckpointStoreConfig,
@@ -31,40 +32,45 @@ class TestCheckpointStoreConfig:
 
 
 class TestCheckpointerLifecycle:
-    def setup_method(self) -> None:
-        close_checkpointer()
+    @pytest_asyncio.fixture(autouse=True)
+    async def _reset(self):
+        await close_checkpointer()
+        yield
+        await close_checkpointer()
 
-    def teardown_method(self) -> None:
-        close_checkpointer()
-
-    def test_get_before_init_raises(self) -> None:
+    @pytest.mark.asyncio
+    async def test_get_before_init_raises(self) -> None:
         with pytest.raises(RuntimeError, match="not initialized"):
             get_checkpointer()
 
-    def test_init_creates_memory_checkpointer(self) -> None:
+    @pytest.mark.asyncio
+    async def test_init_creates_memory_checkpointer(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            init_checkpointer()
+            await init_checkpointer()
         cp = get_checkpointer()
         assert cp is not None
 
-    def test_close_resets_state(self) -> None:
+    @pytest.mark.asyncio
+    async def test_close_resets_state(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            init_checkpointer()
-        close_checkpointer()
+            await init_checkpointer()
+        await close_checkpointer()
         with pytest.raises(RuntimeError, match="not initialized"):
             get_checkpointer()
 
-    def test_double_init_replaces_checkpointer(self) -> None:
+    @pytest.mark.asyncio
+    async def test_double_init_replaces_checkpointer(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            init_checkpointer()
+            await init_checkpointer()
             first = get_checkpointer()
-            init_checkpointer()
+            await init_checkpointer()
             second = get_checkpointer()
         assert first is not second
 
-    def test_memory_checkpointer_has_correct_type(self) -> None:
+    @pytest.mark.asyncio
+    async def test_memory_checkpointer_has_correct_type(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            init_checkpointer()
+            await init_checkpointer()
         cp = get_checkpointer()
         from langgraph.checkpoint.memory import MemorySaver
         assert isinstance(cp, MemorySaver)

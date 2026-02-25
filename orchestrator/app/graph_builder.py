@@ -84,16 +84,18 @@ def get_vector_store() -> Any:
     return _VectorStoreHolder.value
 
 
-def invalidate_caches_after_ingest() -> None:
+async def invalidate_caches_after_ingest() -> None:
     try:
         from orchestrator.app.query_engine import (
             _SUBGRAPH_CACHE,
             _SEMANTIC_CACHE,
         )
-        _SUBGRAPH_CACHE.invalidate_all()
+        _SUBGRAPH_CACHE.advance_generation()
+        _SUBGRAPH_CACHE.invalidate_stale()
         if _SEMANTIC_CACHE is not None:
-            _SEMANTIC_CACHE.invalidate_all()
-        logger.info("Post-ingestion cache invalidation complete")
+            _SEMANTIC_CACHE.advance_generation()
+            await _SEMANTIC_CACHE.invalidate_stale()
+        logger.info("Post-ingestion generational cache invalidation complete")
     except Exception as exc:
         logger.warning("Cache invalidation failed (non-fatal): %s", exc)
 
@@ -419,7 +421,7 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
                 await _cleanup_pruned_vectors(pruned_ids, span)
             except Exception as prune_exc:
                 logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
-            invalidate_caches_after_ingest()
+            await invalidate_caches_after_ingest()
             return {"commit_status": "success", "completion_tracked": True}
         except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:
             span.set_status(StatusCode.ERROR, str(exc))

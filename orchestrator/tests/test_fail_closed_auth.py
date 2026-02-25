@@ -95,9 +95,9 @@ class TestResolveTenantContextFailClosed:
             result = _resolve_tenant_context(None)
             assert result.tenant_id == TenantContext.default().tenant_id
 
-    def test_no_auth_header_with_require_tokens_returns_default(self) -> None:
+    def test_no_auth_header_with_require_tokens_raises_401(self) -> None:
+        from fastapi import HTTPException
         from orchestrator.app.main import _resolve_tenant_context
-        from orchestrator.app.tenant_isolation import TenantContext
 
         env = {
             "DEPLOYMENT_MODE": "dev",
@@ -105,8 +105,9 @@ class TestResolveTenantContextFailClosed:
         }
         with patch.dict("os.environ", env, clear=False):
             os.environ.pop("AUTH_TOKEN_SECRET", None)
-            result = _resolve_tenant_context(None)
-            assert result.tenant_id == TenantContext.default().tenant_id
+            with pytest.raises(HTTPException) as exc_info:
+                _resolve_tenant_context(None)
+            assert exc_info.value.status_code == 401
 
 
 class TestVerifyIngestAuthFailClosed:
@@ -156,8 +157,8 @@ class TestStartupHealthCheck:
             patch.dict("os.environ", env),
             patch("orchestrator.app.main.init_driver"),
             patch("orchestrator.app.main.close_driver", new_callable=AsyncMock),
-            patch("orchestrator.app.main.init_checkpointer"),
-            patch("orchestrator.app.main.close_checkpointer"),
+            patch("orchestrator.app.main.init_checkpointer", new_callable=AsyncMock),
+            patch("orchestrator.app.main.close_checkpointer", new_callable=AsyncMock),
             patch("orchestrator.app.main.configure_telemetry"),
             patch("orchestrator.app.main.configure_metrics"),
             patch("orchestrator.app.main.shutdown_pool"),

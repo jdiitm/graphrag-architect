@@ -16,14 +16,20 @@ from orchestrator.app.agentic_traversal import (
 from orchestrator.app.context_manager import TokenBudget
 
 
+_LOW_DEGREE = [{"degree": 5}]
+
+
 def _mock_neo4j_session(side_effect=None, return_value=None):
     mock_session = AsyncMock()
     if side_effect:
-        mock_session.execute_read = AsyncMock(side_effect=side_effect)
+        degree_interleaved = []
+        for item in side_effect:
+            degree_interleaved.append(_LOW_DEGREE)
+            degree_interleaved.append(item)
+        mock_session.execute_read = AsyncMock(side_effect=degree_interleaved)
     else:
-        mock_session.execute_read = AsyncMock(
-            return_value=return_value if return_value is not None else []
-        )
+        data = return_value if return_value is not None else []
+        mock_session.execute_read = AsyncMock(side_effect=[_LOW_DEGREE, data])
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
     return mock_session
@@ -60,12 +66,17 @@ class TestExecuteHop:
 
         assert len(results) == 1
         assert results[0]["target_id"] == "svc-b"
-        session.execute_read.assert_called_once()
+        assert session.execute_read.call_count == 2
 
     @pytest.mark.asyncio
     async def test_returns_empty_list_when_no_neighbors(self) -> None:
-        session = _mock_neo4j_session(return_value=[])
-        driver = _mock_driver(session)
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(
+            side_effect=[_LOW_DEGREE, []]
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        driver = _mock_driver(mock_session)
 
         results = await execute_hop(
             driver=driver,
@@ -90,7 +101,7 @@ class TestExecuteHop:
             timeout=30.0,
         )
 
-        session.execute_read.assert_called_once()
+        assert session.execute_read.call_count == 2
 
 
 class TestRunTraversal:
@@ -104,10 +115,13 @@ class TestRunTraversal:
                 "target_label": "Service",
             },
         ]
-        session = _mock_neo4j_session(
-            side_effect=[hop_results, []]
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(
+            side_effect=[_LOW_DEGREE, hop_results, _LOW_DEGREE, []]
         )
-        driver = _mock_driver(session)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        driver = _mock_driver(mock_session)
 
         context = await run_traversal(
             driver=driver,
@@ -132,10 +146,17 @@ class TestRunTraversal:
             }
             for i in range(5)
         ]
-        session = _mock_neo4j_session(return_value=endless_results)
-        driver = _mock_driver(session)
+        effects = []
+        for _ in range(10):
+            effects.append(_LOW_DEGREE)
+            effects.append(endless_results)
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(side_effect=effects)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        driver = _mock_driver(mock_session)
 
-        context = await run_traversal(
+        await run_traversal(
             driver=driver,
             start_node_id="root",
             tenant_id="t1",
@@ -144,19 +165,27 @@ class TestRunTraversal:
             timeout=30.0,
         )
 
-        assert session.execute_read.call_count <= 3
+        assert mock_session.execute_read.call_count <= 6
 
     @pytest.mark.asyncio
     async def test_traversal_respects_token_budget(self) -> None:
-        session = _mock_neo4j_session(return_value=[
+        big_results = [
             {
                 "target_id": "big",
                 "target_name": "x" * 200,
                 "rel_type": "CALLS",
                 "target_label": "Service",
             }
-        ])
-        driver = _mock_driver(session)
+        ]
+        effects = []
+        for _ in range(10):
+            effects.append(_LOW_DEGREE)
+            effects.append(big_results)
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(side_effect=effects)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        driver = _mock_driver(mock_session)
 
         context = await run_traversal(
             driver=driver,
@@ -180,10 +209,15 @@ class TestRunTraversal:
                 "target_label": "Service",
             },
         ]
-        session = _mock_neo4j_session(return_value=cycle_results)
-        driver = _mock_driver(session)
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(
+            side_effect=[_LOW_DEGREE, cycle_results]
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        driver = _mock_driver(mock_session)
 
-        context = await run_traversal(
+        await run_traversal(
             driver=driver,
             start_node_id="svc-a",
             tenant_id="t1",
@@ -192,12 +226,17 @@ class TestRunTraversal:
             timeout=30.0,
         )
 
-        assert session.execute_read.call_count == 1
+        assert mock_session.execute_read.call_count == 2
 
     @pytest.mark.asyncio
     async def test_traversal_returns_empty_for_isolated_node(self) -> None:
-        session = _mock_neo4j_session(return_value=[])
-        driver = _mock_driver(session)
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(
+            side_effect=[_LOW_DEGREE, []]
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        driver = _mock_driver(mock_session)
 
         context = await run_traversal(
             driver=driver,

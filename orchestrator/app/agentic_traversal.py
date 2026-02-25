@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 
 MAX_HOPS = 5
 MAX_VISITED = 50
+MAX_NODE_DEGREE = 500
+
+_DEGREE_CHECK_QUERY = (
+    "MATCH (n {id: $source_id, tenant_id: $tenant_id}) "
+    "RETURN size((n)--()) AS degree"
+)
 
 _ONE_HOP_TEMPLATE = (
     "MATCH (source {{id: $source_id, tenant_id: $tenant_id}})"
@@ -130,19 +136,36 @@ async def execute_hop(
     acl_params: Dict[str, Any],
     timeout: float = 30.0,
     limit: int = 50,
+    max_degree: int = MAX_NODE_DEGREE,
 ) -> List[Dict[str, Any]]:
-    params = {
-        "source_id": source_id,
-        "tenant_id": tenant_id,
-        "limit": limit,
-        **acl_params,
-    }
+    degree_params = {"source_id": source_id, "tenant_id": tenant_id}
 
-    async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
-        result = await tx.run(_NEIGHBOR_DISCOVERY_TEMPLATE, **params)
+    async def _degree_tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
+        result = await tx.run(_DEGREE_CHECK_QUERY, **degree_params)
         return await result.data()
 
     async with driver.session() as session:
+        degree_result = await session.execute_read(_degree_tx, timeout=timeout)
+        if degree_result:
+            degree = degree_result[0].get("degree", 0)
+            if degree > max_degree:
+                logger.warning(
+                    "Skipping super-node %s with degree %d (threshold %d)",
+                    source_id, degree, max_degree,
+                )
+                return []
+
+        params = {
+            "source_id": source_id,
+            "tenant_id": tenant_id,
+            "limit": limit,
+            **acl_params,
+        }
+
+        async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
+            result = await tx.run(_NEIGHBOR_DISCOVERY_TEMPLATE, **params)
+            return await result.data()
+
         return await session.execute_read(_tx, timeout=timeout)
 
 

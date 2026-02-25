@@ -20,6 +20,9 @@ python -m pytest orchestrator/tests/ -v
 
 # 3. Go tests (from Go module root)
 cd /home/j/side/graphrag-architect/workers/ingestion && go test ./... -v -count=1 -timeout 30s
+
+# 4. Go lint (from Go module root)
+cd /home/j/side/graphrag-architect/workers/ingestion && golangci-lint run ./...
 ```
 
 ## Rules
@@ -29,7 +32,7 @@ cd /home/j/side/graphrag-architect/workers/ingestion && go test ./... -v -count=
 - Never skip, disable, or mark tests as expected-failure to bypass a gate.
 - Never add pylint disable comments to bypass lint — fix the code or update pyproject.toml if the rule is genuinely inappropriate.
 - Always include the raw output in your response so the user can verify.
-- When reporting results, state: "Pylint: X/10, Python tests: A/B passed, Go tests: C/D passed".
+- When reporting results, state: "Pylint: X/10, Python tests: A/B passed, Go tests: C/D passed, Go lint: clean/N issues".
 
 ## Setup Prerequisites
 

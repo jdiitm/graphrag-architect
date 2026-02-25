@@ -352,12 +352,22 @@ class QdrantClientPool:
     def max_size(self) -> int:
         return self._max_size
 
+    async def _health_check(self, client: Any) -> bool:
+        try:
+            await client.get_collections()
+            return True
+        except Exception:
+            return False
+
     async def acquire(self) -> Any:
         await self._semaphore.acquire()
-        if self._idle:
+        while self._idle:
             client = self._idle.popleft()
-        else:
-            client = self._factory()
+            if await self._health_check(client):
+                self._active_count += 1
+                return client
+            logger.debug("Discarding stale Qdrant connection from pool")
+        client = self._factory()
         self._active_count += 1
         return client
 
