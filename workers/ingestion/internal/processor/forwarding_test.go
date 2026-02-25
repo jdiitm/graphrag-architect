@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -397,6 +398,83 @@ func TestForwardingProcessor_503UsesRetryAfterHeader(t *testing.T) {
 	gap := timestamps[1].Sub(timestamps[0])
 	if gap < 900*time.Millisecond {
 		t.Errorf("expected at least ~1s gap from Retry-After header, got %v", gap)
+	}
+}
+
+func TestForwardingProcessor_RejectsOversizedPayload(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("server should not be contacted for oversized payloads")
+	}))
+	defer srv.Close()
+
+	maxSize := 1024
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client(), processor.WithMaxPayloadSize(maxSize))
+
+	job := validJob()
+	job.Value = make([]byte, maxSize+1)
+
+	err := fp.Process(context.Background(), job)
+	if err == nil {
+		t.Fatal("expected error for oversized payload, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Errorf("error should mention size limit, got: %v", err)
+	}
+}
+
+func TestForwardingProcessor_AcceptsPayloadAtMaxSize(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"committed","entities_extracted":0,"errors":[]}`))
+	}))
+	defer srv.Close()
+
+	maxSize := 1024
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client(), processor.WithMaxPayloadSize(maxSize))
+
+	job := validJob()
+	job.Value = make([]byte, maxSize)
+
+	err := fp.Process(context.Background(), job)
+	if err != nil {
+		t.Fatalf("payload at max size should succeed, got: %v", err)
+	}
+}
+
+func TestForwardingProcessor_RespectsContextTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client(),
+		processor.WithRetryBackoff(time.Second),
+		processor.WithRetryTimeout(50*time.Millisecond),
+	)
+
+	start := time.Now()
+	err := fp.Process(context.Background(), validJob())
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error when context times out, got nil")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("retry loop took %v, expected < 2s with 50ms timeout", elapsed)
+	}
+}
+
+func TestForwardingProcessor_DefaultMaxPayloadSize(t *testing.T) {
+	fp := processor.NewForwardingProcessor("http://localhost:9999", http.DefaultClient)
+	job := validJob()
+	job.Value = make([]byte, processor.DefaultMaxPayloadSize+1)
+
+	err := fp.Process(context.Background(), job)
+	if err == nil {
+		t.Fatal("expected error for payload exceeding default max size")
+	}
+	if !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Errorf("error should mention size limit, got: %v", err)
 	}
 }
 
