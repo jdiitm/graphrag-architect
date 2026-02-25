@@ -1,0 +1,65 @@
+replicaCount: 2
+
+orchestrator:
+  image:
+    repository: ghcr.io/jdiitm/graphrag-orchestrator
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    limits:
+      cpu: "2"
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  env:
+    LLM_PROVIDER: gemini
+    NEO4J_DATABASE: neo4j
+    MAX_QUERY_COST: "20"
+
+ingestionWorker:
+  image:
+    repository: ghcr.io/jdiitm/graphrag-ingestion
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 3
+  resources:
+    limits:
+      cpu: "1"
+      memory: 2Gi
+    requests:
+      cpu: 250m
+      memory: 512Mi
+
+neo4j:
+  enabled: true
+  neo4j:
+    edition: enterprise
+    password: changeme
+
+kafka:
+  enabled: true
+  replicaCount: 3
+
+redis:
+  enabled: true
+  architecture: standalone
+
+vault:
+  enabled: false
+  address: ""
+  role: graphrag
+
+monitoring:
+  prometheus:
+    enabled: true
+  grafana:
+    enabled: true
+
+networkPolicy:
+  enabled: true
+
+tls:
+  enabled: false
+  certManager:
+    enabled: false

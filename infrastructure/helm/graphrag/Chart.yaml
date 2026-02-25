@@ -1,0 +1,23 @@
+apiVersion: v2
+name: graphrag
+description: GraphRAG Domain Expert - Knowledge Graph powered retrieval system
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - graphrag
+  - knowledge-graph
+  - neo4j
+  - kafka
+  - rag
+maintainers:
+  - name: graphrag-team
+dependencies:
+  - name: neo4j
+    version: "5.x"
+    repository: https://helm.neo4j.com/neo4j
+    condition: neo4j.enabled
+  - name: kafka
+    version: "30.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: kafka.enabled
