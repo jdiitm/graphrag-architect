@@ -125,6 +125,12 @@ class Neo4jVectorStore:
     def __init__(self, driver: Any = None) -> None:
         self._driver = driver
 
+    def _get_driver(self) -> Any:
+        if self._driver is None:
+            from orchestrator.app.neo4j_pool import get_driver
+            self._driver = get_driver()
+        return self._driver
+
     async def upsert(
         self, collection: str, vectors: List[VectorRecord],
     ) -> int:
@@ -139,7 +145,7 @@ class Neo4jVectorStore:
                 )
             return len(vectors)
 
-        async with self._driver.session() as session:
+        async with self._get_driver().session() as session:
             return await session.execute_write(_tx)
 
     async def search(
@@ -161,7 +167,7 @@ class Neo4jVectorStore:
             )
             return await result.data()
 
-        async with self._driver.session() as session:
+        async with self._get_driver().session() as session:
             records = await session.execute_read(_tx)
 
         return [
@@ -184,7 +190,7 @@ class Neo4jVectorStore:
             data = await result.data()
             return data[0]["removed"] if data else 0
 
-        async with self._driver.session() as session:
+        async with self._get_driver().session() as session:
             return await session.execute_write(_tx)
 
     async def search_with_tenant(

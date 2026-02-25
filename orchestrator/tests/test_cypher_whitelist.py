@@ -15,7 +15,7 @@ class TestTemplateHashRegistry:
         catalog = TemplateCatalog()
         registry = TemplateHashRegistry(catalog)
         templates = catalog.all_templates()
-        assert len(registry.registered_hashes) >= len(templates)
+        assert len(registry.registered_hashes) == len(templates)
 
     def test_known_template_passes_verification(self) -> None:
         from orchestrator.app.cypher_sandbox import TemplateHashRegistry

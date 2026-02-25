@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, List, Protocol, runtime_checkable
+from typing import Any, List, Optional, Protocol, runtime_checkable
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -136,7 +136,7 @@ class FallbackChain:
         self._providers = providers
 
     async def ainvoke(self, prompt: str) -> str:
-        last_error: Exception | None = None
+        last_error: Optional[Exception] = None
         for provider in self._providers:
             try:
                 return await provider.ainvoke(prompt)
@@ -146,7 +146,7 @@ class FallbackChain:
         raise LLMError(f"All {len(self._providers)} providers failed") from last_error
 
     async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
-        last_error: Exception | None = None
+        last_error: Optional[Exception] = None
         for provider in self._providers:
             try:
                 return await provider.ainvoke_structured(prompt, messages)
@@ -161,7 +161,8 @@ def create_provider(
 ) -> LLMProvider:
     name = (provider_name or "gemini").strip().lower()
     if name == "gemini":
-        return GeminiProvider(config)
+        inner = GeminiProvider(config)
+        return ProviderWithCircuitBreaker(inner)
     if name == "stub":
         return StubProvider()
     raise ValueError(f"Unknown LLM provider: {provider_name!r}")

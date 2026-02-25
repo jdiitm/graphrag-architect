@@ -8,6 +8,7 @@ from orchestrator.app.extraction_models import (
 )
 from orchestrator.app.llm_provider import (
     GeminiProvider,
+    ProviderWithCircuitBreaker,
     StubProvider,
     create_provider,
 )
@@ -20,11 +21,13 @@ def _minimal_config() -> ExtractionConfig:
 class TestCreateProvider:
     def test_returns_gemini_provider_for_gemini(self) -> None:
         provider = create_provider("gemini", _minimal_config())
-        assert isinstance(provider, GeminiProvider)
+        assert isinstance(provider, ProviderWithCircuitBreaker)
+        assert isinstance(provider._inner, GeminiProvider)
 
     def test_returns_gemini_provider_for_default(self) -> None:
         provider = create_provider("", _minimal_config())
-        assert isinstance(provider, GeminiProvider)
+        assert isinstance(provider, ProviderWithCircuitBreaker)
+        assert isinstance(provider._inner, GeminiProvider)
 
     def test_returns_stub_provider_for_stub(self) -> None:
         provider = create_provider("stub", _minimal_config())

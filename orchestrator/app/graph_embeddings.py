@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import random
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
@@ -161,12 +160,11 @@ class Node2VecEmbedder:
 def _cosine_sim(a: List[float], b: List[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-    if norm_a == 0.0 or norm_b == 0.0:
+    from orchestrator.app.vector_store import _cosine_similarity
+    try:
+        return _cosine_similarity(a, b)
+    except ValueError:
         return 0.0
-    return dot / (norm_a * norm_b)
 
 
 def hybrid_score(
@@ -186,12 +184,12 @@ class _ScoredResult:
 
 
 def rerank_with_structural(
-    text_results: list,
+    text_results: List[Any],
     structural_embeddings: Dict[str, List[float]],
     query_structural: List[float],
     text_weight: float = 0.7,
     structural_weight: float = 0.3,
-) -> list:
+) -> List[Any]:
     if not text_results:
         return []
 

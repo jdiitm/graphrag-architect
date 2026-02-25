@@ -70,17 +70,20 @@ class SandboxedQueryExecutor:
             return _LIMIT_PATTERN.sub(_cap_limit, cypher)
         return f"{cypher.rstrip().rstrip(';')} LIMIT {self._config.max_results}"
 
+    def validate(self, cypher: str) -> None:
+        if self._registry is not None and not self._registry.is_allowed(cypher):
+            raise CypherWhitelistError(
+                f"Cypher query not in registered template whitelist: "
+                f"{_hash_cypher(cypher)[:16]}..."
+            )
+
     async def execute_read(
         self,
         session: Any,
         cypher: str,
         params: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        if self._registry is not None and not self._registry.is_allowed(cypher):
-            raise CypherWhitelistError(
-                f"Cypher query not in registered template whitelist: "
-                f"{_hash_cypher(cypher)[:16]}..."
-            )
+        self.validate(cypher)
         sandboxed = self.inject_limit(cypher)
 
         async def _tx(tx: Any) -> List[Dict[str, Any]]:

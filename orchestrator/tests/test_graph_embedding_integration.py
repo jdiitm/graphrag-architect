@@ -36,21 +36,24 @@ class TestRerankWithStructuralEmbeddings:
         from orchestrator.app.graph_embeddings import rerank_with_structural
 
         text_results = [
-            SearchResult(id="A", score=0.7, metadata={}),
-            SearchResult(id="B", score=0.8, metadata={}),
+            SearchResult(id="A", score=0.6, metadata={}),
+            SearchResult(id="B", score=0.9, metadata={}),
         ]
         structural_embeddings = {
             "A": [1.0, 0.0],
-            "B": [0.1, 0.1],
+            "B": [0.0, 1.0],
         }
-        query_structural = [0.9, 0.1]
+        query_structural = [1.0, 0.0]
 
         reranked = rerank_with_structural(
             text_results, structural_embeddings, query_structural,
         )
         assert len(reranked) == 2
-        assert reranked[0].id == "A" or reranked[0].id == "B"
-        assert all(r.score >= 0 for r in reranked)
+        assert reranked[0].id == "A", (
+            "Structural boosting must flip text-only ranking: "
+            f"A (hybrid=0.72) should beat B (hybrid=0.63), got {reranked[0].id}"
+        )
+        assert reranked[0].score > reranked[1].score
 
     def test_rerank_missing_embedding_uses_zero(self) -> None:
         from orchestrator.app.graph_embeddings import rerank_with_structural

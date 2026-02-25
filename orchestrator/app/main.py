@@ -311,6 +311,7 @@ def _build_query_state(
         "authorization": authorization,
         "evaluation_score": -1.0,
         "retrieval_quality": "skipped",
+        "query_id": "",
         "tenant_id": tenant_ctx.tenant_id,
     }
 
@@ -323,6 +324,7 @@ def _result_to_response(result: Dict[str, Any]) -> QueryResponse:
         retrieval_path=result.get("retrieval_path", "vector"),
         evaluation_score=result.get("evaluation_score", -1.0),
         retrieval_quality=result.get("retrieval_quality", "skipped"),
+        query_id=result.get("query_id", ""),
     )
 
 
