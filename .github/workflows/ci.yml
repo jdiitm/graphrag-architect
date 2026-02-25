@@ -37,6 +37,24 @@ jobs:
       - name: Run tests
         run: python -m pytest orchestrator/tests/ -v --tb=short
 
+  go-lint:
+    name: Go Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/ingestion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: workers/ingestion/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: workers/ingestion
+
   go-test:
     name: Go Tests
     runs-on: ubuntu-latest
