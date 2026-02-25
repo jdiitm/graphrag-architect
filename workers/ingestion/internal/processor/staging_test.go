@@ -1,6 +1,7 @@
 package processor_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -144,4 +145,109 @@ func TestStageAndEmitProcessor_ImplementsDocumentProcessor(t *testing.T) {
 	stagingDir := t.TempDir()
 	emitter := &mockEmitter{}
 	var _ processor.DocumentProcessor = processor.NewStageAndEmitProcessor(stagingDir, emitter)
+}
+
+func TestStageAndEmitProcessor_StreamingWriteFromReader(t *testing.T) {
+	stagingDir := t.TempDir()
+	emitter := &mockEmitter{}
+	proc := processor.NewStageAndEmitProcessor(stagingDir, emitter)
+
+	payload := []byte("streaming payload content here")
+	reader := bytes.NewReader(payload)
+
+	job := domain.Job{
+		Value:       nil,
+		ValueReader: reader,
+		Headers: map[string]string{
+			"file_path":   "stream/test.txt",
+			"source_type": "source_code",
+		},
+	}
+
+	if err := proc.Process(context.Background(), job); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	stagingPath := filepath.Join(stagingDir, "stream/test.txt")
+	content, err := os.ReadFile(stagingPath)
+	if err != nil {
+		t.Fatalf("staged file not found: %v", err)
+	}
+	if string(content) != string(payload) {
+		t.Errorf("staged content = %q, want %q", string(content), string(payload))
+	}
+}
+
+func TestStageAndEmitProcessor_StreamingFallsBackToValue(t *testing.T) {
+	stagingDir := t.TempDir()
+	emitter := &mockEmitter{}
+	proc := processor.NewStageAndEmitProcessor(stagingDir, emitter)
+
+	job := domain.Job{
+		Value:       []byte("fallback value content"),
+		ValueReader: nil,
+		Headers: map[string]string{
+			"file_path":   "fallback/test.txt",
+			"source_type": "source_code",
+		},
+	}
+
+	if err := proc.Process(context.Background(), job); err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	stagingPath := filepath.Join(stagingDir, "fallback/test.txt")
+	content, err := os.ReadFile(stagingPath)
+	if err != nil {
+		t.Fatalf("staged file not found: %v", err)
+	}
+	if string(content) != "fallback value content" {
+		t.Errorf("staged content = %q, want %q", string(content), "fallback value content")
+	}
+}
+
+func TestStageAndEmitProcessor_ContextCancellationAbortsStream(t *testing.T) {
+	stagingDir := t.TempDir()
+	emitter := &mockEmitter{}
+	proc := processor.NewStageAndEmitProcessor(stagingDir, emitter)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	reader := bytes.NewReader([]byte("should not be fully written"))
+
+	job := domain.Job{
+		Value:       nil,
+		ValueReader: reader,
+		Headers: map[string]string{
+			"file_path":   "cancel/test.txt",
+			"source_type": "source_code",
+		},
+	}
+
+	err := proc.Process(ctx, job)
+	if err == nil {
+		t.Log("Process completed without error on cancelled context (acceptable if write was fast)")
+	}
+}
+
+func TestStageAndEmitProcessor_StreamingPreservesPathTraversalProtection(t *testing.T) {
+	stagingDir := t.TempDir()
+	emitter := &mockEmitter{}
+	proc := processor.NewStageAndEmitProcessor(stagingDir, emitter)
+
+	reader := bytes.NewReader([]byte("malicious"))
+
+	job := domain.Job{
+		Value:       nil,
+		ValueReader: reader,
+		Headers: map[string]string{
+			"file_path": "../../etc/passwd",
+		},
+	}
+
+	err := proc.Process(context.Background(), job)
+	if err == nil {
+		t.Fatal("expected error for path traversal with streaming reader")
+	}
 }

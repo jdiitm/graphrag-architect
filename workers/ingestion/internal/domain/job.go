@@ -1,15 +1,19 @@
 package domain
 
-import "time"
+import (
+	"io"
+	"time"
+)
 
 type Job struct {
-	Key       []byte
-	Value     []byte
-	Topic     string
-	Partition int32
-	Offset    int64
-	Headers   map[string]string
-	Timestamp time.Time
+	Key         []byte
+	Value       []byte
+	ValueReader io.Reader
+	Topic       string
+	Partition   int32
+	Offset      int64
+	Headers     map[string]string
+	Timestamp   time.Time
 }
 
 type Result struct {
