@@ -365,20 +365,26 @@ class TestMissingQuerySpans:
             "iteration_count": 0,
             "answer": "",
             "sources": [],
+            "tenant_id": "t1",
         }
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver"
         ) as mock_get, patch(
-            "orchestrator.app.query_engine._generate_cypher",
+            "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
-            return_value="MATCH (n) RETURN n",
+            return_value=None,
+        ), patch(
+            "orchestrator.app.query_engine._fetch_candidates",
+            new_callable=AsyncMock,
+            return_value=[{"name": "auth", "id": "auth-1"}],
+        ), patch(
+            "orchestrator.app.query_engine.run_traversal",
+            new_callable=AsyncMock,
+            return_value=[{"target_id": "svc-b"}],
         ):
             mock_driver = MagicMock()
             mock_driver.close = AsyncMock()
-            mock_result = MagicMock()
-            mock_result.data.return_value = [{"n": "auth"}]
             mock_session = AsyncMock()
-            mock_session.run = AsyncMock(return_value=mock_result)
             mock_session.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session.__aexit__ = AsyncMock(return_value=False)
             mock_driver.session.return_value = mock_session
@@ -403,20 +409,15 @@ class TestMissingQuerySpans:
             "iteration_count": 0,
             "answer": "",
             "sources": [],
+            "tenant_id": "t1",
         }
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver"
-        ) as mock_get, patch(
-            "orchestrator.app.query_engine._generate_cypher",
-            new_callable=AsyncMock,
-            return_value="MATCH (n) RETURN count(n)",
-        ):
+        ) as mock_get:
             mock_driver = MagicMock()
             mock_driver.close = AsyncMock()
-            mock_result = MagicMock()
-            mock_result.data.return_value = [{"count": 5}]
             mock_session = AsyncMock()
-            mock_session.run = AsyncMock(return_value=mock_result)
+            mock_session.execute_read = AsyncMock(return_value=[])
             mock_session.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session.__aexit__ = AsyncMock(return_value=False)
             mock_driver.session.return_value = mock_session

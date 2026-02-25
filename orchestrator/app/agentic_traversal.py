@@ -4,6 +4,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
+from neo4j import AsyncDriver, AsyncManagedTransaction
+
 from orchestrator.app.context_manager import TokenBudget, estimate_tokens, truncate_context
 from orchestrator.app.query_templates import ALLOWED_RELATIONSHIP_TYPES
 
@@ -119,3 +121,71 @@ class TraversalAgent:
             state.accumulated_context,
             state.token_budget,
         )
+
+
+async def execute_hop(
+    driver: AsyncDriver,
+    source_id: str,
+    tenant_id: str,
+    acl_params: Dict[str, Any],
+    timeout: float = 30.0,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    params = {
+        "source_id": source_id,
+        "tenant_id": tenant_id,
+        "limit": limit,
+        **acl_params,
+    }
+
+    async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
+        result = await tx.run(_NEIGHBOR_DISCOVERY_TEMPLATE, **params)
+        return await result.data()
+
+    async with driver.session() as session:
+        return await session.execute_read(_tx, timeout=timeout)
+
+
+async def run_traversal(
+    driver: AsyncDriver,
+    start_node_id: str,
+    tenant_id: str,
+    acl_params: Dict[str, Any],
+    max_hops: int = MAX_HOPS,
+    timeout: float = 30.0,
+    token_budget: Optional[TokenBudget] = None,
+) -> List[Dict[str, Any]]:
+    agent = TraversalAgent(
+        max_hops=max_hops,
+        token_budget=token_budget,
+    )
+    state = agent.create_state(start_node_id)
+
+    hop_number = 0
+    while state.should_continue:
+        node_id = agent.select_next_node(state)
+        if node_id is None:
+            break
+
+        hop_number += 1
+        results = await execute_hop(
+            driver=driver,
+            source_id=node_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            timeout=timeout,
+        )
+
+        new_frontier = [
+            r["target_id"] for r in results if "target_id" in r
+        ]
+
+        step = TraversalStep(
+            node_id=node_id,
+            hop_number=hop_number,
+            results=results,
+            new_frontier=new_frontier,
+        )
+        agent.record_step(state, step)
+
+    return agent.get_context(state)

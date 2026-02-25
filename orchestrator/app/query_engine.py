@@ -24,10 +24,9 @@ from orchestrator.app.context_manager import (
 )
 from orchestrator.app.prompt_sanitizer import sanitize_query_input
 from orchestrator.app.reranker import BM25Reranker
-from orchestrator.app.cypher_validator import CypherValidationError, validate_cypher_readonly
+from orchestrator.app.agentic_traversal import run_traversal
 from orchestrator.app.query_templates import (
     TemplateCatalog,
-    dynamic_cypher_allowed,
     match_template,
 )
 from orchestrator.app.subgraph_cache import (
@@ -165,28 +164,30 @@ def _apply_acl(
     return acl_filter.inject_into_cypher(cypher, alias=alias)
 
 
+def _build_traversal_acl_params(state: QueryState) -> Dict[str, Any]:
+    auth_config = AuthConfig.from_env()
+    if auth_config.require_tokens and not auth_config.token_secret:
+        raise AuthConfigurationError(
+            "server misconfigured: token verification required but no secret set"
+        )
+    principal = SecurityPrincipal.from_header(
+        state.get("authorization", ""),
+        token_secret=auth_config.token_secret,
+    )
+    namespaces = [principal.namespace] if principal.namespace != "*" else []
+    return {
+        "is_admin": principal.is_admin,
+        "acl_team": principal.team,
+        "acl_namespaces": namespaces,
+    }
+
+
 def _build_llm() -> ChatGoogleGenerativeAI:
     config = ExtractionConfig.from_env()
     return ChatGoogleGenerativeAI(
         model=config.model_name,
         google_api_key=config.google_api_key,
     )
-
-
-async def _generate_cypher(query: str, schema_hint: str = "") -> str:
-    llm = _build_llm()
-    sanitized = sanitize_query_input(query)
-    prompt = (
-        "Generate a Neo4j Cypher query to answer this question about a "
-        "distributed system knowledge graph.\n\n"
-        "Node labels: Service, Database, KafkaTopic, K8sDeployment\n"
-        "Relationship types: CALLS, PRODUCES, CONSUMES, DEPLOYED_IN\n"
-        f"Schema hint: {schema_hint}\n\n"
-        f"Question: {sanitized}\n\n"
-        "Return ONLY the Cypher query, no explanation."
-    )
-    response = await llm.ainvoke(prompt)
-    return response.content.strip().strip("`").strip()
 
 
 async def _llm_synthesize(
@@ -389,60 +390,29 @@ async def cypher_retrieve(state: QueryState) -> dict:
                 if template_result is not None:
                     return template_result
 
-                if not dynamic_cypher_allowed():
-                    _query_logger.info(
-                        "Dynamic Cypher generation disabled (ALLOW_DYNAMIC_CYPHER=false). "
-                        "No template matched for query."
-                    )
+                candidates = await _fetch_candidates(driver, state)
+                if not candidates:
                     return {
                         "cypher_query": "",
                         "cypher_results": [],
                         "iteration_count": 0,
                     }
 
-                records: list = []
-                generated = ""
-                prior_attempt = ""
-                for iteration in range(1, MAX_CYPHER_ITERATIONS + 1):
-                    schema_hint = (
-                        f"Previous Cypher returned no results: {prior_attempt}"
-                        if prior_attempt else ""
-                    )
-                    generated = await _generate_cypher(
-                        state["query"], schema_hint=schema_hint
-                    )
-                    try:
-                        validated = validate_cypher_readonly(generated)
-                    except CypherValidationError:
-                        return {
-                            "cypher_query": generated,
-                            "cypher_results": [],
-                            "iteration_count": iteration,
-                        }
+                start_node_id = _extract_start_node(candidates)
+                acl_params = _build_traversal_acl_params(state)
 
-                    acl_cypher, acl_params = _apply_acl(
-                        validated, state,
-                    )
-                    records = await _execute_sandboxed_read(
-                        driver, acl_cypher, acl_params,
-                    )
-                    if records is None:
-                        return {
-                            "cypher_query": validated,
-                            "cypher_results": [],
-                            "iteration_count": iteration,
-                        }
-                    if records:
-                        return {
-                            "cypher_query": validated,
-                            "cypher_results": records,
-                            "iteration_count": iteration,
-                        }
-                    prior_attempt = validated
+                context = await run_traversal(
+                    driver=driver,
+                    start_node_id=start_node_id,
+                    tenant_id=state.get("tenant_id", ""),
+                    acl_params=acl_params,
+                    timeout=_get_query_timeout(),
+                )
+
                 return {
-                    "cypher_query": generated,
-                    "cypher_results": records,
-                    "iteration_count": MAX_CYPHER_ITERATIONS,
+                    "cypher_query": "agentic_traversal",
+                    "cypher_results": context,
+                    "iteration_count": 0,
                 }
         finally:
             QUERY_DURATION.record(
@@ -450,62 +420,55 @@ async def cypher_retrieve(state: QueryState) -> dict:
             )
 
 
+def _extract_start_node(candidates: List[Dict[str, Any]]) -> str:
+    for candidate in candidates:
+        node_id = candidate.get("id") or candidate.get("name", "")
+        if node_id:
+            return str(node_id)
+    return ""
+
+
 async def hybrid_retrieve(state: QueryState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("query.hybrid_retrieve"):
         start = time.monotonic()
         try:
-            candidates = await _hybrid_vector_phase(state)
-            return await _hybrid_aggregation_phase(state, candidates)
+            async with _neo4j_session() as driver:
+                candidates = await _fetch_candidates(driver, state)
+
+                tmatch = match_template(state["query"])
+                if tmatch is not None:
+                    template = _TEMPLATE_CATALOG.get(tmatch.template_name)
+                    if template is not None:
+                        acl_cypher, acl_params = _apply_acl(
+                            template.cypher, state,
+                        )
+                        tenant_id = state.get("tenant_id", "")
+                        merged = {
+                            **tmatch.params,
+                            **acl_params,
+                            "tenant_id": tenant_id,
+                        }
+                        agg_records = await _execute_sandboxed_read(
+                            driver, acl_cypher, merged,
+                        )
+                        return {
+                            "candidates": candidates,
+                            "cypher_query": template.cypher,
+                            "cypher_results": agg_records or [],
+                            "iteration_count": 0,
+                        }
+
+                return {
+                    "candidates": candidates,
+                    "cypher_query": "",
+                    "cypher_results": [],
+                    "iteration_count": 0,
+                }
         finally:
             QUERY_DURATION.record(
                 (time.monotonic() - start) * 1000, {"node": "hybrid_retrieve"}
             )
-
-
-async def _hybrid_vector_phase(state: QueryState) -> list:
-    async with _neo4j_session() as driver:
-        return await _fetch_candidates(driver, state)
-
-
-async def _hybrid_aggregation_phase(
-    state: QueryState, candidates: list,
-) -> dict:
-    agg_cypher = await _generate_cypher(
-        state["query"],
-        schema_hint=f"Pre-filtered candidates (count={len(candidates)})",
-    )
-
-    try:
-        validated_agg = validate_cypher_readonly(agg_cypher)
-    except CypherValidationError:
-        return {
-            "candidates": candidates,
-            "cypher_query": agg_cypher,
-            "cypher_results": [],
-            "iteration_count": 1,
-        }
-
-    agg_acl_cypher, agg_acl_params = _apply_acl(validated_agg, state)
-
-    async with _neo4j_session() as driver:
-        agg_records = await _execute_sandboxed_read(
-            driver, agg_acl_cypher, agg_acl_params,
-        )
-        if agg_records is None:
-            return {
-                "candidates": candidates,
-                "cypher_query": validated_agg,
-                "cypher_results": [],
-                "iteration_count": 1,
-            }
-
-    return {
-        "candidates": candidates,
-        "cypher_query": validated_agg,
-        "cypher_results": agg_records,
-        "iteration_count": 1,
-    }
 
 
 async def synthesize_answer(state: QueryState) -> dict:
