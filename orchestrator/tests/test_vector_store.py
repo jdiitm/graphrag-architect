@@ -268,3 +268,13 @@ class TestQdrantClientPool:
             pool_size=4,
         )
         assert store._pool.max_size == 4
+
+    async def test_pool_rejects_zero_max_size(self) -> None:
+        from orchestrator.app.vector_store import QdrantClientPool
+        with pytest.raises(ValueError, match="max_size must be >= 1"):
+            QdrantClientPool(max_size=0)
+
+    async def test_pool_rejects_negative_max_size(self) -> None:
+        from orchestrator.app.vector_store import QdrantClientPool
+        with pytest.raises(ValueError, match="max_size must be >= 1"):
+            QdrantClientPool(max_size=-1)

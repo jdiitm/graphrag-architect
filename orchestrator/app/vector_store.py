@@ -324,6 +324,10 @@ class QdrantClientPool:
         url: str = "http://localhost:6333",
         api_key: str = "",
     ) -> None:
+        if max_size < 1:
+            raise ValueError(
+                f"max_size must be >= 1, got {max_size}"
+            )
         self._max_size = max_size
         self._url = url
         self._api_key = api_key
