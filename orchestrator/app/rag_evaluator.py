@@ -30,6 +30,7 @@ class EvaluationResult:
     context_count: int = 0
     retrieval_path: str = "vector"
     used_fallback: bool = False
+    contradiction_count: int = 0
 
     @property
     def score(self) -> float:
@@ -206,6 +207,21 @@ _JUDGE_PROMPT_TEMPLATE = (
     "ANSWER: {answer}\n\n"
     "SOURCES:\n{sources}\n\n"
     "Respond ONLY with a JSON object: {{\"faithfulness\": <float>, \"groundedness\": <float>}}"
+)
+
+
+CONTRADICTION_JUDGE_PROMPT = (
+    "You are a strict graph topology contradiction detector.\n"
+    "Given an ANSWER and SOURCE CONTEXT from a knowledge graph, identify:\n"
+    "1. Direction reversals: Does the answer reverse the direction of a relationship?\n"
+    "   Example: sources say 'A calls B' but answer says 'B calls A'.\n"
+    "2. Negation contradictions: Does the answer negate a claim present in sources?\n"
+    "   Example: sources say 'A calls B' but answer says 'A does NOT call B'.\n"
+    "3. Fabricated relationships: Does the answer claim relationships not in sources?\n\n"
+    "ANSWER: {answer}\n\n"
+    "SOURCES:\n{sources}\n\n"
+    "Respond ONLY with a JSON object:\n"
+    "{{\"contradiction_count\": <int>, \"contradictions\": [<string descriptions>]}}"
 )
 
 

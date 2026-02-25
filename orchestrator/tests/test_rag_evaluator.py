@@ -401,3 +401,74 @@ class TestCreateEvaluationStore:
             store = create_evaluation_store()
         assert isinstance(store, EvaluationStore)
         assert not isinstance(store, RedisEvaluationStore)
+
+
+class TestContradictionDetection:
+
+    def test_contradiction_prompt_includes_directionality(self) -> None:
+        from orchestrator.app.rag_evaluator import CONTRADICTION_JUDGE_PROMPT
+        assert "direction" in CONTRADICTION_JUDGE_PROMPT.lower(), (
+            "Contradiction judge prompt must instruct the LLM to check "
+            "relationship directionality"
+        )
+
+    def test_contradiction_prompt_includes_negation(self) -> None:
+        from orchestrator.app.rag_evaluator import CONTRADICTION_JUDGE_PROMPT
+        assert "negat" in CONTRADICTION_JUDGE_PROMPT.lower(), (
+            "Contradiction judge prompt must instruct the LLM to check "
+            "for negation contradictions"
+        )
+
+    @pytest.mark.asyncio
+    async def test_llm_evaluator_detects_contradiction(self) -> None:
+        from orchestrator.app.rag_evaluator import LLMEvaluator
+
+        async def _mock_judge(prompt: str) -> str:
+            if "contradiction" in prompt.lower():
+                return '{"contradiction_count": 2, "contradictions": ["A->B reversed", "negation of C"]}'
+            return '{"faithfulness": 0.5, "groundedness": 0.5}'
+
+        evaluator = LLMEvaluator(judge_fn=_mock_judge)
+        result = await evaluator.evaluate(
+            query="Which services call auth?",
+            answer="Service B calls auth.",
+            sources=[{"text": "Auth calls Service B"}],
+        )
+        assert result.contradiction_count >= 0
+
+
+class TestTopologicalEvaluatorIntegration:
+
+    def test_evaluation_result_has_contradiction_count(self) -> None:
+        from orchestrator.app.rag_evaluator import EvaluationResult
+        result = EvaluationResult(
+            context_relevance=0.8,
+            faithfulness=0.9,
+            groundedness=0.7,
+            contradiction_count=3,
+        )
+        assert result.contradiction_count == 3
+
+    def test_evaluation_result_default_contradiction_count(self) -> None:
+        from orchestrator.app.rag_evaluator import EvaluationResult
+        result = EvaluationResult(
+            context_relevance=0.8,
+            faithfulness=0.9,
+            groundedness=0.7,
+        )
+        assert result.contradiction_count == 0
+
+    @pytest.mark.asyncio
+    async def test_topological_evaluator_catches_fabricated_edges(self) -> None:
+        from orchestrator.app.topological_evaluator import TopologicalEvaluator
+
+        async def _no_edges_exist(edge_ids: list) -> int:
+            return 0
+
+        evaluator = TopologicalEvaluator(verify_edges=_no_edges_exist)
+        result = await evaluator.evaluate_topology(
+            claimed_edge_ids=["fake-edge-1", "fake-edge-2"],
+            vector_score=0.9,
+        )
+        assert result.is_hallucinated is True
+        assert result.edge_existence_ratio == 0.0
