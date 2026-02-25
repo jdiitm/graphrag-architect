@@ -184,6 +184,8 @@ class Neo4jVectorStore:
             result = await tx.run(
                 "MATCH (n) WHERE n.id IN $ids "
                 "REMOVE n.embedding "
+                "SET n.embedding_removed = true, "
+                "n.embedding_removed_at = datetime() "
                 "RETURN count(n) AS removed",
                 ids=ids,
             )
