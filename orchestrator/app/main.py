@@ -34,11 +34,16 @@ from orchestrator.app.query_models import (
     QueryRequest,
     QueryResponse,
 )
+from orchestrator.app.token_bucket import TenantRateLimiter
 
 logger = logging.getLogger(__name__)
 
 _STATE: Dict[str, Any] = {"semaphore": None, "kafka_consumer": None, "kafka_task": None}
 _JOB_STORE = QueryJobStore(ttl_seconds=300.0)
+_TENANT_LIMITER = TenantRateLimiter(
+    capacity=int(os.environ.get("RATE_LIMIT_CAPACITY", "20")),
+    refill_rate=float(os.environ.get("RATE_LIMIT_REFILL_RATE", "10.0")),
+)
 
 
 def get_ingestion_semaphore() -> asyncio.Semaphore:
@@ -328,12 +333,22 @@ def _result_to_response(result: Dict[str, Any]) -> QueryResponse:
     )
 
 
+async def _enforce_rate_limit(tenant_id: str) -> None:
+    if not await _TENANT_LIMITER.try_acquire(tenant_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded for tenant",
+        )
+
+
 @app.post("/query", response_model=QueryResponse)
 async def query(
     request: QueryRequest,
     authorization: Optional[str] = Header(default=None),
     async_mode: bool = False,
 ) -> JSONResponse:
+    tenant_ctx = _resolve_tenant_context(authorization)
+    await _enforce_rate_limit(tenant_ctx.tenant_id)
     if async_mode:
         job = _JOB_STORE.create()
         initial_state = _build_query_state(request, authorization or "")
