@@ -80,11 +80,13 @@ class ExtractionConfig:
     retry_min_wait: float = 1.0
     retry_max_wait: float = 60.0
     llm_provider: str = "gemini"
+    anthropic_api_key: str = ""
+    claude_model_name: str = "claude-sonnet-4-20250514"
 
     @classmethod
     def from_env(cls) -> ExtractionConfig:
         return cls(
-            google_api_key=os.environ["GOOGLE_API_KEY"],
+            google_api_key=os.environ.get("GOOGLE_API_KEY", ""),
             model_name=os.environ.get("EXTRACTION_MODEL", "gemini-2.0-flash"),
             max_concurrency=int(os.environ.get("EXTRACTION_MAX_CONCURRENCY", "5")),
             token_budget_per_batch=int(
@@ -94,6 +96,8 @@ class ExtractionConfig:
             retry_min_wait=float(os.environ.get("EXTRACTION_RETRY_MIN_WAIT", "1.0")),
             retry_max_wait=float(os.environ.get("EXTRACTION_RETRY_MAX_WAIT", "60.0")),
             llm_provider=os.environ.get("LLM_PROVIDER", "gemini"),
+            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            claude_model_name=os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-20250514"),
         )
 
 

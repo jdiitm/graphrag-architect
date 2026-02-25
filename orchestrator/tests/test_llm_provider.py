@@ -37,11 +37,13 @@ class TestCreateProvider:
         with pytest.raises(ValueError, match="Unknown LLM provider"):
             create_provider("unknown", _minimal_config())
 
-    def test_raises_value_error_for_unknown_provider_case_insensitive(
+    def test_claude_provider_accepted_case_insensitive(
         self,
     ) -> None:
-        with pytest.raises(ValueError, match="Unknown LLM provider"):
-            create_provider("CLAUDE", _minimal_config())
+        from unittest.mock import patch
+        with patch("orchestrator.app.llm_provider.ClaudeProvider.__init__", return_value=None):
+            provider = create_provider("CLAUDE", _minimal_config())
+        assert isinstance(provider, ProviderWithCircuitBreaker)
 
 
 class TestStubProvider:

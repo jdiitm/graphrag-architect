@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	otelTrace "go.opentelemetry.io/otel/trace"
 
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dedup"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dispatcher"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
@@ -456,6 +457,76 @@ func TestDispatcherJobTimeoutDoesNotAffectFastJobs(t *testing.T) {
 
 	if proc.CallCount() != 1 {
 		t.Fatalf("expected 1 call, got %d", proc.CallCount())
+	}
+}
+
+func TestDispatcherDedupSkipsDuplicateMessages(t *testing.T) {
+	store := dedup.NewLRUStore(100)
+	proc := &spyProcessor{}
+	cfg := dispatcher.Config{NumWorkers: 1, MaxRetries: 1, JobBuffer: 2, DLQBuffer: 1}
+	d := dispatcher.New(cfg, proc, dispatcher.WithDedup(store))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	d.Jobs() <- makeJob("same-key")
+	select {
+	case <-d.Acks():
+	case <-time.After(2 * time.Second):
+		t.Fatal("first job ack timed out")
+	}
+
+	d.Jobs() <- makeJob("same-key")
+	select {
+	case <-d.Acks():
+	case <-time.After(2 * time.Second):
+		t.Fatal("duplicate job ack timed out")
+	}
+
+	cancel()
+	<-done
+
+	if proc.CallCount() != 1 {
+		t.Fatalf("expected processor called once (duplicate skipped), got %d", proc.CallCount())
+	}
+}
+
+func TestDispatcherDedupAllowsDifferentKeys(t *testing.T) {
+	store := dedup.NewLRUStore(100)
+	proc := &spyProcessor{}
+	cfg := dispatcher.Config{NumWorkers: 1, MaxRetries: 1, JobBuffer: 2, DLQBuffer: 1}
+	d := dispatcher.New(cfg, proc, dispatcher.WithDedup(store))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	d.Jobs() <- makeJob("key-a")
+	select {
+	case <-d.Acks():
+	case <-time.After(2 * time.Second):
+		t.Fatal("first job ack timed out")
+	}
+
+	d.Jobs() <- makeJob("key-b")
+	select {
+	case <-d.Acks():
+	case <-time.After(2 * time.Second):
+		t.Fatal("second job ack timed out")
+	}
+
+	cancel()
+	<-done
+
+	if proc.CallCount() != 2 {
+		t.Fatalf("expected 2 calls for different keys, got %d", proc.CallCount())
 	}
 }
 
