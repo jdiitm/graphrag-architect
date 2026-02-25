@@ -156,6 +156,37 @@ class FallbackChain:
         raise LLMError(f"All {len(self._providers)} providers failed") from last_error
 
 
+class ClaudeProvider:
+    def __init__(self, config: ExtractionConfig) -> None:
+        self._config = config
+        try:
+            from langchain_anthropic import ChatAnthropic
+            self._llm = ChatAnthropic(
+                model=config.claude_model_name,
+                anthropic_api_key=config.anthropic_api_key,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "langchain-anthropic is required for ClaudeProvider. "
+                "Install with: pip install langchain-anthropic"
+            ) from exc
+
+    async def ainvoke(self, prompt: str) -> str:
+        response = await self._llm.ainvoke(prompt)
+        return str(response.content)
+
+    async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
+        lc_messages: list[BaseMessage] = []
+        for msg in messages:
+            if isinstance(msg, BaseMessage):
+                lc_messages.append(msg)
+            else:
+                lc_messages.append(HumanMessage(content=str(msg)))
+        if prompt.strip():
+            lc_messages.insert(0, SystemMessage(content=prompt))
+        return await self._llm.ainvoke(lc_messages)
+
+
 def create_provider(
     provider_name: str, config: ExtractionConfig
 ) -> LLMProvider:
@@ -163,6 +194,35 @@ def create_provider(
     if name == "gemini":
         inner = GeminiProvider(config)
         return ProviderWithCircuitBreaker(inner)
+    if name == "claude":
+        inner = ClaudeProvider(config)
+        return ProviderWithCircuitBreaker(inner)
     if name == "stub":
         return StubProvider()
     raise ValueError(f"Unknown LLM provider: {provider_name!r}")
+
+
+def create_provider_with_failover(config: ExtractionConfig) -> LLMProvider:
+    primary_name = (config.llm_provider or "gemini").strip().lower()
+    fallback_name = "claude" if primary_name == "gemini" else "gemini"
+
+    providers: list[Any] = []
+    try:
+        primary = create_provider(primary_name, config)
+        providers.append(primary)
+    except (ValueError, ImportError):
+        _logger.warning("Primary provider %r unavailable", primary_name)
+
+    try:
+        fallback = create_provider(fallback_name, config)
+        providers.append(fallback)
+    except (ValueError, ImportError):
+        _logger.warning("Fallback provider %r unavailable", fallback_name)
+
+    if not providers:
+        raise LLMError("No LLM providers available")
+
+    if len(providers) == 1:
+        return providers[0]
+
+    return FallbackChain(providers=providers)

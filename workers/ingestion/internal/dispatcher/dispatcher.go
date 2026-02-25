@@ -2,11 +2,13 @@ package dispatcher
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"sync"
 	"time"
 
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dedup"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/metrics"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/processor"
@@ -28,6 +30,7 @@ type Dispatcher struct {
 	cfg       Config
 	processor processor.DocumentProcessor
 	observer  metrics.PipelineObserver
+	dedup     dedup.Store
 	jobs      chan domain.Job
 	dlq       chan domain.Result
 	acks      chan struct{}
@@ -39,6 +42,7 @@ func New(cfg Config, proc processor.DocumentProcessor, opts ...Option) *Dispatch
 		cfg:       cfg,
 		processor: proc,
 		observer:  metrics.NoopObserver{},
+		dedup:     dedup.NoopStore{},
 		jobs:      make(chan domain.Job, cfg.JobBuffer),
 		dlq:       make(chan domain.Result, cfg.DLQBuffer),
 		acks:      make(chan struct{}, cfg.JobBuffer),
@@ -54,6 +58,12 @@ type Option func(*Dispatcher)
 func WithObserver(obs metrics.PipelineObserver) Option {
 	return func(d *Dispatcher) {
 		d.observer = obs
+	}
+}
+
+func WithDedup(store dedup.Store) Option {
+	return func(d *Dispatcher) {
+		d.dedup = store
 	}
 }
 
@@ -87,6 +97,19 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			if !ok {
 				return
 			}
+			dedupKey := string(job.Key)
+			if dedupKey == "" {
+				dedupKey = fmt.Sprintf("%s:%d:%d", job.Topic, job.Partition, job.Offset)
+			}
+			if d.dedup.IsDuplicate(dedupKey) {
+				d.observer.RecordJobProcessed("dedup_skipped")
+				select {
+				case d.acks <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				continue
+			}
 			jobCtx := telemetry.ExtractTraceContext(ctx, job.Headers)
 			processCtx, processSpan := telemetry.StartProcessSpan(jobCtx, job)
 			var jobCancel context.CancelFunc
@@ -106,6 +129,7 @@ func (d *Dispatcher) worker(ctx context.Context) {
 				d.observer.RecordDLQRouted()
 				d.observer.RecordJobProcessed("dlq")
 			} else {
+				d.dedup.Mark(dedupKey)
 				d.observer.RecordJobProcessed("success")
 			}
 			processSpan.End()
