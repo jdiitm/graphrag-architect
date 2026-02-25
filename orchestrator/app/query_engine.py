@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import os
 import time
@@ -38,8 +39,7 @@ from orchestrator.app.query_templates import (
     match_template,
 )
 from orchestrator.app.subgraph_cache import (
-    SubgraphCache,
-    default_cache_maxsize,
+    create_subgraph_cache,
     normalize_cypher,
 )
 from orchestrator.app.config import VectorStoreConfig
@@ -70,7 +70,7 @@ MAX_CYPHER_ITERATIONS = 3
 _TEMPLATE_CATALOG = TemplateCatalog()
 _TEMPLATE_REGISTRY = TemplateHashRegistry(_TEMPLATE_CATALOG)
 _SANDBOX = SandboxedQueryExecutor(registry=_TEMPLATE_REGISTRY)
-_SUBGRAPH_CACHE = SubgraphCache(maxsize=default_cache_maxsize())
+_SUBGRAPH_CACHE = create_subgraph_cache()
 _SEMANTIC_CACHE = SemanticQueryCache()
 
 _VS_CFG = VectorStoreConfig.from_env()
@@ -393,13 +393,26 @@ async def single_hop_retrieve(state: QueryState) -> dict:
             )
 
 
+async def _cache_get(key: str) -> Optional[list]:
+    result = _SUBGRAPH_CACHE.get(key)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+async def _cache_put(key: str, value: list) -> None:
+    result = _SUBGRAPH_CACHE.put(key, value)
+    if inspect.isawaitable(result):
+        await result
+
+
 async def _execute_sandboxed_read(
     driver: AsyncDriver,
     cypher: str,
     acl_params: Dict[str, str],
 ) -> Optional[list]:
     cache_key = normalize_cypher(cypher) + "|" + str(sorted(acl_params.items()))
-    cached = _SUBGRAPH_CACHE.get(cache_key)
+    cached = await _cache_get(cache_key)
     if cached is not None:
         return cached
 
@@ -418,7 +431,7 @@ async def _execute_sandboxed_read(
         records = await session.execute_read(_tx, timeout=timeout)
 
     if records:
-        _SUBGRAPH_CACHE.put(cache_key, records)
+        await _cache_put(cache_key, records)
     return records
 
 
