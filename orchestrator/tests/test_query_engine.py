@@ -921,6 +921,114 @@ class TestAsyncEvaluation:
         assert result["evaluation_score"] == -1.0
 
 
+class TestLLMJudgeSelection:
+    @pytest.mark.asyncio
+    async def test_uses_llm_evaluator_when_config_enabled(self, base_query_state):
+        from orchestrator.app.query_engine import _run_background_evaluation, _EVAL_STORE
+
+        query_id = "test-llm-judge-1"
+        state = {
+            **base_query_state,
+            "query": "test query",
+            "answer": "auth-service handles auth",
+            "sources": [{"name": "auth-service"}],
+        }
+
+        eval_cfg = MagicMock(
+            enable_evaluation=True,
+            use_llm_judge=True,
+            low_relevance_threshold=0.3,
+        )
+
+        async def _fake_judge(prompt: str) -> str:
+            return '{"faithfulness": 0.9, "groundedness": 0.85}'
+
+        with patch(
+            "orchestrator.app.query_engine.RAGEvalConfig.from_env",
+            return_value=eval_cfg,
+        ), patch(
+            "orchestrator.app.query_engine._embed_query",
+            new_callable=AsyncMock,
+            return_value=[0.1] * 10,
+        ), patch(
+            "orchestrator.app.query_engine._build_llm_judge_fn",
+            return_value=_fake_judge,
+        ):
+            await _run_background_evaluation(query_id, state)
+
+        result = _EVAL_STORE.get(query_id)
+        assert result is not None
+        assert result["evaluation_score"] >= 0.0
+        assert result["retrieval_quality"] != "error"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_rag_evaluator_when_no_llm(self, base_query_state):
+        from orchestrator.app.query_engine import _run_background_evaluation, _EVAL_STORE
+
+        query_id = "test-no-llm-1"
+        state = {
+            **base_query_state,
+            "query": "test query",
+            "answer": "auth-service handles auth",
+            "sources": [{"name": "auth-service"}],
+        }
+
+        eval_cfg = MagicMock(
+            enable_evaluation=True,
+            use_llm_judge=True,
+            low_relevance_threshold=0.3,
+        )
+
+        with patch(
+            "orchestrator.app.query_engine.RAGEvalConfig.from_env",
+            return_value=eval_cfg,
+        ), patch(
+            "orchestrator.app.query_engine._embed_query",
+            new_callable=AsyncMock,
+            return_value=[0.1] * 10,
+        ), patch(
+            "orchestrator.app.query_engine._build_llm_judge_fn",
+            return_value=None,
+        ):
+            await _run_background_evaluation(query_id, state)
+
+        result = _EVAL_STORE.get(query_id)
+        assert result is not None
+        assert result["evaluation_score"] != -1.0 or result["retrieval_quality"] != "error"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_rag_evaluator_when_disabled(self, base_query_state):
+        from orchestrator.app.query_engine import _run_background_evaluation, _EVAL_STORE
+
+        query_id = "test-disabled-1"
+        state = {
+            **base_query_state,
+            "query": "test query",
+            "answer": "auth-service handles auth",
+            "sources": [{"name": "auth-service"}],
+        }
+
+        eval_cfg = MagicMock(
+            enable_evaluation=True,
+            use_llm_judge=False,
+            low_relevance_threshold=0.3,
+        )
+
+        with patch(
+            "orchestrator.app.query_engine.RAGEvalConfig.from_env",
+            return_value=eval_cfg,
+        ), patch(
+            "orchestrator.app.query_engine._embed_query",
+            new_callable=AsyncMock,
+            return_value=[0.1] * 10,
+        ):
+            await _run_background_evaluation(query_id, state)
+
+        result = _EVAL_STORE.get(query_id)
+        assert result is not None
+        assert result["evaluation_score"] >= 0.0
+
+
 class TestNeo4jDriverTimeout:
     def test_pool_configured_with_timeout(self):
         from orchestrator.app import neo4j_pool

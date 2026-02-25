@@ -119,19 +119,26 @@ class TestCacheInvalidationOnCommit:
 class TestRedisSubgraphCacheInvalidateAll:
 
     @pytest.mark.asyncio
-    async def test_invalidate_all_flushes_redis_l2(self) -> None:
+    async def test_invalidate_all_removes_prefixed_keys_from_redis_l2(self) -> None:
         from orchestrator.app.subgraph_cache import RedisSubgraphCache
 
         mock_redis = AsyncMock()
+        prefix = "graphrag:sgcache:"
+        matching_keys = [f"{prefix}key1".encode()]
+        mock_redis.scan = AsyncMock(return_value=(0, matching_keys))
+        mock_redis.delete = AsyncMock()
+
         cache = RedisSubgraphCache.__new__(RedisSubgraphCache)
         from orchestrator.app.subgraph_cache import SubgraphCache
         cache._l1 = SubgraphCache(maxsize=10)
         cache._redis = mock_redis
         cache._ttl = 300
-        cache._prefix = "graphrag:sgcache:"
+        cache._prefix = prefix
         cache._l1.put("key1", [{"data": "old"}])
 
         await cache.invalidate_all()
 
         assert cache._l1.stats().size == 0
-        mock_redis.flushdb.assert_awaited_once()
+        mock_redis.scan.assert_called()
+        mock_redis.delete.assert_awaited_once_with(*matching_keys)
+        mock_redis.flushdb.assert_not_called()

@@ -234,6 +234,55 @@ class TestCommentBypassDefeatTests:
             assert int(val) <= 100
 
 
+class TestUnwindAmplificationRejection:
+
+    def test_detect_unwind_amplification_positive(self) -> None:
+        from orchestrator.app.cypher_sandbox import detect_unwind_amplification
+
+        cypher = "MATCH (n) WITH n LIMIT 10 UNWIND range(1, 1000000) AS x RETURN n, x"
+        assert detect_unwind_amplification(cypher) is True
+
+    def test_detect_unwind_amplification_negative(self) -> None:
+        from orchestrator.app.cypher_sandbox import detect_unwind_amplification
+
+        cypher = "MATCH (n:Service) RETURN n LIMIT 10"
+        assert detect_unwind_amplification(cypher) is False
+
+    @pytest.mark.asyncio
+    async def test_execute_read_rejects_unwind_amplification(self) -> None:
+        from orchestrator.app.cypher_sandbox import CypherAmplificationError
+
+        config = CypherSandboxConfig()
+        executor = SandboxedQueryExecutor(config)
+        session = AsyncMock()
+
+        cypher = "MATCH (n) WITH n LIMIT 10 UNWIND range(1, 1000000) AS x RETURN n, x"
+        with pytest.raises(CypherAmplificationError):
+            await executor.execute_read(session, cypher)
+
+    @pytest.mark.asyncio
+    async def test_execute_read_allows_safe_queries(self) -> None:
+        config = CypherSandboxConfig()
+        executor = SandboxedQueryExecutor(config)
+
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=[{"n": "result"}])
+
+        mock_tx = AsyncMock()
+        mock_tx.run = AsyncMock(return_value=mock_result)
+
+        mock_session = AsyncMock()
+
+        async def _execute_read(tx_fn, **kwargs):
+            return await tx_fn(mock_tx)
+
+        mock_session.execute_read = _execute_read
+
+        cypher = "MATCH (n:Service) RETURN n"
+        result = await executor.execute_read(mock_session, cypher)
+        assert result == [{"n": "result"}]
+
+
 class TestSandboxConfig:
 
     def test_defaults(self) -> None:

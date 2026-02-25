@@ -154,9 +154,16 @@ class RedisSubgraphCache:
     async def invalidate_all(self) -> None:
         self._l1.invalidate_all()
         try:
-            await self._redis.flushdb()
+            cursor = None
+            pattern = f"{self._prefix}*"
+            while cursor != 0:
+                cursor, keys = await self._redis.scan(
+                    cursor=cursor or 0, match=pattern, count=100,
+                )
+                if keys:
+                    await self._redis.delete(*keys)
         except Exception:
-            logger.debug("Redis flushdb failed during invalidate_all")
+            logger.debug("Redis prefix-scoped invalidation failed during invalidate_all")
 
     def stats(self) -> CacheStats:
         return self._l1.stats()

@@ -19,6 +19,10 @@ class CypherWhitelistError(Exception):
     pass
 
 
+class CypherAmplificationError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class CypherSandboxConfig:
     max_results: int = 1000
@@ -120,6 +124,10 @@ class SandboxedQueryExecutor:
         params: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         self.validate(cypher)
+        if detect_unwind_amplification(cypher):
+            raise CypherAmplificationError(
+                "Query rejected: UNWIND amplification pattern detected after LIMIT"
+            )
         sandboxed = self.inject_limit(cypher)
 
         async def _tx(tx: Any) -> List[Dict[str, Any]]:
