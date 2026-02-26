@@ -3,8 +3,76 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import os
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+
+def _build_undirected_adjacency(
+    edges: List[Dict[str, Any]],
+) -> Tuple[Dict[str, List[str]], set]:
+    adjacency: Dict[str, List[str]] = defaultdict(list)
+    nodes: set[str] = set()
+    for edge in edges:
+        src, tgt = edge.get("source", ""), edge.get("target", "")
+        if src and tgt:
+            adjacency[src].append(tgt)
+            adjacency[tgt].append(src)
+            nodes.add(src)
+            nodes.add(tgt)
+    return adjacency, nodes
+
+
+def _ppr_iterate(
+    nodes: set,
+    adjacency: Dict[str, List[str]],
+    personalization: Dict[str, float],
+    iterations: int,
+    damping: float,
+) -> Dict[str, float]:
+    scores: Dict[str, float] = {n: personalization.get(n, 0.0) for n in nodes}
+    out_degree = {n: len(adjacency[n]) for n in nodes}
+    for _ in range(iterations):
+        new_scores: Dict[str, float] = {}
+        for node in nodes:
+            rank_sum = sum(
+                scores[nb] / out_degree[nb]
+                for nb in adjacency[node]
+                if out_degree[nb] > 0
+            )
+            new_scores[node] = (
+                (1.0 - damping) * personalization.get(node, 0.0)
+                + damping * rank_sum
+            )
+        total = sum(new_scores.values())
+        if total > 0:
+            for node in nodes:
+                new_scores[node] /= total
+        scores = new_scores
+    return scores
+
+
+def personalized_pagerank(
+    edges: List[Dict[str, Any]],
+    seed_nodes: List[str],
+    iterations: int = 20,
+    damping: float = 0.85,
+    top_n: int = 50,
+) -> List[Tuple[str, float]]:
+    if not edges:
+        return []
+
+    adjacency, nodes = _build_undirected_adjacency(edges)
+    if not nodes:
+        return []
+
+    valid_seeds = [s for s in seed_nodes if s in nodes] or list(nodes)
+    seed_weight = 1.0 / len(valid_seeds)
+    personalization = {s: seed_weight for s in valid_seeds}
+
+    scores = _ppr_iterate(nodes, adjacency, personalization, iterations, damping)
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    return ranked[:top_n]
 
 
 @dataclass(frozen=True)
