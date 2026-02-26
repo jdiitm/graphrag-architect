@@ -36,6 +36,7 @@ from orchestrator.app.prompt_sanitizer import sanitize_query_input
 from orchestrator.app.graph_embeddings import compute_centroid, rerank_with_structural
 from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.agentic_traversal import run_traversal
+from orchestrator.app.lazy_traversal import personalized_pagerank
 from orchestrator.app.query_templates import (
     TemplateCatalog,
     match_template,
@@ -379,6 +380,18 @@ async def _fetch_candidates(
         return await session.execute_read(_vector_tx, timeout=timeout)
 
 
+def _filter_by_ppr(
+    hop_records: List[Dict[str, Any]],
+    seed_names: List[str],
+) -> List[Dict[str, Any]]:
+    ranked = personalized_pagerank(hop_records, seed_nodes=seed_names, top_n=50)
+    top_nodes = {node for node, _score in ranked}
+    return [
+        rec for rec in hop_records
+        if rec.get("source") in top_nodes or rec.get("target") in top_nodes
+    ]
+
+
 async def single_hop_retrieve(state: QueryState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("query.single_hop_retrieve"):
@@ -416,7 +429,7 @@ async def single_hop_retrieve(state: QueryState) -> dict:
 
                 return {
                     "candidates": candidates,
-                    "cypher_results": hop_records,
+                    "cypher_results": _filter_by_ppr(hop_records, names),
                 }
         finally:
             QUERY_DURATION.record(
