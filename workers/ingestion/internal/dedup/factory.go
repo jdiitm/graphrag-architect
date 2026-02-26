@@ -9,7 +9,7 @@ func NewStoreFromEnv(storeType, redisURL string, capacity int, ttlHours int) Sto
 	switch storeType {
 	case "redis":
 		if redisURL == "" {
-			log.Fatal("REDIS_URL required when DEDUP_STORE_TYPE=redis")
+			log.Fatal("DEDUP_REDIS_URL required when DEDUP_STORE_TYPE=redis")
 		}
 		ttl := time.Duration(ttlHours) * time.Hour
 		if ttl <= 0 {
