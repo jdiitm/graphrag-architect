@@ -41,11 +41,11 @@ class TestInitDriver:
         ) as mock_ctor:
             neo4j_pool.init_driver()
 
-        mock_ctor.assert_called_once_with(
-            "bolt://test:7687",
-            auth=("neo4j", "secret"),
-            max_transaction_retry_time=42.0,
-        )
+        mock_ctor.assert_called_once()
+        call_kwargs = mock_ctor.call_args
+        assert call_kwargs.args == ("bolt://test:7687",)
+        assert call_kwargs.kwargs["auth"] == ("neo4j", "secret")
+        assert call_kwargs.kwargs["max_transaction_retry_time"] == 42.0
         assert neo4j_pool._state["driver"] is mock_driver
 
     def test_configures_query_timeout(self):

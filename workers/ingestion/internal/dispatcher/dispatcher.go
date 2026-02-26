@@ -16,6 +16,8 @@ import (
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
 )
 
+const DefaultDLQAckTimeout = 30 * time.Second
+
 type Config struct {
 	NumWorkers     int
 	MaxRetries     int
@@ -144,14 +146,11 @@ func (d *Dispatcher) worker(ctx context.Context) {
 }
 
 func (d *Dispatcher) awaitDLQDone(ctx context.Context, result domain.Result) {
-	if d.cfg.DLQAckTimeout <= 0 {
-		select {
-		case <-result.Done:
-		case <-ctx.Done():
-		}
-		return
+	timeout := d.cfg.DLQAckTimeout
+	if timeout <= 0 {
+		timeout = DefaultDLQAckTimeout
 	}
-	timer := time.NewTimer(d.cfg.DLQAckTimeout)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-result.Done:

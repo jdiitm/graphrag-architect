@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import jwt
 
-from orchestrator.app.cypher_ast import inject_acl_all_scopes
+from orchestrator.app.cypher_ast import inject_acl_all_scopes, validate_acl_coverage
 
 DEFAULT_TOKEN_TTL_SECONDS = 3600
 JWT_ALGORITHM = "HS256"
@@ -17,6 +17,10 @@ class InvalidTokenError(Exception):
 
 
 class AuthConfigurationError(Exception):
+    pass
+
+
+class ACLCoverageError(Exception):
     pass
 
 
@@ -83,9 +87,15 @@ class CypherPermissionFilter:
         self,
         principal: SecurityPrincipal,
         default_deny_untagged: bool = True,
+        verify_coverage: bool = True,
     ) -> None:
         self._principal = principal
         self._deny_untagged = default_deny_untagged
+        self._verify_coverage = verify_coverage
+
+    @property
+    def verify_coverage(self) -> bool:
+        return self._verify_coverage
 
     def node_filter(self, alias: str) -> Tuple[str, Dict[str, str]]:
         if self._principal.is_admin:
@@ -148,4 +158,10 @@ class CypherPermissionFilter:
             return cypher, {}
 
         injected_cypher = inject_acl_all_scopes(cypher, node_clause)
+        if self._verify_coverage:
+            acl_marker = node_clause.split("=", maxsplit=1)[0].strip().split(".")[-1]
+            if not validate_acl_coverage(injected_cypher, acl_marker):
+                raise ACLCoverageError(
+                    "ACL injection did not cover all MATCH scopes in the query"
+                )
         return injected_cypher, params

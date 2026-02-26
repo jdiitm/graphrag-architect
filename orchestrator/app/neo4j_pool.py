@@ -29,6 +29,8 @@ def init_driver() -> None:
         config.uri,
         auth=(config.username, config.password),
         max_transaction_retry_time=config.query_timeout,
+        max_connection_pool_size=config.max_connection_pool_size,
+        connection_acquisition_timeout=config.connection_acquisition_timeout,
     )
     _state["query_timeout"] = config.query_timeout
     _state["database"] = config.database

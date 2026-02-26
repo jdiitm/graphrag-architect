@@ -19,7 +19,7 @@ from orchestrator.app.access_control import (
 )
 from orchestrator.app.circuit_breaker import CircuitOpenError
 from orchestrator.app.tenant_isolation import TenantContext
-from orchestrator.app.config import AuthConfig, KafkaConsumerConfig, RateLimitConfig
+from orchestrator.app.config import AuthConfig, JobStoreConfig, KafkaConsumerConfig, RateLimitConfig
 from orchestrator.app.executor import shutdown_pool
 from orchestrator.app.graph_builder import ingestion_graph, run_streaming_pipeline
 from orchestrator.app.ingest_models import (
@@ -44,8 +44,9 @@ from orchestrator.app.token_bucket import create_rate_limiter
 logger = logging.getLogger(__name__)
 
 _STATE: Dict[str, Any] = {"semaphore": None, "kafka_consumer": None, "kafka_task": None}
-_JOB_STORE = create_job_store(ttl_seconds=300.0)
-_INGEST_JOB_STORE = create_ingest_job_store(ttl_seconds=300.0)
+_JOB_STORE_CONFIG = JobStoreConfig.from_env()
+_JOB_STORE = create_job_store(ttl_seconds=_JOB_STORE_CONFIG.ttl_seconds)
+_INGEST_JOB_STORE = create_ingest_job_store(ttl_seconds=_JOB_STORE_CONFIG.ttl_seconds)
 _TENANT_LIMITER = create_rate_limiter(
     capacity=int(os.environ.get("RATE_LIMIT_CAPACITY", "20")),
     refill_rate=float(os.environ.get("RATE_LIMIT_REFILL_RATE", "10.0")),

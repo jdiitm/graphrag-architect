@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 import warnings
 from collections import deque
 from dataclasses import dataclass
@@ -23,6 +24,18 @@ class SearchResult:
     id: str
     score: float
     metadata: Dict[str, Any]
+
+
+_COLLECTION_SAFE_RE = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def resolve_collection_name(
+    base_collection: str, tenant_id: Optional[str],
+) -> str:
+    if not tenant_id:
+        return base_collection
+    sanitized = _COLLECTION_SAFE_RE.sub("_", tenant_id)
+    return f"{base_collection}__{sanitized}"
 
 
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
