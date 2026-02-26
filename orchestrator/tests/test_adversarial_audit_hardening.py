@@ -100,6 +100,32 @@ class TestOrchestratorEgressNetworkPolicy:
             "connections are silently dropped without this rule."
         )
 
+    def test_orchestrator_egress_allows_qdrant(
+        self, network_policies: list[dict],
+    ) -> None:
+        policy = _find_network_policy(
+            network_policies, "allow-orchestrator-egress",
+        )
+        assert policy is not None
+        assert _egress_allows_port_to_app(policy, "qdrant", 6333), (
+            "Orchestrator egress must allow traffic to app: qdrant on "
+            "port 6333 for QdrantVectorStore gRPC API. With default-deny "
+            "active, Qdrant connections are silently dropped."
+        )
+
+    def test_orchestrator_egress_allows_qdrant_http(
+        self, network_policies: list[dict],
+    ) -> None:
+        policy = _find_network_policy(
+            network_policies, "allow-orchestrator-egress",
+        )
+        assert policy is not None
+        assert _egress_allows_port_to_app(policy, "qdrant", 6334), (
+            "Orchestrator egress must allow traffic to app: qdrant on "
+            "port 6334 for QdrantVectorStore HTTP API. With default-deny "
+            "active, Qdrant HTTP connections are silently dropped."
+        )
+
     def test_orchestrator_egress_allows_kafka(
         self, network_policies: list[dict],
     ) -> None:
