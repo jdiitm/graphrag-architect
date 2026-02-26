@@ -84,18 +84,26 @@ def get_vector_store() -> Any:
     return _VectorStoreHolder.value
 
 
-async def invalidate_caches_after_ingest() -> None:
+async def invalidate_caches_after_ingest(tenant_id: str = "") -> None:
     try:
         from orchestrator.app.query_engine import (
             _SUBGRAPH_CACHE,
             _SEMANTIC_CACHE,
         )
-        _SUBGRAPH_CACHE.advance_generation()
-        _SUBGRAPH_CACHE.invalidate_stale()
-        if _SEMANTIC_CACHE is not None:
-            _SEMANTIC_CACHE.advance_generation()
-            await _SEMANTIC_CACHE.invalidate_stale()
-        logger.info("Post-ingestion generational cache invalidation complete")
+        if tenant_id:
+            _SUBGRAPH_CACHE.invalidate_tenant(tenant_id)
+            if _SEMANTIC_CACHE is not None:
+                _SEMANTIC_CACHE.invalidate_tenant(tenant_id)
+            logger.info(
+                "Tenant-scoped cache invalidation complete: %s", tenant_id,
+            )
+        else:
+            _SUBGRAPH_CACHE.advance_generation()
+            _SUBGRAPH_CACHE.invalidate_stale()
+            if _SEMANTIC_CACHE is not None:
+                _SEMANTIC_CACHE.advance_generation()
+                await _SEMANTIC_CACHE.invalidate_stale()
+            logger.info("Global generational cache invalidation complete")
     except Exception as exc:
         logger.warning("Cache invalidation failed (non-fatal): %s", exc)
 
@@ -421,7 +429,8 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
                 await _cleanup_pruned_vectors(pruned_ids, span)
             except Exception as prune_exc:
                 logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
-            await invalidate_caches_after_ingest()
+            tenant_id = state.get("tenant_id", "")
+            await invalidate_caches_after_ingest(tenant_id=tenant_id)
             return {"commit_status": "success", "completion_tracked": True}
         except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:
             span.set_status(StatusCode.ERROR, str(exc))

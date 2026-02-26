@@ -178,6 +178,16 @@ class SubgraphCache:
             self._generations.pop(k, None)
         return len(stale)
 
+    def invalidate_tenant(self, tenant_id: str) -> int:
+        if not tenant_id:
+            return 0
+        prefix = f"{tenant_id}:"
+        to_remove = [k for k in self._cache if k.startswith(prefix)]
+        for k in to_remove:
+            del self._cache[k]
+            self._generations.pop(k, None)
+        return len(to_remove)
+
     def invalidate_all(self) -> None:
         self._cache.clear()
         self._generations.clear()
@@ -264,6 +274,9 @@ class RedisSubgraphCache:
             await self._redis.setex(self._rkey(key), self._ttl, raw)
         except Exception:
             logger.debug("Redis cache put failed, L1 still updated")
+
+    def invalidate_tenant(self, tenant_id: str) -> int:
+        return self._l1.invalidate_tenant(tenant_id)
 
     async def invalidate_all(self) -> None:
         self._l1.invalidate_all()
