@@ -505,6 +505,22 @@ class GraphRepository:
             return 0
         return record["reaped"]
 
+    async def ensure_tombstone_index(self) -> None:
+        cypher = (
+            "CREATE RANGE INDEX tombstone_reap_idx IF NOT EXISTS "
+            "FOR ()-[r:CALLS]-() ON (r.tombstoned_at)"
+        )
+        async with self._session() as session:
+            await session.run(cypher)
+
+        for rel_type in ("PRODUCES", "CONSUMES", "DEPLOYED_IN"):
+            idx_cypher = (
+                f"CREATE RANGE INDEX tombstone_{rel_type.lower()}_idx IF NOT EXISTS "
+                f"FOR ()-[r:{rel_type}]-() ON (r.tombstoned_at)"
+            )
+            async with self._session() as session:
+                await session.run(idx_cypher)
+
     async def create_vector_index(
         self,
         index_name: str = "service_embedding_index",

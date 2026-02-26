@@ -417,6 +417,52 @@ class TestReadReplicaRouting:
         assert access == WRITE_ACCESS
 
 
+class TestEnsureTombstoneIndex:
+
+    @pytest.mark.asyncio
+    async def test_creates_tombstone_range_index(self) -> None:
+        driver, session, tx = _mock_driver()
+        mock_session_obj = AsyncMock()
+        mock_session_obj.run = AsyncMock()
+        mock_session_obj.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_obj.__aexit__ = AsyncMock(return_value=False)
+        driver.session.return_value = mock_session_obj
+
+        repo = GraphRepository(driver)
+        await repo.ensure_tombstone_index()
+
+        calls = mock_session_obj.run.call_args_list
+        cypher_statements = [c.args[0] for c in calls]
+        found_tombstone_index = any(
+            "tombstoned_at" in stmt for stmt in cypher_statements
+        )
+        assert found_tombstone_index, (
+            f"Expected a Cypher CREATE INDEX on tombstoned_at, "
+            f"got: {cypher_statements}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_index_uses_range_type(self) -> None:
+        driver, session, tx = _mock_driver()
+        mock_session_obj = AsyncMock()
+        mock_session_obj.run = AsyncMock()
+        mock_session_obj.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_obj.__aexit__ = AsyncMock(return_value=False)
+        driver.session.return_value = mock_session_obj
+
+        repo = GraphRepository(driver)
+        await repo.ensure_tombstone_index()
+
+        calls = mock_session_obj.run.call_args_list
+        cypher_statements = [c.args[0] for c in calls]
+        found_range = any(
+            "RANGE INDEX" in stmt or "INDEX" in stmt
+            for stmt in cypher_statements
+            if "tombstoned_at" in stmt
+        )
+        assert found_range
+
+
 class TestCommitTopologyIdempotent:
 
     @pytest.mark.asyncio

@@ -20,6 +20,7 @@ from orchestrator.app.extraction_models import (
     ServiceNode,
 )
 from orchestrator.app.prompt_sanitizer import sanitize_source_content
+from orchestrator.app.token_counter import count_tokens
 
 SYSTEM_PROMPT = (
     "You are a distributed-systems code analyst. Given source files from a "
@@ -87,7 +88,7 @@ class ServiceExtractor:
         current_tokens = 0
 
         for file_entry in files:
-            estimated_tokens = len(file_entry["content"]) // 4
+            estimated_tokens = count_tokens(file_entry["content"])
             if current_batch and current_tokens + estimated_tokens > budget:
                 yield current_batch
                 current_batch = []

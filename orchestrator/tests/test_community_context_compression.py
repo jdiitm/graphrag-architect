@@ -139,7 +139,7 @@ class TestTruncateContextTopologyWithCommunities:
 
         raw_cost = sum(estimate_tokens(str(c)) for c in large)
         budget = TokenBudget(
-            max_context_tokens=raw_cost // 3 + 200,
+            max_context_tokens=max(raw_cost // 4, 80),
             max_results=50,
         )
 

@@ -66,6 +66,22 @@ def _cosine_similarity(a: List[float], b: List[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def _vectorized_cosine_similarity(a: List[float], b: List[float]) -> float:
+    if len(a) != len(b):
+        return 0.0
+    try:
+        import numpy as np
+        arr_a = np.asarray(a, dtype=np.float64)
+        arr_b = np.asarray(b, dtype=np.float64)
+        norm_a = np.linalg.norm(arr_a)
+        norm_b = np.linalg.norm(arr_b)
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return float(np.dot(arr_a, arr_b) / (norm_a * norm_b))
+    except ImportError:
+        return _cosine_similarity(a, b)
+
+
 def _embedding_hash(embedding: List[float]) -> str:
     raw = "|".join(f"{v:.6f}" for v in embedding[:32])
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
@@ -164,7 +180,7 @@ class SemanticQueryCache:
         for entry in self._entries.values():
             if tenant_id and entry.tenant_id and entry.tenant_id != tenant_id:
                 continue
-            sim = _cosine_similarity(query_embedding, entry.embedding)
+            sim = _vectorized_cosine_similarity(query_embedding, entry.embedding)
             if sim >= self._config.similarity_threshold and sim > best_sim:
                 best_sim = sim
                 best_entry = entry
@@ -315,7 +331,7 @@ class RedisSemanticQueryCache:
                     if tenant_id and entry.get("tenant_id") and entry["tenant_id"] != tenant_id:
                         continue
                     stored_emb = entry.get("embedding", [])
-                    sim = _cosine_similarity(query_embedding[:32], stored_emb)
+                    sim = _vectorized_cosine_similarity(query_embedding[:32], stored_emb)
                     if sim >= threshold and sim > best_sim:
                         best_sim = sim
                         best_result = entry.get("result")

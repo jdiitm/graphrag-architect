@@ -99,3 +99,4 @@ zipp==3.23.0
 zstandard==0.25.0
 numpy>=2.0
 redis>=5.0
+tiktoken>=0.7
