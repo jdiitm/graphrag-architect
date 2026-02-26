@@ -1,36 +1,26 @@
 # System Audit Report
 
 **Generated:** 2026-02-26
-**Auditor:** External Principal Distributed Systems Engineer (RED mode)
-**Commit:** 4c03517
+**Auditor:** External Adversarial Panel (Phases 2-5) + Internal Cross-Reference
+**Commit:** 7a61742
 
 ## Executive Summary
 
 - Quality Gates: Deferred (external audit — code-based red-team review)
 - FRs: All FR-1 through FR-18 implemented
-- Findings: 7 CRITICAL
+- Findings: 2 CRITICAL (after triage against current HEAD)
 - **Verdict: RED**
 
 ## Findings
 
 ### CRITICAL
 
-1. **[CRITICAL-001]** `workers/ingestion/internal/blobstore/memory.go:1` — InMemoryBlobStore is the sole BlobStore implementation. Pod restarts lose all >256KB documents currently in the Kafka pipeline. Blob keys become dangling pointers causing hard 404s downstream.
+1. **[CRITICAL-001]** `orchestrator/app/graph_builder.py:393` — Dual-Write Desync between Neo4j and Qdrant. `_cleanup_pruned_vectors` deletes from Qdrant outside the Neo4j ACID transaction. A crash between Neo4j commit (line 420) and Qdrant delete (line 400) leaves orphaned embeddings. No outbox, saga, or distributed transaction guarantees exist. Confirmed by tracing `commit_to_neo4j` → `_cleanup_pruned_vectors` call at line 431; the except block at line 402 logs and swallows Qdrant failures as non-fatal.
 
-2. **[CRITICAL-002]** `workers/ingestion/internal/dedup/dedup.go:10` — LRUStore is single-process in-memory. main.go wires NoopStore by default, meaning deduplication is completely inactive. Kafka partition rebalances route duplicates to new workers, amplifying Neo4j transaction load.
-
-3. **[CRITICAL-003]** `orchestrator/app/graph_builder.py:93` — invalidate_caches_after_ingest() calls advance_generation() globally on both subgraph and semantic caches. Every ingest wipes all tenants' caches, creating a thundering herd to Neo4j.
-
-4. **[CRITICAL-004]** `orchestrator/app/main.py:261` — POST /ingest blocks HTTP thread on ingestion_graph.ainvoke(), causing ALB 504 Gateway Timeouts on large payloads.
-
-5. **[CRITICAL-005]** `orchestrator/app/query_engine.py:273` — _raw_llm_synthesize injects graph context without XML boundary demarcation. Malicious manifests can hijack the system instruction via prompt injection.
-
-6. **[CRITICAL-006]** `orchestrator/app/neo4j_client.py:273` — DEFAULT_WRITE_CONCURRENCY=4 with no entity sorting. Concurrent MERGE statements acquire locks in arbitrary order, guaranteeing deadlocks at scale.
-
-7. **[CRITICAL-007]** `orchestrator/app/query_engine.py:390` — single_hop_retrieve uses blunt LIMIT $hop_limit truncation. In dense graphs, this randomly truncates hub nodes, destroying graph semantics for the LLM.
+2. **[CRITICAL-002]** `orchestrator/app/context_manager.py:194` — Community-aware context compression gap. `truncate_context_topology` falls back to `_truncate_component_by_pagerank` for oversized components, which still drops nodes. `semantic_partitioner.py` implements Louvain community detection (FR-18) but is never wired into the retrieval truncation pipeline. Multi-hop queries across community boundaries lose critical path information when PageRank truncation drops intermediate bridge nodes.
 
 ## Verdict
 
 **Status:** RED
-**Action:** Trigger `@tdd-feature-cycle` — implement CRITICAL-001 first (S3 BlobStore)
-**Priority:** CRITICAL-001 (volatile distributed state)
+**Action:** Trigger `@tdd-feature-cycle` — implement CRITICAL-001 first (Vector Sync Outbox)
+**Priority:** CRITICAL-001 (data consistency) then CRITICAL-002 (retrieval quality)

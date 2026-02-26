@@ -5,7 +5,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Set, Tuple
 
+from orchestrator.app.graph_embeddings import GraphTopology
 from orchestrator.app.prompt_sanitizer import sanitize_source_content
+from orchestrator.app.semantic_partitioner import SemanticPartitioner
 
 
 @dataclass(frozen=True)
@@ -191,6 +193,89 @@ def _truncate_component_by_pagerank(
     return result
 
 
+def _build_topology_from_component(
+    component: List[Dict[str, Any]],
+) -> GraphTopology:
+    all_nodes: Set[str] = set()
+    adj: Dict[str, List[str]] = defaultdict(list)
+    for candidate in component:
+        ids = _candidate_node_ids(candidate)
+        all_nodes.update(ids)
+        if len(ids) == 2:
+            adj[ids[0]].append(ids[1])
+            adj[ids[1]].append(ids[0])
+    for node in all_nodes:
+        if node not in adj:
+            adj[node] = []
+    return GraphTopology(nodes=list(all_nodes), adjacency=dict(adj))
+
+
+def _count_cross_community_edges(
+    component: List[Dict[str, Any]],
+    node_to_community: Dict[str, str],
+) -> int:
+    count = 0
+    for candidate in component:
+        ids = _candidate_node_ids(candidate)
+        if len(ids) == 2:
+            comm_a = node_to_community.get(ids[0], "")
+            comm_b = node_to_community.get(ids[1], "")
+            if comm_a and comm_b and comm_a != comm_b:
+                count += 1
+    return count
+
+
+def compress_component_to_summaries(
+    component: List[Dict[str, Any]],
+    budget: TokenBudget,
+) -> List[Dict[str, Any]]:
+    if not component:
+        return []
+
+    topology = _build_topology_from_component(component)
+    if len(topology.nodes) < 2:
+        return _truncate_component_by_pagerank(
+            component, budget.max_context_tokens, budget.max_results,
+        )
+
+    partitioner = SemanticPartitioner()
+    partition_result = partitioner.partition(topology)
+
+    if partition_result.community_count <= 1:
+        return _truncate_component_by_pagerank(
+            component, budget.max_context_tokens, budget.max_results,
+        )
+
+    cross_edges = _count_cross_community_edges(
+        component, partition_result.node_to_community,
+    )
+
+    summaries: List[Dict[str, Any]] = []
+    total_tokens = 0
+
+    for community in partition_result.communities:
+        summary: Dict[str, Any] = {
+            "community_id": community.community_id,
+            "member_count": len(community.members),
+            "members": sorted(community.members),
+            "cross_community_edge_count": cross_edges,
+            "score": max(
+                (c.get("score", 0.0) for c in component
+                 if set(_candidate_node_ids(c)) & community.members),
+                default=0.0,
+            ),
+        }
+        cost = estimate_tokens(_serialize_candidate(summary))
+        if total_tokens + cost > budget.max_context_tokens:
+            break
+        if len(summaries) >= budget.max_results:
+            break
+        summaries.append(summary)
+        total_tokens += cost
+
+    return summaries
+
+
 def truncate_context_topology(
     candidates: List[Dict[str, Any]],
     budget: TokenBudget,
@@ -219,11 +304,20 @@ def truncate_context_topology(
             result.extend(path)
             total_tokens += cost
         elif remaining_budget > 0:
-            partial = _truncate_component_by_pagerank(
-                path, remaining_budget, remaining_results,
+            sub_budget = TokenBudget(
+                max_context_tokens=remaining_budget,
+                max_results=remaining_results,
             )
-            result.extend(partial)
-            total_tokens += _path_token_cost(partial)
+            compressed = compress_component_to_summaries(path, sub_budget)
+            if compressed:
+                result.extend(compressed)
+                total_tokens += _path_token_cost(compressed)
+            else:
+                partial = _truncate_component_by_pagerank(
+                    path, remaining_budget, remaining_results,
+                )
+                result.extend(partial)
+                total_tokens += _path_token_cost(partial)
 
     for path in isolated:
         cost = _path_token_cost(path)
