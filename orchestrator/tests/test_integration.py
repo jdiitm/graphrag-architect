@@ -191,7 +191,7 @@ class TestHTTPThroughDAGIntegration:
             mock_extractor.extract_all = AsyncMock(return_value=mock_topology)
             mock_ext.return_value = mock_extractor
 
-            response = client.post("/ingest", json={
+            response = client.post("/ingest?sync=true", json={
                 "documents": [
                     {
                         "file_path": "auth/main.py",
@@ -225,7 +225,7 @@ class TestHTTPThroughDAGIntegration:
             mock_extractor.extract_all = AsyncMock(return_value=mock_topology)
             mock_ext.return_value = mock_extractor
 
-            response = client.post("/ingest", json={
+            response = client.post("/ingest?sync=true", json={
                 "documents": [
                     {
                         "file_path": "app.py",

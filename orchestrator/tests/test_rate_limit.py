@@ -36,7 +36,7 @@ class TestRateLimitWithinLimit:
             "extraction_errors": [],
             "commit_status": "success",
         })
-        response = client.post("/ingest", json=_ingest_payload())
+        response = client.post("/ingest?sync=true", json=_ingest_payload())
         assert response.status_code == 200
         set_ingestion_semaphore(None)
 
@@ -50,7 +50,7 @@ class TestRateLimitExceeded:
         loop = asyncio.new_event_loop()
         loop.run_until_complete(sem.acquire())
 
-        response = client.post("/ingest", json=_ingest_payload())
+        response = client.post("/ingest?sync=true", json=_ingest_payload())
         assert response.status_code == 429
         assert "Too many concurrent" in response.json()["detail"]
 
@@ -69,9 +69,9 @@ class TestRateLimitResets:
             "commit_status": "success",
         })
 
-        first = client.post("/ingest", json=_ingest_payload())
+        first = client.post("/ingest?sync=true", json=_ingest_payload())
         assert first.status_code == 200
 
-        second = client.post("/ingest", json=_ingest_payload())
+        second = client.post("/ingest?sync=true", json=_ingest_payload())
         assert second.status_code == 200
         set_ingestion_semaphore(None)

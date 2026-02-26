@@ -171,7 +171,7 @@ class TestIngestEndpointDeprecation:
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 response = await client.post(
-                    "/ingest",
+                    "/ingest?sync=true",
                     json={"documents": [{
                         "file_path": "main.go",
                         "content": doc_content,
