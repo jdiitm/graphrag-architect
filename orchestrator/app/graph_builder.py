@@ -41,9 +41,16 @@ from orchestrator.app.node_sink import IncrementalNodeSink
 from orchestrator.app.vector_store import create_vector_store
 from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.workspace_loader import load_directory_chunked
+from orchestrator.app.vector_sync_outbox import (
+    OutboxDrainer,
+    VectorSyncEvent,
+    VectorSyncOutbox,
+)
 
 SINK_BATCH_SIZE = 500
 _VECTOR_COLLECTION = "services"
+
+_VECTOR_OUTBOX = VectorSyncOutbox()
 
 logger = logging.getLogger(__name__)
 
@@ -390,17 +397,23 @@ def _stamp_ingestion_metadata(
     return entities
 
 
-async def _cleanup_pruned_vectors(
+def _enqueue_vector_cleanup(
     pruned_ids: list, span: Any,
 ) -> None:
     if not pruned_ids:
         return
-    try:
-        vs = get_vector_store()
-        await vs.delete(_VECTOR_COLLECTION, pruned_ids)
-        span.set_attribute("vectors_deleted", len(pruned_ids))
-    except Exception as vec_exc:
-        logger.warning("Vector cleanup failed (non-fatal): %s", vec_exc)
+    event = VectorSyncEvent(
+        collection=_VECTOR_COLLECTION, pruned_ids=pruned_ids,
+    )
+    _VECTOR_OUTBOX.enqueue(event)
+    span.set_attribute("vector_sync_events_queued", 1)
+    span.set_attribute("vectors_queued_for_delete", len(pruned_ids))
+
+
+async def drain_vector_outbox() -> int:
+    vs = get_vector_store()
+    drainer = OutboxDrainer(outbox=_VECTOR_OUTBOX, vector_store=vs)
+    return await drainer.process_once()
 
 
 async def commit_to_neo4j(state: IngestionState) -> dict:
@@ -428,7 +441,8 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
                     ingestion_id,
                 )
                 span.set_attribute("edges_pruned", pruned_count)
-                await _cleanup_pruned_vectors(pruned_ids, span)
+                _enqueue_vector_cleanup(pruned_ids, span)
+                await drain_vector_outbox()
             except Exception as prune_exc:
                 logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
             tenant_id = state.get("tenant_id", "")
