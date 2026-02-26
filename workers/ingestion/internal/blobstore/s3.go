@@ -56,6 +56,7 @@ type MockS3Client struct {
 	lastBucket string
 	putErr     string
 	getErr     string
+	headErr    string
 }
 
 func NewMockS3Client() *MockS3Client {
@@ -72,6 +73,12 @@ func (m *MockS3Client) SetGetError(msg string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.getErr = msg
+}
+
+func (m *MockS3Client) SetHeadError(msg string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.headErr = msg
 }
 
 func (m *MockS3Client) LastBucket() string {
@@ -111,6 +118,9 @@ func (m *MockS3Client) GetObject(_ context.Context, bucket, key string) ([]byte,
 func (m *MockS3Client) HeadObject(_ context.Context, bucket, key string) (bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.headErr != "" {
+		return false, fmt.Errorf("%s", m.headErr)
+	}
 	_, ok := m.objects[bucket+"/"+key]
 	return ok, nil
 }

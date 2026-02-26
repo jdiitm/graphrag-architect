@@ -3,25 +3,27 @@ package blobstore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 )
 
 type awsS3Wrapper struct {
 	client *s3.Client
 }
 
-func newAWSS3Client(region string) ObjectStorageClient {
+func newAWSS3Client(region string) (ObjectStorageClient, error) {
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion(region),
 	)
 	if err != nil {
-		panic(fmt.Sprintf("unable to load AWS SDK config: %v", err))
+		return nil, fmt.Errorf("unable to load AWS SDK config: %w", err)
 	}
-	return &awsS3Wrapper{client: s3.NewFromConfig(cfg)}
+	return &awsS3Wrapper{client: s3.NewFromConfig(cfg)}, nil
 }
 
 func (w *awsS3Wrapper) PutObject(ctx context.Context, bucket, key string, data []byte) error {
@@ -51,7 +53,11 @@ func (w *awsS3Wrapper) HeadObject(ctx context.Context, bucket, key string) (bool
 		Key:    &key,
 	})
 	if err != nil {
-		return false, nil
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NotFound" {
+			return false, nil
+		}
+		return false, err
 	}
 	return true, nil
 }

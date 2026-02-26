@@ -121,14 +121,39 @@ func TestS3BlobStore_CorrectBucket(t *testing.T) {
 	}
 }
 
+func TestS3BlobStore_ExistsError(t *testing.T) {
+	ctx := context.Background()
+	mock := blobstore.NewMockS3Client()
+	mock.SetHeadError("forced head error")
+	store := blobstore.NewS3BlobStore(mock, "test-bucket")
+
+	exists, err := store.Exists(ctx, "any-key")
+	if err == nil {
+		t.Fatal("expected error from Exists when HeadObject fails")
+	}
+	if exists {
+		t.Error("expected exists=false when HeadObject fails")
+	}
+}
+
 func TestNewBlobStore_Memory(t *testing.T) {
-	store := blobstore.NewBlobStoreFromEnv("memory", "", "")
+	store, err := blobstore.NewBlobStoreFromEnv("memory", "", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if store == nil {
 		t.Fatal("expected non-nil store for memory type")
 	}
 	ctx := context.Background()
-	_, err := store.Put(ctx, "k", []byte("v"))
+	_, err = store.Put(ctx, "k", []byte("v"))
 	if err != nil {
 		t.Fatalf("memory store put failed: %v", err)
+	}
+}
+
+func TestNewBlobStore_S3EmptyBucket(t *testing.T) {
+	_, err := blobstore.NewBlobStoreFromEnv("s3", "", "us-east-1")
+	if err == nil {
+		t.Fatal("expected error for empty bucket with s3 store type")
 	}
 }
