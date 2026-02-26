@@ -70,9 +70,10 @@ _TEMPLATES: Dict[str, QueryTemplate] = {
             "AND r.tombstoned_at IS NULL "
             "RETURN s.name AS source, type(r) AS relationship, "
             "neighbor.name AS target, labels(neighbor)[0] AS target_type "
-            "ORDER BY relationship, target"
+            "ORDER BY relationship, target "
+            "LIMIT $limit"
         ),
-        parameters=("name", "tenant_id"),
+        parameters=("name", "tenant_id", "limit"),
         description="All direct neighbors of a service",
     ),
     "topic_consumers": QueryTemplate(
@@ -83,9 +84,10 @@ _TEMPLATES: Dict[str, QueryTemplate] = {
             "AND t.tenant_id = $tenant_id "
             "AND r.tombstoned_at IS NULL "
             "RETURN consumer.name AS consumer_service, t.name AS topic "
-            "ORDER BY consumer_service"
+            "ORDER BY consumer_service "
+            "LIMIT $limit"
         ),
-        parameters=("topic_name", "tenant_id"),
+        parameters=("topic_name", "tenant_id", "limit"),
         description="Services consuming from a Kafka topic",
     ),
     "topic_producers": QueryTemplate(
@@ -96,9 +98,10 @@ _TEMPLATES: Dict[str, QueryTemplate] = {
             "AND t.tenant_id = $tenant_id "
             "AND r.tombstoned_at IS NULL "
             "RETURN producer.name AS producer_service, t.name AS topic "
-            "ORDER BY producer_service"
+            "ORDER BY producer_service "
+            "LIMIT $limit"
         ),
-        parameters=("topic_name", "tenant_id"),
+        parameters=("topic_name", "tenant_id", "limit"),
         description="Services producing to a Kafka topic",
     ),
     "service_deployments": QueryTemplate(
@@ -110,9 +113,10 @@ _TEMPLATES: Dict[str, QueryTemplate] = {
             "AND r.tombstoned_at IS NULL "
             "RETURN s.name AS service, d.namespace AS namespace, "
             "d.replicas AS replicas "
-            "ORDER BY namespace"
+            "ORDER BY namespace "
+            "LIMIT $limit"
         ),
-        parameters=("name", "tenant_id"),
+        parameters=("name", "tenant_id", "limit"),
         description="K8s deployments hosting a service",
     ),
     "namespace_services": QueryTemplate(
@@ -123,9 +127,10 @@ _TEMPLATES: Dict[str, QueryTemplate] = {
             "AND d.tenant_id = $tenant_id "
             "AND r.tombstoned_at IS NULL "
             "RETURN DISTINCT s.name AS service, d.namespace AS namespace "
-            "ORDER BY service"
+            "ORDER BY service "
+            "LIMIT $limit"
         ),
-        parameters=("namespace", "tenant_id"),
+        parameters=("namespace", "tenant_id", "limit"),
         description="All services deployed in a K8s namespace",
     ),
     "service_databases": QueryTemplate(
@@ -136,9 +141,10 @@ _TEMPLATES: Dict[str, QueryTemplate] = {
             "WHERE db.tenant_id = $tenant_id "
             "AND r.tombstoned_at IS NULL "
             "RETURN s.name AS service, db.id AS database, db.type AS db_type "
-            "ORDER BY database"
+            "ORDER BY database "
+            "LIMIT $limit"
         ),
-        parameters=("name", "tenant_id"),
+        parameters=("name", "tenant_id", "limit"),
         description="Databases used by a service",
     ),
     "cross_team_dependencies": QueryTemplate(
@@ -151,9 +157,10 @@ _TEMPLATES: Dict[str, QueryTemplate] = {
             "AND r.tombstoned_at IS NULL "
             "RETURN a.name AS caller, a.team_owner AS caller_team, "
             "b.name AS callee, b.team_owner AS callee_team "
-            "ORDER BY caller_team, callee_team"
+            "ORDER BY caller_team, callee_team "
+            "LIMIT $limit"
         ),
-        parameters=("tenant_id",),
+        parameters=("tenant_id", "limit"),
         description="Service calls that cross team boundaries",
     ),
 }

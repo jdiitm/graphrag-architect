@@ -1,26 +1,32 @@
 # System Audit Report
 
 **Generated:** 2026-02-26
-**Auditor:** External Adversarial Panel (Phases 2-5) + Internal Cross-Reference
-**Commit:** 7a61742
+**Auditor:** external adversarial audit (mapped to FSM format)
+**Commit:** 0a3eaaf
 
 ## Executive Summary
 
-- Quality Gates: Deferred (external audit — code-based red-team review)
-- FRs: All FR-1 through FR-18 implemented
-- Findings: 2 CRITICAL (after triage against current HEAD)
+- Quality Gates: Pending re-verification
+- FRs: 18/18 implemented
+- Findings: 1 CRITICAL, 1 HIGH, 0 LOW
 - **Verdict: RED**
 
 ## Findings
 
 ### CRITICAL
 
-1. **[CRITICAL-001]** `orchestrator/app/graph_builder.py:393` — Dual-Write Desync between Neo4j and Qdrant. `_cleanup_pruned_vectors` deletes from Qdrant outside the Neo4j ACID transaction. A crash between Neo4j commit (line 420) and Qdrant delete (line 400) leaves orphaned embeddings. No outbox, saga, or distributed transaction guarantees exist. Confirmed by tracing `commit_to_neo4j` → `_cleanup_pruned_vectors` call at line 431; the except block at line 402 logs and swallows Qdrant failures as non-fatal.
+1. **[CRITICAL-001]** `orchestrator/app/query_templates.py:66-77` — The `service_neighbors` query template performs unbounded neighbor expansion (`MATCH (s)-[r]-(neighbor)`) without a `LIMIT` clause. On supernodes (e.g., a framework node with 500K edges), this causes Neo4j memory spikes and orchestrator OOM. Every other template (`dependency_count`, `topic_consumers`, `topic_producers`, `service_deployments`, `namespace_services`, `service_databases`) correctly includes `LIMIT $limit`. The `service_neighbors` template is the sole exception.
 
-2. **[CRITICAL-002]** `orchestrator/app/context_manager.py:194` — Community-aware context compression gap. `truncate_context_topology` falls back to `_truncate_component_by_pagerank` for oversized components, which still drops nodes. `semantic_partitioner.py` implements Louvain community detection (FR-18) but is never wired into the retrieval truncation pipeline. Multi-hop queries across community boundaries lose critical path information when PageRank truncation drops intermediate bridge nodes.
+### HIGH
+
+1. **[HIGH-001]** `infrastructure/k8s/network-policies.yaml:25-45` — The `allow-orchestrator-egress` NetworkPolicy is incomplete. With default-deny active (`deny-all` policy exists at line 1-8), the orchestrator pod cannot reach Redis (port 6379), Qdrant (port 6333/6334), or Kafka (port 9092). These are required by `RedisSemanticQueryCache`, `RedisSubgraphCache`, `RedisEvaluationStore`, `QdrantVectorStore`, and `KafkaConsumer`. Connections will be silently dropped in production.
+
+## Requirement Gaps
+
+No FR gaps. All FR-1 through FR-18 are implemented with tests.
 
 ## Verdict
 
 **Status:** RED
-**Action:** Trigger `@tdd-feature-cycle` — implement CRITICAL-001 first (Vector Sync Outbox)
-**Priority:** CRITICAL-001 (data consistency) then CRITICAL-002 (retrieval quality)
+**Action:** Trigger `@tdd-feature-cycle`
+**Priority:** CRITICAL-001 (supernode OOM via unbounded service_neighbors template)
