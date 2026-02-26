@@ -52,6 +52,19 @@ _TENANT_LIMITER = create_rate_limiter(
 )
 
 
+_DEFAULT_SYNC_INGEST_TIMEOUT = 120.0
+
+
+def _get_sync_ingest_timeout() -> float:
+    raw = os.environ.get("INGEST_SYNC_TIMEOUT_SECONDS", "")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            return _DEFAULT_SYNC_INGEST_TIMEOUT
+    return _DEFAULT_SYNC_INGEST_TIMEOUT
+
+
 def get_ingestion_semaphore() -> asyncio.Semaphore:
     if _STATE["semaphore"] is None:
         cfg = RateLimitConfig.from_env()
@@ -231,7 +244,10 @@ async def _ingest_sync(raw_files: List[Dict[str, str]]) -> JSONResponse:
         )
     await sem.acquire()
     try:
-        result = await _invoke_ingestion_graph(raw_files)
+        timeout = _get_sync_ingest_timeout()
+        result = await asyncio.wait_for(
+            _invoke_ingestion_graph(raw_files), timeout=timeout,
+        )
         response_model = _build_ingest_response(result)
         if result.get("commit_status") == "failed":
             return JSONResponse(
@@ -242,6 +258,11 @@ async def _ingest_sync(raw_files: List[Dict[str, str]]) -> JSONResponse:
         resp = JSONResponse(content=body, status_code=200)
         resp.headers["Deprecation"] = "true"
         return resp
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=f"Sync ingestion timed out after {_get_sync_ingest_timeout()}s",
+        ) from exc
     except CircuitOpenError:
         return JSONResponse(
             status_code=503,

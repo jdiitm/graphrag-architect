@@ -410,6 +410,7 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                     "AND r.tombstoned_at IS NULL "
                     "RETURN n.name AS source, type(r) AS rel, "
                     "m.name AS target "
+                    "ORDER BY size((n)--()) DESC "
                     "LIMIT $hop_limit",
                     state, alias="m",
                 )
