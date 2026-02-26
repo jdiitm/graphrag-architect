@@ -556,3 +556,50 @@ func TestDispatcherDrainsOnClosedChannel(t *testing.T) {
 		t.Fatalf("expected 2 processed jobs, got %d", proc.CallCount())
 	}
 }
+
+func TestDefaultDLQAckTimeoutExported(t *testing.T) {
+	if dispatcher.DefaultDLQAckTimeout <= 0 {
+		t.Fatalf("DefaultDLQAckTimeout must be a positive duration, got %v", dispatcher.DefaultDLQAckTimeout)
+	}
+}
+
+func TestDLQAckTimeoutZeroUsesDefault(t *testing.T) {
+	proc := &spyProcessor{
+		handler: func(_ context.Context, _ domain.Job) error {
+			return errProcessing
+		},
+	}
+	cfg := dispatcher.Config{
+		NumWorkers:    1,
+		MaxRetries:    1,
+		JobBuffer:     1,
+		DLQBuffer:     1,
+		DLQAckTimeout: 0,
+	}
+	d := dispatcher.New(cfg, proc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runDone := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(runDone)
+	}()
+
+	go func() {
+		for range d.DLQ() {
+		}
+	}()
+
+	d.Jobs() <- makeJob("dlq-timeout-test")
+
+	select {
+	case <-d.Acks():
+	case <-time.After(dispatcher.DefaultDLQAckTimeout + 5*time.Second):
+		t.Fatal("worker blocked beyond DefaultDLQAckTimeout — zero DLQAckTimeout should use default, not infinite")
+	}
+
+	cancel()
+	<-runDone
+}

@@ -25,6 +25,20 @@ class SearchResult:
     metadata: Dict[str, Any]
 
 
+def resolve_collection_name(
+    base_collection: str, tenant_id: Optional[str],
+) -> str:
+    if not tenant_id:
+        return base_collection
+    safe: list[str] = []
+    for ch in tenant_id:
+        if ch.isalnum() or ch == "-":
+            safe.append(ch)
+        else:
+            safe.append(f"_{ord(ch):02x}")
+    return f"{base_collection}__{''.join(safe)}"
+
+
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
     if len(a) != len(b):
         raise ValueError("Vectors must have the same dimension")

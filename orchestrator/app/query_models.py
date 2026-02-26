@@ -106,6 +106,10 @@ class QueryJobStore:
             job.error = error
             job.completed_at = time.time()
 
+    async def heartbeat(self, job_id: str) -> None:
+        if job_id in self._mono:
+            self._mono[job_id] = time.monotonic()
+
     def _evict_expired(self) -> None:
         now = time.monotonic()
         expired = [

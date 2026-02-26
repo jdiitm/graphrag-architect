@@ -4,7 +4,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from neo4j.exceptions import Neo4jError
@@ -38,7 +38,7 @@ from orchestrator.app.observability import (
 from orchestrator.app.schema_validation import validate_topology
 from orchestrator.app.checkpoint_store import get_checkpointer
 from orchestrator.app.node_sink import IncrementalNodeSink
-from orchestrator.app.vector_store import create_vector_store
+from orchestrator.app.vector_store import create_vector_store, resolve_collection_name
 from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.workspace_loader import load_directory_chunked
 from orchestrator.app.vector_sync_outbox import (
@@ -49,6 +49,10 @@ from orchestrator.app.vector_sync_outbox import (
 
 SINK_BATCH_SIZE = 500
 _VECTOR_COLLECTION = "services"
+
+
+def resolve_vector_collection(tenant_id: Optional[str] = None) -> str:
+    return resolve_collection_name(_VECTOR_COLLECTION, tenant_id)
 
 _VECTOR_OUTBOX = VectorSyncOutbox()
 
@@ -400,12 +404,13 @@ def _stamp_ingestion_metadata(
 
 
 def _enqueue_vector_cleanup(
-    pruned_ids: list, span: Any,
+    pruned_ids: list, span: Any, tenant_id: str = "",
 ) -> None:
     if not pruned_ids:
         return
+    collection = resolve_vector_collection(tenant_id or None)
     event = VectorSyncEvent(
-        collection=_VECTOR_COLLECTION, pruned_ids=pruned_ids,
+        collection=collection, pruned_ids=pruned_ids,
     )
     _VECTOR_OUTBOX.enqueue(event)
     span.set_attribute("vector_sync_events_queued", 1)
@@ -438,16 +443,16 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
             span.set_attribute("entity_count", sink.total_entities)
             span.set_attribute("flush_count", sink.flush_count)
             span.set_attribute("ingestion_id", ingestion_id)
+            tenant_id = state.get("tenant_id", "")
             try:
                 pruned_count, pruned_ids = await repo.prune_stale_edges(
                     ingestion_id,
                 )
                 span.set_attribute("edges_pruned", pruned_count)
-                _enqueue_vector_cleanup(pruned_ids, span)
+                _enqueue_vector_cleanup(pruned_ids, span, tenant_id=tenant_id)
                 await drain_vector_outbox()
             except Exception as prune_exc:
                 logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
-            tenant_id = state.get("tenant_id", "")
             await invalidate_caches_after_ingest(tenant_id=tenant_id)
             return {"commit_status": "success", "completion_tracked": True}
         except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:

@@ -58,6 +58,8 @@ class Neo4jConfig:
     password: str
     query_timeout: float = 30.0
     database: str = "neo4j"
+    max_connection_pool_size: int = 100
+    connection_acquisition_timeout: float = 60.0
 
     @classmethod
     def from_env(cls) -> Neo4jConfig:
@@ -67,6 +69,12 @@ class Neo4jConfig:
             password=os.environ["NEO4J_PASSWORD"],
             query_timeout=float(os.environ.get("NEO4J_QUERY_TIMEOUT", "30")),
             database=os.environ.get("NEO4J_DATABASE", "neo4j"),
+            max_connection_pool_size=int(
+                os.environ.get("NEO4J_MAX_CONNECTION_POOL_SIZE", "100"),
+            ),
+            connection_acquisition_timeout=float(
+                os.environ.get("NEO4J_CONNECTION_ACQUISITION_TIMEOUT", "60"),
+            ),
         )
 
 
@@ -196,3 +204,15 @@ class RAGEvalConfig:
             enable_evaluation=enable_str in ("true", "1", "yes"),
             use_llm_judge=llm_judge_str in ("true", "1", "yes"),
         )
+
+
+@dataclass(frozen=True)
+class JobStoreConfig:
+    ttl_seconds: float = 3600.0
+
+    @classmethod
+    def from_env(cls) -> JobStoreConfig:
+        raw = os.environ.get("JOB_STORE_TTL_SECONDS", "")
+        if raw:
+            return cls(ttl_seconds=float(raw))
+        return cls()
