@@ -74,10 +74,12 @@ func main() {
 		defer producer.Close()
 		blobBucket := envOrDefault("BLOB_BUCKET", "graphrag-ingestion")
 		blobThreshold := envIntOrDefault("BLOB_THRESHOLD", processor.DefaultBlobThreshold)
-		store := blobstore.NewInMemoryBlobStore()
+		blobStoreType := envOrDefault("BLOB_STORE_TYPE", "memory")
+		blobRegion := envOrDefault("AWS_REGION", "us-east-1")
+		store := blobstore.NewBlobStoreFromEnv(blobStoreType, blobBucket, blobRegion)
 		fp = processor.NewBlobForwardingProcessor(producer, store, parsedTopic, blobBucket, blobThreshold)
-		log.Printf("processor mode: kafka with blob offload (topic=%s, bucket=%s, threshold=%d)",
-			parsedTopic, blobBucket, blobThreshold)
+		log.Printf("processor mode: kafka with blob offload (topic=%s, bucket=%s, store=%s, threshold=%d)",
+			parsedTopic, blobBucket, blobStoreType, blobThreshold)
 	} else {
 		var fpOpts []processor.ForwardingOption
 		if authToken := os.Getenv("AUTH_TOKEN"); authToken != "" {
