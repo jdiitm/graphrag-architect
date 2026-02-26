@@ -331,7 +331,7 @@ async def vector_retrieve(state: QueryState) -> dict:
     with tracer.start_as_current_span("query.vector_retrieve"):
         start = time.monotonic()
         try:
-            async with _neo4j_session() as driver:
+            async with _neo4j_session(tenant_id=state.get("tenant_id", "")) as driver:
                 candidates = await _fetch_candidates(driver, state)
                 return {"candidates": candidates}
         finally:
@@ -401,7 +401,7 @@ async def single_hop_retrieve(state: QueryState) -> dict:
     with tracer.start_as_current_span("query.single_hop_retrieve"):
         start = time.monotonic()
         try:
-            async with _neo4j_session() as driver:
+            async with _neo4j_session(tenant_id=state.get("tenant_id", "")) as driver:
                 candidates = await _fetch_candidates(driver, state)
                 names = [
                     c.get("name", c.get("result", {}).get("name", ""))
@@ -570,7 +570,7 @@ async def cypher_retrieve(state: QueryState) -> dict:
                 return cached
 
             try:
-                async with _neo4j_session() as driver:
+                async with _neo4j_session(tenant_id=tenant_id) as driver:
                     template_result = await _try_template_match(state, driver)
                     if template_result is not None:
                         _store_in_semantic_cache(
@@ -638,7 +638,7 @@ async def hybrid_retrieve(state: QueryState) -> dict:
     with tracer.start_as_current_span("query.hybrid_retrieve"):
         start = time.monotonic()
         try:
-            async with _neo4j_session() as driver:
+            async with _neo4j_session(tenant_id=state.get("tenant_id", "")) as driver:
                 candidates = await _fetch_candidates(driver, state)
 
                 tmatch = match_template(state["query"])

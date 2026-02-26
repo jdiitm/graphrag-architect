@@ -293,16 +293,24 @@ class QdrantVectorStore:
         client = self._get_client()
         from qdrant_client.models import PointIdsList
         if tenant_id:
-            from qdrant_client.models import FieldCondition, Filter, MatchValue
-            await client.delete(
-                collection_name=collection,
-                points_selector=Filter(
-                    must=[
-                        FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
-                    ],
-                ),
+            from qdrant_client.models import (
+                FieldCondition, Filter, HasIdCondition, MatchValue,
             )
-            return len(ids)
+            compound = Filter(
+                must=[
+                    HasIdCondition(has_id=ids),
+                    FieldCondition(
+                        key="tenant_id", match=MatchValue(value=tenant_id),
+                    ),
+                ],
+            )
+            count_result = await client.count(
+                collection_name=collection, count_filter=compound, exact=True,
+            )
+            await client.delete(
+                collection_name=collection, points_selector=compound,
+            )
+            return count_result.count
         await client.delete(
             collection_name=collection,
             points_selector=PointIdsList(points=ids),
@@ -470,18 +478,24 @@ class PooledQdrantVectorStore:
         try:
             from qdrant_client.models import PointIdsList
             if tenant_id:
-                from qdrant_client.models import FieldCondition, Filter, MatchValue
-                await client.delete(
-                    collection_name=collection,
-                    points_selector=Filter(
-                        must=[
-                            FieldCondition(
-                                key="tenant_id", match=MatchValue(value=tenant_id),
-                            ),
-                        ],
-                    ),
+                from qdrant_client.models import (
+                    FieldCondition, Filter, HasIdCondition, MatchValue,
                 )
-                return len(ids)
+                compound = Filter(
+                    must=[
+                        HasIdCondition(has_id=ids),
+                        FieldCondition(
+                            key="tenant_id", match=MatchValue(value=tenant_id),
+                        ),
+                    ],
+                )
+                count_result = await client.count(
+                    collection_name=collection, count_filter=compound, exact=True,
+                )
+                await client.delete(
+                    collection_name=collection, points_selector=compound,
+                )
+                return count_result.count
             await client.delete(
                 collection_name=collection,
                 points_selector=PointIdsList(points=ids),

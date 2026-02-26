@@ -199,6 +199,9 @@ class TestCypherRetrieve:
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
         ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
+        ), patch(
             "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
             return_value=None,
@@ -234,6 +237,9 @@ class TestCypherRetrieve:
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
         ), patch(
             "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
@@ -271,6 +277,9 @@ class TestCypherRetrieve:
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
         ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
+        ), patch(
             "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
             return_value=template_result,
@@ -303,6 +312,9 @@ class TestHybridRetrieve:
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
         ):
             result = await hybrid_retrieve(state)
 
@@ -327,6 +339,9 @@ class TestHybridRetrieve:
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
         ):
             result = await hybrid_retrieve(state)
 
@@ -468,6 +483,9 @@ class TestReadTransactions:
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
         ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
+        ), patch(
             "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
             return_value=None,
@@ -503,6 +521,9 @@ class TestReadTransactions:
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
         ):
             await hybrid_retrieve(state)
 
@@ -529,6 +550,9 @@ class TestCypherValidation:
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
         ), patch(
             "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
@@ -561,6 +585,9 @@ class TestCypherValidation:
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
         ):
             result = await hybrid_retrieve(state)
 
@@ -653,6 +680,9 @@ class TestCypherSandboxWiring:
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
         ):
             await cypher_retrieve(state)
 
@@ -695,6 +725,9 @@ class TestCypherSandboxWiring:
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
         ):
             await hybrid_retrieve(state)
 
