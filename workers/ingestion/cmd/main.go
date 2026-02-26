@@ -67,17 +67,22 @@ func main() {
 	var fp processor.DocumentProcessor
 	if processorMode == "kafka" {
 		parsedTopic := envOrDefault("KAFKA_PARSED_TOPIC", "graphrag.parsed")
+		blobBucket := envOrDefault("BLOB_BUCKET", "graphrag-ingestion")
+		blobThreshold := envIntOrDefault("BLOB_THRESHOLD", processor.DefaultBlobThreshold)
+		blobStoreType := envOrDefault("BLOB_STORE_TYPE", "memory")
+		blobRegion := envOrDefault("AWS_REGION", "us-east-1")
+		store, blobErr := blobstore.NewBlobStoreFromEnv(blobStoreType, blobBucket, blobRegion)
+		if blobErr != nil {
+			log.Fatalf("create blob store: %v", blobErr)
+		}
 		producer, prodErr := NewKafkaProducerClient(kafkaBrokers, parsedTopic)
 		if prodErr != nil {
 			log.Fatalf("create kafka producer for parsed topic: %v", prodErr)
 		}
 		defer producer.Close()
-		blobBucket := envOrDefault("BLOB_BUCKET", "graphrag-ingestion")
-		blobThreshold := envIntOrDefault("BLOB_THRESHOLD", processor.DefaultBlobThreshold)
-		store := blobstore.NewInMemoryBlobStore()
 		fp = processor.NewBlobForwardingProcessor(producer, store, parsedTopic, blobBucket, blobThreshold)
-		log.Printf("processor mode: kafka with blob offload (topic=%s, bucket=%s, threshold=%d)",
-			parsedTopic, blobBucket, blobThreshold)
+		log.Printf("processor mode: kafka with blob offload (topic=%s, bucket=%s, store=%s, threshold=%d)",
+			parsedTopic, blobBucket, blobStoreType, blobThreshold)
 	} else {
 		var fpOpts []processor.ForwardingOption
 		if authToken := os.Getenv("AUTH_TOKEN"); authToken != "" {
