@@ -157,3 +157,74 @@ class TestQdrantReadOnly:
 
         store = Neo4jVectorStore(driver=MagicMock())
         assert store.is_read_replica is False
+
+
+class TestNeo4jTenantIsolationAtQueryLevel:
+
+    @pytest.mark.asyncio
+    async def test_search_with_tenant_includes_tenant_filter_in_cypher(self) -> None:
+        from orchestrator.app.vector_store import Neo4jVectorStore
+
+        executed_queries: list[str] = []
+        executed_params: list[dict] = []
+
+        async def _capture_read(func, **kwargs):
+            mock_tx = AsyncMock()
+            result_mock = AsyncMock()
+            result_mock.data = AsyncMock(return_value=[
+                {"id": "n1", "score": 0.95, "metadata": {"tenant_id": "t1", "name": "svc"}},
+            ])
+            async def _capture_run(query, **params):
+                executed_queries.append(query)
+                executed_params.append(params)
+                return result_mock
+            mock_tx.run = _capture_run
+            return await func(mock_tx)
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(side_effect=_capture_read)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        store = Neo4jVectorStore(driver=mock_driver)
+        await store.search_with_tenant("coll", [0.1, 0.2], "t1", limit=5)
+
+        assert len(executed_queries) >= 1, "Must execute at least one query"
+        query = executed_queries[0]
+        assert "tenant_id" in query, (
+            f"Cypher query must filter by tenant_id at the database level, "
+            f"not post-fetch in Python. Query: {query}"
+        )
+        params = executed_params[0]
+        assert params.get("tenant_id") == "t1", (
+            "tenant_id must be passed as a parameterized Cypher variable"
+        )
+
+    @pytest.mark.asyncio
+    async def test_search_with_empty_tenant_omits_filter(self) -> None:
+        from orchestrator.app.vector_store import Neo4jVectorStore
+
+        executed_queries: list[str] = []
+
+        async def _capture_read(func, **kwargs):
+            mock_tx = AsyncMock()
+            result_mock = AsyncMock()
+            result_mock.data = AsyncMock(return_value=[])
+            async def _capture_run(query, **params):
+                executed_queries.append(query)
+                return result_mock
+            mock_tx.run = _capture_run
+            return await func(mock_tx)
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(side_effect=_capture_read)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        store = Neo4jVectorStore(driver=mock_driver)
+        results = await store.search_with_tenant("coll", [0.1, 0.2], "", limit=5)
+        assert isinstance(results, list)

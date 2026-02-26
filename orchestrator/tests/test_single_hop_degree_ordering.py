@@ -11,7 +11,7 @@ from orchestrator.app.query_models import QueryComplexity
 class TestSingleHopDegreeOrdering:
 
     @pytest.mark.asyncio
-    async def test_hop_cypher_includes_order_by_degree_desc(self) -> None:
+    async def test_hop_cypher_uses_degree_cap_instead_of_sorting(self) -> None:
         captured_queries: List[str] = []
 
         mock_result = AsyncMock()
@@ -75,12 +75,21 @@ class TestSingleHopDegreeOrdering:
         assert len(hop_queries) >= 1, "Expected at least one hop query"
 
         hop_query = hop_queries[0]
-        assert "ORDER BY" in hop_query, (
-            f"Hop query must contain ORDER BY for degree-aware ordering: {hop_query}"
+        assert "ORDER BY size((n)--())" not in hop_query, (
+            f"Hop query must NOT sort by degree (causes supernode materialization): {hop_query}"
         )
-        assert "size((n)--())" in hop_query, (
-            f"Hop query must order by node degree size((n)--()):  {hop_query}"
+        assert "degree_cap" in hop_query, (
+            f"Hop query must filter supernodes via degree_cap parameter: {hop_query}"
         )
-        assert hop_query.index("ORDER BY") < hop_query.index("LIMIT"), (
-            "ORDER BY must appear before LIMIT"
-        )
+
+    def test_degree_cap_configurable_via_env(self) -> None:
+        from orchestrator.app.query_engine import _get_degree_cap
+
+        with patch.dict("os.environ", {"DEGREE_CAP": "200"}):
+            assert _get_degree_cap() == 200
+
+    def test_degree_cap_defaults_to_500(self) -> None:
+        from orchestrator.app.query_engine import _get_degree_cap
+
+        with patch.dict("os.environ", {}, clear=True):
+            assert _get_degree_cap() == 500

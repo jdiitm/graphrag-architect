@@ -204,6 +204,92 @@ class TestOutboxDrainer:
         mock_vs.delete.assert_not_called()
 
 
+class TestVectorSyncEventUpsertOperation:
+
+    def test_event_supports_upsert_operation(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        event = VectorSyncEvent(
+            collection="services",
+            operation="upsert",
+            vectors=[
+                VectorRecord(id="v1", vector=[0.1, 0.2], metadata={"name": "svc"}),
+            ],
+        )
+        assert event.operation == "upsert"
+        assert len(event.vectors) == 1
+
+    def test_delete_operation_is_default(self) -> None:
+        event = VectorSyncEvent(
+            collection="services", pruned_ids=["id-1"],
+        )
+        assert event.operation == "delete"
+
+    def test_upsert_event_does_not_require_pruned_ids(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        event = VectorSyncEvent(
+            collection="services",
+            operation="upsert",
+            vectors=[
+                VectorRecord(id="v1", vector=[0.1], metadata={}),
+            ],
+        )
+        assert event.pruned_ids == []
+
+
+class TestOutboxDrainerUpsertHandling:
+
+    @pytest.mark.asyncio
+    async def test_drainer_processes_upsert_events(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        outbox = VectorSyncOutbox()
+        mock_vs = AsyncMock()
+        mock_vs.upsert = AsyncMock(return_value=1)
+
+        event = VectorSyncEvent(
+            collection="services",
+            operation="upsert",
+            vectors=[
+                VectorRecord(id="v1", vector=[0.1, 0.2], metadata={"name": "svc"}),
+            ],
+        )
+        outbox.enqueue(event)
+
+        drainer = OutboxDrainer(outbox=outbox, vector_store=mock_vs)
+        processed = await drainer.process_once()
+
+        assert processed == 1
+        mock_vs.upsert.assert_called_once_with("services", event.vectors)
+        assert outbox.pending_count == 0
+
+    @pytest.mark.asyncio
+    async def test_drainer_handles_mixed_operations(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        outbox = VectorSyncOutbox()
+        mock_vs = AsyncMock()
+        mock_vs.delete = AsyncMock(return_value=1)
+        mock_vs.upsert = AsyncMock(return_value=1)
+
+        delete_event = VectorSyncEvent(
+            collection="svc", pruned_ids=["old-1"],
+        )
+        upsert_event = VectorSyncEvent(
+            collection="svc",
+            operation="upsert",
+            vectors=[
+                VectorRecord(id="new-1", vector=[0.5], metadata={}),
+            ],
+        )
+        outbox.enqueue(delete_event)
+        outbox.enqueue(upsert_event)
+
+        drainer = OutboxDrainer(outbox=outbox, vector_store=mock_vs)
+        processed = await drainer.process_once()
+
+        assert processed == 2
+        mock_vs.delete.assert_called_once()
+        mock_vs.upsert.assert_called_once()
+
+
 class TestRedisOutboxStore:
 
     @pytest.mark.asyncio

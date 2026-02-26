@@ -218,11 +218,38 @@ class Neo4jVectorStore:
         tenant_id: str,
         limit: int = 10,
     ) -> List[SearchResult]:
-        results = await self.search(collection, query_vector, limit=limit * 2)
+        if not tenant_id:
+            return await self.search(collection, query_vector, limit=limit)
+
+        async def _tx(tx: Any) -> list:
+            result = await tx.run(
+                "CALL db.index.vector.queryNodes($index, $k, $vector) "
+                "YIELD node, score "
+                "WHERE node.tenant_id = $tenant_id "
+                "RETURN node.id AS id, score, node {.*} AS metadata "
+                "LIMIT $limit",
+                index=collection,
+                k=limit * 2,
+                vector=query_vector,
+                tenant_id=tenant_id,
+                limit=limit,
+            )
+            return await result.data()
+
+        async with self._get_driver().session() as session:
+            records = await session.execute_read(_tx)
+
         return [
-            r for r in results
-            if not tenant_id or r.metadata.get("tenant_id") == tenant_id
-        ][:limit]
+            SearchResult(
+                id=str(r["id"]),
+                score=r["score"],
+                metadata={
+                    k: v for k, v in r.get("metadata", {}).items()
+                    if k != "embedding"
+                },
+            )
+            for r in records
+        ]
 
 
 class QdrantVectorStore:

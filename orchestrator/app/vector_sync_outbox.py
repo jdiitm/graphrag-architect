@@ -15,15 +15,17 @@ logger = logging.getLogger(__name__)
 class VectorSyncEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     collection: str
-    pruned_ids: List[str]
+    operation: str = "delete"
+    pruned_ids: List[str] = Field(default_factory=list)
+    vectors: List[Any] = Field(default_factory=list)
     status: str = "pending"
     retry_count: int = 0
 
     @field_validator("pruned_ids")
     @classmethod
-    def _require_nonempty_ids(cls, v: List[str]) -> List[str]:
-        if not v:
-            raise ValueError("pruned_ids must contain at least one ID")
+    def _require_nonempty_ids_for_delete(cls, v: List[str], info: Any) -> List[str]:
+        if info.data.get("operation", "delete") == "delete" and not v:
+            raise ValueError("pruned_ids must contain at least one ID for delete operations")
         return v
 
 
@@ -77,9 +79,14 @@ class OutboxDrainer:
         processed = 0
         for event in pending:
             try:
-                await self._vector_store.delete(
-                    event.collection, event.pruned_ids,
-                )
+                if event.operation == "upsert":
+                    await self._vector_store.upsert(
+                        event.collection, event.vectors,
+                    )
+                else:
+                    await self._vector_store.delete(
+                        event.collection, event.pruned_ids,
+                    )
                 self._outbox.mark_emitted(event.event_id)
                 processed += 1
             except Exception as exc:
@@ -166,9 +173,14 @@ class DurableOutboxDrainer:
         processed = 0
         for event in pending:
             try:
-                await self._vector_store.delete(
-                    event.collection, event.pruned_ids,
-                )
+                if event.operation == "upsert":
+                    await self._vector_store.upsert(
+                        event.collection, event.vectors,
+                    )
+                else:
+                    await self._vector_store.delete(
+                        event.collection, event.pruned_ids,
+                    )
                 await self._store.delete_event(event.event_id)
                 processed += 1
             except Exception as exc:
