@@ -58,6 +58,18 @@ spec:
     - to:
         - podSelector:
             matchLabels:
+              app: redis
+      ports:
+        - port: 6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app: kafka
+      ports:
+        - port: 9092
+    - to:
+        - podSelector:
+            matchLabels:
               app: otel-collector
       ports:
         - port: 4317
