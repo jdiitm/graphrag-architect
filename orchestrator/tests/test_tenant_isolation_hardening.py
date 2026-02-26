@@ -1,10 +1,57 @@
 from __future__ import annotations
 
 import re
+import sys
+import types
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+
+def _ensure_qdrant_models_importable() -> None:
+    if "qdrant_client" in sys.modules or "qdrant_client.models" in sys.modules:
+        return
+    from importlib.util import find_spec
+    if find_spec("qdrant_client") is not None:
+        return
+
+    class _PointIdsList:
+        def __init__(self, *, points: Any = None) -> None:
+            self.points = points
+
+    class _HasIdCondition:
+        def __init__(self, *, has_id: Any = None) -> None:
+            self.has_id = has_id
+
+    class _FieldCondition:
+        def __init__(self, *, key: str = "", match: Any = None) -> None:
+            self.key = key
+            self.match = match
+
+    class _MatchValue:
+        def __init__(self, *, value: Any = None) -> None:
+            self.value = value
+
+    class _Filter:
+        def __init__(self, *, must: Any = None) -> None:
+            self.must = must or []
+
+    models = types.ModuleType("qdrant_client.models")
+    for attr, cls in (
+        ("PointIdsList", _PointIdsList),
+        ("HasIdCondition", _HasIdCondition),
+        ("FieldCondition", _FieldCondition),
+        ("MatchValue", _MatchValue),
+        ("Filter", _Filter),
+    ):
+        setattr(models, attr, cls)
+
+    pkg = types.ModuleType("qdrant_client")
+    setattr(pkg, "models", models)
+
+    sys.modules["qdrant_client"] = pkg
+    sys.modules["qdrant_client.models"] = models
 
 from orchestrator.app.extraction_models import (
     CallsEdge,
@@ -295,9 +342,11 @@ class TestNeo4jSessionTenantRouting:
 @pytest.mark.asyncio
 class TestQdrantDeleteTenantCompoundFilter:
 
-    async def test_qdrant_delete_with_tenant_uses_compound_filter(self) -> None:
-        from qdrant_client.models import HasIdCondition, FieldCondition
+    @pytest.fixture(autouse=True)
+    def _qdrant_stubs(self) -> None:
+        _ensure_qdrant_models_importable()
 
+    async def test_qdrant_delete_with_tenant_uses_compound_filter(self) -> None:
         store = QdrantVectorStore(url="http://localhost:6333")
         mock_client = AsyncMock()
         mock_count_result = MagicMock()
@@ -310,12 +359,8 @@ class TestQdrantDeleteTenantCompoundFilter:
 
         call_args = mock_client.delete.call_args
         selector = call_args.kwargs.get("points_selector")
-        has_id_conds = [
-            c for c in selector.must if isinstance(c, HasIdCondition)
-        ]
-        field_conds = [
-            c for c in selector.must if isinstance(c, FieldCondition)
-        ]
+        has_id_conds = [c for c in selector.must if hasattr(c, "has_id")]
+        field_conds = [c for c in selector.must if hasattr(c, "key")]
         assert len(has_id_conds) == 1, "Must include HasIdCondition for specific IDs"
         assert len(field_conds) == 1, "Must include FieldCondition for tenant_id"
         assert set(has_id_conds[0].has_id) == {"id1", "id2"}
@@ -333,8 +378,6 @@ class TestQdrantDeleteTenantCompoundFilter:
         assert removed == 1, "Should return actual count (1), not len(ids) (3)"
 
     async def test_pooled_qdrant_delete_with_tenant_uses_compound_filter(self) -> None:
-        from qdrant_client.models import HasIdCondition, FieldCondition
-
         store = PooledQdrantVectorStore(
             url="http://localhost:6333", pool_size=1,
         )
@@ -352,12 +395,8 @@ class TestQdrantDeleteTenantCompoundFilter:
 
         call_args = mock_client.delete.call_args
         selector = call_args.kwargs.get("points_selector")
-        has_id_conds = [
-            c for c in selector.must if isinstance(c, HasIdCondition)
-        ]
-        field_conds = [
-            c for c in selector.must if isinstance(c, FieldCondition)
-        ]
+        has_id_conds = [c for c in selector.must if hasattr(c, "has_id")]
+        field_conds = [c for c in selector.must if hasattr(c, "key")]
         assert len(has_id_conds) == 1
         assert len(field_conds) == 1
 
