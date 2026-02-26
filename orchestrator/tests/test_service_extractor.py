@@ -87,6 +87,7 @@ EXPECTED_HTTP_CALL = CallsEdge(
     source_service_id="user-service",
     target_service_id="order-service",
     protocol="http",
+    tenant_id="test-tenant",
 )
 
 

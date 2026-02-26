@@ -73,6 +73,7 @@ class TestStubProvider:
                     source_service_id="svc-a",
                     target_service_id="svc-b",
                     protocol="http",
+                    tenant_id="test-tenant",
                 )
             ],
         )

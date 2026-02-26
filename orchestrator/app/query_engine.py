@@ -47,7 +47,7 @@ from orchestrator.app.subgraph_cache import (
 )
 from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.vector_store import SearchResult, create_vector_store
-from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
+from orchestrator.app.neo4j_pool import get_driver, get_query_timeout, resolve_driver_for_tenant
 from orchestrator.app.observability import EMBEDDING_FALLBACK_TOTAL, QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
@@ -185,8 +185,12 @@ def _search_results_to_dicts(results: List[SearchResult]) -> List[Dict[str, Any]
 
 
 @asynccontextmanager
-async def _neo4j_session() -> AsyncIterator[AsyncDriver]:
-    yield _get_neo4j_driver()
+async def _neo4j_session(tenant_id: str = "") -> AsyncIterator[AsyncDriver]:
+    if tenant_id:
+        driver, _db = resolve_driver_for_tenant(None, tenant_id)
+        yield driver
+    else:
+        yield _get_neo4j_driver()
 
 
 def _build_acl_filter(
@@ -327,7 +331,7 @@ async def vector_retrieve(state: QueryState) -> dict:
     with tracer.start_as_current_span("query.vector_retrieve"):
         start = time.monotonic()
         try:
-            async with _neo4j_session() as driver:
+            async with _neo4j_session(tenant_id=state.get("tenant_id", "")) as driver:
                 candidates = await _fetch_candidates(driver, state)
                 return {"candidates": candidates}
         finally:
@@ -397,7 +401,7 @@ async def single_hop_retrieve(state: QueryState) -> dict:
     with tracer.start_as_current_span("query.single_hop_retrieve"):
         start = time.monotonic()
         try:
-            async with _neo4j_session() as driver:
+            async with _neo4j_session(tenant_id=state.get("tenant_id", "")) as driver:
                 candidates = await _fetch_candidates(driver, state)
                 names = [
                     c.get("name", c.get("result", {}).get("name", ""))
@@ -566,7 +570,7 @@ async def cypher_retrieve(state: QueryState) -> dict:
                 return cached
 
             try:
-                async with _neo4j_session() as driver:
+                async with _neo4j_session(tenant_id=tenant_id) as driver:
                     template_result = await _try_template_match(state, driver)
                     if template_result is not None:
                         _store_in_semantic_cache(
@@ -634,7 +638,7 @@ async def hybrid_retrieve(state: QueryState) -> dict:
     with tracer.start_as_current_span("query.hybrid_retrieve"):
         start = time.monotonic()
         try:
-            async with _neo4j_session() as driver:
+            async with _neo4j_session(tenant_id=state.get("tenant_id", "")) as driver:
                 candidates = await _fetch_candidates(driver, state)
 
                 tmatch = match_template(state["query"])

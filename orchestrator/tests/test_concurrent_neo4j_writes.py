@@ -100,7 +100,7 @@ class TestConcurrentNodeWritesByType:
                 id="svc-b", name="svc-b", language="python",
                 framework="fastapi", opentelemetry_enabled=False, tenant_id="t1",
             ),
-            CallsEdge(source_service_id="svc-a", target_service_id="svc-b", protocol="http"),
+            CallsEdge(source_service_id="svc-a", target_service_id="svc-b", protocol="http", tenant_id="test-tenant"),
         ]
 
         await repo.commit_topology(entities)

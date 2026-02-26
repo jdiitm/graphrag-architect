@@ -187,6 +187,9 @@ class TestCypherRetrieveAppliesACL:
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
         ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
+        ), patch(
             "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
             return_value=None,
@@ -281,6 +284,9 @@ class TestHybridRetrieveAppliesACL:
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
         ):
             result = await hybrid_retrieve(state)
 

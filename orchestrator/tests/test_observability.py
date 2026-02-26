@@ -367,9 +367,19 @@ class TestMissingQuerySpans:
             "sources": [],
             "tenant_id": "t1",
         }
+        mock_driver = MagicMock()
+        mock_driver.close = AsyncMock()
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver.session.return_value = mock_session
         with patch(
-            "orchestrator.app.query_engine._get_neo4j_driver"
-        ) as mock_get, patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
+        ), patch(
             "orchestrator.app.query_engine._try_template_match",
             new_callable=AsyncMock,
             return_value=None,
@@ -382,13 +392,6 @@ class TestMissingQuerySpans:
             new_callable=AsyncMock,
             return_value=[{"target_id": "svc-b"}],
         ):
-            mock_driver = MagicMock()
-            mock_driver.close = AsyncMock()
-            mock_session = AsyncMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_driver.session.return_value = mock_session
-            mock_get.return_value = mock_driver
             await cypher_retrieve(state)
 
         span_names = [s.name for s in telemetry.get_finished_spans()]
@@ -411,17 +414,20 @@ class TestMissingQuerySpans:
             "sources": [],
             "tenant_id": "t1",
         }
+        mock_driver = MagicMock()
+        mock_driver.close = AsyncMock()
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(return_value=[])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver.session.return_value = mock_session
         with patch(
-            "orchestrator.app.query_engine._get_neo4j_driver"
-        ) as mock_get:
-            mock_driver = MagicMock()
-            mock_driver.close = AsyncMock()
-            mock_session = AsyncMock()
-            mock_session.execute_read = AsyncMock(return_value=[])
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_driver.session.return_value = mock_session
-            mock_get.return_value = mock_driver
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            return_value=(mock_driver, "tenant-db"),
+        ):
             await hybrid_retrieve(state)
 
         span_names = [s.name for s in telemetry.get_finished_spans()]

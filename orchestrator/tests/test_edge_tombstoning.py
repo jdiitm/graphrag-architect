@@ -35,6 +35,7 @@ class TestEdgeMergeStampsIngestionId:
             target_service_id="svc-b",
             protocol="grpc",
             confidence=1.0,
+            tenant_id="test-tenant",
         )
         query, params = _calls_cypher(edge)
         assert "ingestion_id" in query, (

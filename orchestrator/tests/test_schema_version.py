@@ -27,7 +27,7 @@ class TestParseCanonicalSchema:
     def test_loads_canonical_schema(self) -> None:
         schema = load_canonical_schema()
         assert "CREATE CONSTRAINT" in schema
-        assert "tenant_id IS NOT NULL" in schema
+        assert "IS NODE KEY" in schema
 
     def test_parse_migrations_non_empty(self) -> None:
         schema = load_canonical_schema()

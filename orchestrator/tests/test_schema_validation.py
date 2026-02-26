@@ -50,23 +50,27 @@ VALID_CALLS = CallsEdge(
     source_service_id="auth-service",
     target_service_id="order-service",
     protocol="http",
+    tenant_id="test-tenant",
 )
 
 VALID_PRODUCES = ProducesEdge(
     service_id="order-service",
     topic_name="order-events",
     event_schema="OrderCreated",
+    tenant_id="test-tenant",
 )
 
 VALID_CONSUMES = ConsumesEdge(
     service_id="auth-service",
     topic_name="order-events",
     consumer_group="auth-cg",
+    tenant_id="test-tenant",
 )
 
 VALID_DEPLOYED_IN = DeployedInEdge(
     service_id="order-service",
     deployment_id="order-deploy",
+    tenant_id="test-tenant",
 )
 
 
@@ -118,6 +122,7 @@ class TestValidateTopologyCallsEdge:
             source_service_id="ghost-service",
             target_service_id="order-service",
             protocol="grpc",
+            tenant_id="test-tenant",
         )
         entities: List[Any] = [ORDER_SERVICE, dangling]
         errors = validate_topology(entities)
@@ -129,6 +134,7 @@ class TestValidateTopologyCallsEdge:
             source_service_id="auth-service",
             target_service_id="ghost-service",
             protocol="http",
+            tenant_id="test-tenant",
         )
         entities: List[Any] = [AUTH_SERVICE, dangling]
         errors = validate_topology(entities)
@@ -143,6 +149,7 @@ class TestValidateTopologyProducesEdge:
             service_id="ghost-service",
             topic_name="order-events",
             event_schema="OrderCreated",
+            tenant_id="test-tenant",
         )
         entities: List[Any] = [ORDER_EVENTS_TOPIC, dangling]
         errors = validate_topology(entities)
@@ -154,6 +161,7 @@ class TestValidateTopologyProducesEdge:
             service_id="order-service",
             topic_name="ghost-topic",
             event_schema="OrderCreated",
+            tenant_id="test-tenant",
         )
         entities: List[Any] = [ORDER_SERVICE, dangling]
         errors = validate_topology(entities)
@@ -168,6 +176,7 @@ class TestValidateTopologyConsumesEdge:
             service_id="ghost-service",
             topic_name="ghost-topic",
             consumer_group="cg",
+            tenant_id="test-tenant",
         )
         errors = validate_topology([dangling])
         assert len(errors) == 2
@@ -179,6 +188,7 @@ class TestValidateTopologyDeployedInEdge:
         dangling = DeployedInEdge(
             service_id="ghost-service",
             deployment_id="ghost-deploy",
+            tenant_id="test-tenant",
         )
         errors = validate_topology([dangling])
         assert len(errors) == 2
@@ -194,10 +204,12 @@ class TestValidateTopologyMixed:
                 source_service_id="auth-service",
                 target_service_id="missing-svc",
                 protocol="http",
+                tenant_id="test-tenant",
             ),
             DeployedInEdge(
                 service_id="missing-svc",
                 deployment_id="missing-deploy",
+                tenant_id="test-tenant",
             ),
         ]
         errors = validate_topology(entities)

@@ -96,6 +96,7 @@ class ASTExtractionResult:
                 source_service_id=c.source_service_id,
                 target_service_id=c.target_hint,
                 protocol=c.protocol,
+                tenant_id=tenant_id,
             )
             for c in self.calls
         ]
