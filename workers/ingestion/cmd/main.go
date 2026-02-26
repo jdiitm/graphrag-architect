@@ -13,6 +13,7 @@ import (
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/blobstore"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/consumer"
+	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dedup"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dispatcher"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/dlq"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/healthz"
@@ -93,13 +94,19 @@ func main() {
 		log.Println("processor mode: http")
 	}
 
+	dedupStoreType := envOrDefault("DEDUP_STORE_TYPE", "noop")
+	dedupRedisURL := os.Getenv("DEDUP_REDIS_URL")
+	dedupCapacity := envIntOrDefault("DEDUP_LRU_CAPACITY", 10000)
+	dedupTTLHours := envIntOrDefault("DEDUP_TTL_HOURS", 168)
+	dedupStore := dedup.NewStoreFromEnv(dedupStoreType, dedupRedisURL, dedupCapacity, dedupTTLHours)
+
 	cfg := dispatcher.Config{
 		NumWorkers: numWorkers,
 		MaxRetries: maxRetries,
 		JobBuffer:  numWorkers * 2,
 		DLQBuffer:  numWorkers,
 	}
-	disp := dispatcher.New(cfg, fp, dispatcher.WithObserver(m))
+	disp := dispatcher.New(cfg, fp, dispatcher.WithObserver(m), dispatcher.WithDedup(dedupStore))
 
 	kafkaSource := NewKafkaJobSource(kafkaBrokers, kafkaTopic, consumerGroup)
 	defer kafkaSource.Close()
