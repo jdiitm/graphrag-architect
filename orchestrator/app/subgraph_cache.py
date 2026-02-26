@@ -119,7 +119,14 @@ def default_cache_maxsize() -> int:
 
 
 def _estimate_bytes(value: List[Dict[str, Any]]) -> int:
-    return sys.getsizeof(json.dumps(value, default=str))
+    if not value:
+        return sys.getsizeof(value)
+    total = sys.getsizeof(value)
+    for item in value:
+        total += sys.getsizeof(item)
+        for k, v in item.items():
+            total += sys.getsizeof(k) + sys.getsizeof(v)
+    return total
 
 
 class SubgraphCache:

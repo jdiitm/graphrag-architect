@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import warnings
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
@@ -129,6 +130,14 @@ class Neo4jVectorStore:
     is_read_replica: bool = False
 
     def __init__(self, driver: Any = None) -> None:
+        warnings.warn(
+            "Neo4jVectorStore is deprecated. Storing embeddings as Neo4j node "
+            "properties pollutes the PageCache and prevents independent scaling. "
+            "Migrate to QdrantVectorStore or PooledQdrantVectorStore by setting "
+            "VECTOR_STORE_BACKEND=qdrant.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._driver = driver
 
     def _get_driver(self) -> Any:
@@ -573,7 +582,14 @@ def create_vector_store(
     api_key: str = "",
     driver: Any = None,
     pool_size: int = 4,
+    deployment_mode: str = "dev",
 ) -> Any:
+    if deployment_mode == "production" and backend not in ("qdrant", "neo4j"):
+        raise ValueError(
+            f"VECTOR_STORE_BACKEND={backend!r} is not durable. "
+            f"Production deployments require 'qdrant' (recommended) or "
+            f"'neo4j' (deprecated). Set VECTOR_STORE_BACKEND=qdrant."
+        )
     if backend == "neo4j":
         return Neo4jVectorStore(driver=driver)
     if backend == "qdrant":
