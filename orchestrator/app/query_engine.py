@@ -447,7 +447,9 @@ async def _execute_sandboxed_read(
             f"Query cost {cost} exceeds maximum allowed cost {max_cost}"
         )
 
-    cache_key = normalize_cypher(cypher) + "|" + str(sorted(acl_params.items()))
+    tenant_prefix = str(acl_params.get("tenant_id", ""))
+    raw_key = normalize_cypher(cypher) + "|" + str(sorted(acl_params.items()))
+    cache_key = f"{tenant_prefix}:{raw_key}" if tenant_prefix else raw_key
     cached = await _cache_get(cache_key)
     if cached is not None:
         return cached

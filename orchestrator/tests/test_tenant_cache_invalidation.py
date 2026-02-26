@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from orchestrator.app.subgraph_cache import SubgraphCache, cache_key
+from orchestrator.app.subgraph_cache import SubgraphCache
 from orchestrator.app.semantic_cache import SemanticQueryCache
 
 
@@ -77,13 +76,6 @@ class TestSemanticCacheTenantInvalidation:
         assert removed == 0
 
 
-_ENV_VARS = {
-    "NEO4J_PASSWORD": "test",
-    "NEO4J_URI": "bolt://localhost:7687",
-    "GOOGLE_API_KEY": "test-key",
-}
-
-
 class TestGranularCacheInvalidation:
     @pytest.mark.asyncio
     async def test_ingest_invalidation_passes_tenant_id(self) -> None:
@@ -137,3 +129,37 @@ class TestGranularCacheInvalidation:
         subgraph_cache.advance_generation.assert_called_once()
         subgraph_cache.invalidate_stale.assert_called_once()
         semantic_cache.advance_generation.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sandboxed_read_cache_key_uses_tenant_prefix(self) -> None:
+        from orchestrator.app.query_engine import _execute_sandboxed_read
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(return_value=[{"x": 1}])
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_driver = MagicMock()
+        mock_driver.session = MagicMock(return_value=mock_session)
+
+        test_cache = SubgraphCache(maxsize=256)
+        cypher = "MATCH (n:Service) RETURN n"
+        acl_params = {"tenant_id": "team-bravo", "is_admin": "false"}
+
+        with (
+            patch(
+                "orchestrator.app.query_engine._SUBGRAPH_CACHE",
+                new=test_cache,
+            ),
+            patch(
+                "orchestrator.app.query_engine._get_query_timeout",
+                return_value=30.0,
+            ),
+        ):
+            await _execute_sandboxed_read(mock_driver, cypher, acl_params)
+
+        matching_keys = [k for k in test_cache._cache if k.startswith("team-bravo:")]
+        assert len(matching_keys) == 1
+
+        removed = test_cache.invalidate_tenant("team-bravo")
+        assert removed == 1
+        assert test_cache.stats().size == 0
