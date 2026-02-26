@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import uuid
@@ -107,11 +108,22 @@ class RedisOutboxStore:
     def _event_key(self, event_id: str) -> str:
         return f"{self._KEY_PREFIX}{event_id}"
 
+    @staticmethod
+    def _serialize_vectors(vectors: List[Any]) -> str:
+        return json.dumps([
+            dataclasses.asdict(v)
+            if dataclasses.is_dataclass(v) and not isinstance(v, type)
+            else v
+            for v in vectors
+        ])
+
     async def write_event(self, event: VectorSyncEvent) -> None:
         mapping = {
             "event_id": event.event_id,
             "collection": event.collection,
+            "operation": event.operation,
             "pruned_ids": json.dumps(event.pruned_ids),
+            "vectors": self._serialize_vectors(event.vectors),
             "status": event.status,
             "retry_count": str(event.retry_count),
         }
@@ -131,7 +143,9 @@ class RedisOutboxStore:
             events.append(VectorSyncEvent(
                 event_id=data["event_id"],
                 collection=data["collection"],
+                operation=data.get("operation", "delete"),
                 pruned_ids=json.loads(data["pruned_ids"]),
+                vectors=json.loads(data.get("vectors", "[]")),
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", "0")),
             ))
