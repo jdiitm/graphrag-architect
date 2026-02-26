@@ -46,6 +46,8 @@ _XML_BOUNDARY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_DELIMITER_PATTERN = re.compile(r"GRAPHCTX_[A-Za-z0-9]+", re.IGNORECASE)
+
 _CONTROL_CHAR_PATTERN = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
 )
@@ -82,6 +84,10 @@ def sanitize_query_input(
     return f"<user_query>{cleaned}</user_query>"
 
 
+def _strip_delimiter_patterns(text: str) -> str:
+    return _DELIMITER_PATTERN.sub("[CONTEXT_REF]", text)
+
+
 def sanitize_source_content(
     content: str,
     file_path: str,
@@ -92,6 +98,7 @@ def sanitize_source_content(
     cleaned = _strip_control_chars(content)
     cleaned = cleaned[:max_chars]
     cleaned = _strip_xml_boundaries(cleaned)
+    cleaned = _strip_delimiter_patterns(cleaned)
     cleaned = _apply_secret_filters(cleaned)
     cleaned = _apply_injection_filters(cleaned)
     cleaned = html.escape(cleaned, quote=False)

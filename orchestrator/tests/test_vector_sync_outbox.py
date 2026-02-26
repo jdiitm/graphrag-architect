@@ -204,6 +204,92 @@ class TestOutboxDrainer:
         mock_vs.delete.assert_not_called()
 
 
+class TestVectorSyncEventUpsertOperation:
+
+    def test_event_supports_upsert_operation(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        event = VectorSyncEvent(
+            collection="services",
+            operation="upsert",
+            vectors=[
+                VectorRecord(id="v1", vector=[0.1, 0.2], metadata={"name": "svc"}),
+            ],
+        )
+        assert event.operation == "upsert"
+        assert len(event.vectors) == 1
+
+    def test_delete_operation_is_default(self) -> None:
+        event = VectorSyncEvent(
+            collection="services", pruned_ids=["id-1"],
+        )
+        assert event.operation == "delete"
+
+    def test_upsert_event_does_not_require_pruned_ids(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        event = VectorSyncEvent(
+            collection="services",
+            operation="upsert",
+            vectors=[
+                VectorRecord(id="v1", vector=[0.1], metadata={}),
+            ],
+        )
+        assert event.pruned_ids == []
+
+
+class TestOutboxDrainerUpsertHandling:
+
+    @pytest.mark.asyncio
+    async def test_drainer_processes_upsert_events(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        outbox = VectorSyncOutbox()
+        mock_vs = AsyncMock()
+        mock_vs.upsert = AsyncMock(return_value=1)
+
+        event = VectorSyncEvent(
+            collection="services",
+            operation="upsert",
+            vectors=[
+                VectorRecord(id="v1", vector=[0.1, 0.2], metadata={"name": "svc"}),
+            ],
+        )
+        outbox.enqueue(event)
+
+        drainer = OutboxDrainer(outbox=outbox, vector_store=mock_vs)
+        processed = await drainer.process_once()
+
+        assert processed == 1
+        mock_vs.upsert.assert_called_once_with("services", event.vectors)
+        assert outbox.pending_count == 0
+
+    @pytest.mark.asyncio
+    async def test_drainer_handles_mixed_operations(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        outbox = VectorSyncOutbox()
+        mock_vs = AsyncMock()
+        mock_vs.delete = AsyncMock(return_value=1)
+        mock_vs.upsert = AsyncMock(return_value=1)
+
+        delete_event = VectorSyncEvent(
+            collection="svc", pruned_ids=["old-1"],
+        )
+        upsert_event = VectorSyncEvent(
+            collection="svc",
+            operation="upsert",
+            vectors=[
+                VectorRecord(id="new-1", vector=[0.5], metadata={}),
+            ],
+        )
+        outbox.enqueue(delete_event)
+        outbox.enqueue(upsert_event)
+
+        drainer = OutboxDrainer(outbox=outbox, vector_store=mock_vs)
+        processed = await drainer.process_once()
+
+        assert processed == 2
+        mock_vs.delete.assert_called_once()
+        mock_vs.upsert.assert_called_once()
+
+
 class TestRedisOutboxStore:
 
     @pytest.mark.asyncio
@@ -257,6 +343,167 @@ class TestRedisOutboxStore:
         store = RedisOutboxStore(redis_conn=mock_redis)
         pending = await store.load_pending()
         assert len(pending) == 0
+
+
+class FakeRedis:
+
+    def __init__(self) -> None:
+        self._hashes: Dict[str, Dict[str, str]] = {}
+        self._sets: Dict[str, set] = {}
+
+    async def hset(
+        self,
+        name: str,
+        key: str | None = None,
+        value: str | None = None,
+        mapping: Dict[str, str] | None = None,
+    ) -> None:
+        if name not in self._hashes:
+            self._hashes[name] = {}
+        if mapping:
+            self._hashes[name].update(mapping)
+        if key is not None and value is not None:
+            self._hashes[name][key] = value
+
+    async def hgetall(self, name: str) -> Dict[str, str]:
+        return dict(self._hashes.get(name, {}))
+
+    async def sadd(self, name: str, *values: str) -> None:
+        if name not in self._sets:
+            self._sets[name] = set()
+        self._sets[name].update(values)
+
+    async def smembers(self, name: str) -> set:
+        return set(self._sets.get(name, set()))
+
+    async def srem(self, name: str, *values: str) -> None:
+        if name in self._sets:
+            self._sets[name] -= set(values)
+
+    async def delete(self, name: str) -> None:
+        self._hashes.pop(name, None)
+
+
+class TestRedisOutboxStoreUpsertRoundTrip:
+
+    @pytest.mark.asyncio
+    async def test_upsert_event_survives_write_load_roundtrip(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        fake_redis = FakeRedis()
+        store = RedisOutboxStore(redis_conn=fake_redis)
+
+        original = VectorSyncEvent(
+            collection="services",
+            operation="upsert",
+            vectors=[
+                VectorRecord(
+                    id="v1", vector=[0.1, 0.2], metadata={"name": "auth"},
+                ),
+                VectorRecord(
+                    id="v2", vector=[0.3, 0.4], metadata={"name": "payments"},
+                ),
+            ],
+        )
+        await store.write_event(original)
+        loaded = await store.load_pending()
+
+        assert len(loaded) == 1
+        event = loaded[0]
+        assert event.event_id == original.event_id
+        assert event.operation == "upsert"
+        assert len(event.vectors) == 2
+
+        for vec in event.vectors:
+            assert isinstance(vec, VectorRecord), (
+                f"Expected VectorRecord, got {type(vec).__name__}"
+            )
+
+        assert event.vectors[0].id == "v1"
+        assert event.vectors[0].vector == [0.1, 0.2]
+        assert event.vectors[0].metadata == {"name": "auth"}
+        assert event.vectors[1].id == "v2"
+        assert event.vectors[1].vector == [0.3, 0.4]
+        assert event.vectors[1].metadata == {"name": "payments"}
+
+    @pytest.mark.asyncio
+    async def test_delete_event_roundtrip_preserves_operation(self) -> None:
+        fake_redis = FakeRedis()
+        store = RedisOutboxStore(redis_conn=fake_redis)
+
+        original = VectorSyncEvent(
+            collection="services",
+            operation="delete",
+            pruned_ids=["old-1", "old-2"],
+        )
+        await store.write_event(original)
+        loaded = await store.load_pending()
+
+        assert len(loaded) == 1
+        event = loaded[0]
+        assert event.operation == "delete"
+        assert event.pruned_ids == ["old-1", "old-2"]
+        assert event.vectors == []
+
+
+class SpyVectorStore:
+
+    def __init__(self) -> None:
+        self.upsert_calls: List[Any] = []
+        self.delete_calls: List[Any] = []
+
+    async def upsert(self, collection: str, vectors: List[Any]) -> int:
+        from orchestrator.app.vector_store import VectorRecord
+        for record in vectors:
+            _ = record.id
+            _ = record.vector
+            _ = record.metadata
+            assert isinstance(record, VectorRecord), (
+                f"Expected VectorRecord, got {type(record).__name__}"
+            )
+        self.upsert_calls.append((collection, vectors))
+        return len(vectors)
+
+    async def delete(self, collection: str, ids: List[str]) -> int:
+        self.delete_calls.append((collection, ids))
+        return len(ids)
+
+
+class TestDurableOutboxDrainerUpsertIntegration:
+
+    @pytest.mark.asyncio
+    async def test_durable_drainer_processes_upsert_via_store_roundtrip(
+        self,
+    ) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        fake_redis = FakeRedis()
+        store = RedisOutboxStore(redis_conn=fake_redis)
+        spy_vs = SpyVectorStore()
+
+        event = VectorSyncEvent(
+            collection="services",
+            operation="upsert",
+            vectors=[
+                VectorRecord(
+                    id="v1", vector=[0.1, 0.2], metadata={"name": "svc"},
+                ),
+            ],
+        )
+        await store.write_event(event)
+
+        drainer = DurableOutboxDrainer(
+            store=store, vector_store=spy_vs, max_retries=3,
+        )
+        processed = await drainer.process_once()
+
+        assert processed == 1
+        assert len(spy_vs.upsert_calls) == 1
+        call_collection, call_vectors = spy_vs.upsert_calls[0]
+        assert call_collection == "services"
+        assert len(call_vectors) == 1
+        assert isinstance(call_vectors[0], VectorRecord)
+        assert call_vectors[0].id == "v1"
+        assert call_vectors[0].vector == [0.1, 0.2]
+        assert call_vectors[0].metadata == {"name": "svc"}
 
 
 class TestDurableOutboxDrainerIntegration:

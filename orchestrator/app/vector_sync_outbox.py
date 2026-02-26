@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import uuid
@@ -8,6 +9,8 @@ from typing import Any, List, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, field_validator
 
+from orchestrator.app.vector_store import VectorRecord
+
 logger = logging.getLogger(__name__)
 
 
@@ -15,15 +18,17 @@ logger = logging.getLogger(__name__)
 class VectorSyncEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     collection: str
-    pruned_ids: List[str]
+    operation: str = "delete"
+    pruned_ids: List[str] = Field(default_factory=list)
+    vectors: List[Any] = Field(default_factory=list)
     status: str = "pending"
     retry_count: int = 0
 
     @field_validator("pruned_ids")
     @classmethod
-    def _require_nonempty_ids(cls, v: List[str]) -> List[str]:
-        if not v:
-            raise ValueError("pruned_ids must contain at least one ID")
+    def _require_nonempty_ids_for_delete(cls, v: List[str], info: Any) -> List[str]:
+        if info.data.get("operation", "delete") == "delete" and not v:
+            raise ValueError("pruned_ids must contain at least one ID for delete operations")
         return v
 
 
@@ -77,9 +82,14 @@ class OutboxDrainer:
         processed = 0
         for event in pending:
             try:
-                await self._vector_store.delete(
-                    event.collection, event.pruned_ids,
-                )
+                if event.operation == "upsert":
+                    await self._vector_store.upsert(
+                        event.collection, event.vectors,
+                    )
+                else:
+                    await self._vector_store.delete(
+                        event.collection, event.pruned_ids,
+                    )
                 self._outbox.mark_emitted(event.event_id)
                 processed += 1
             except Exception as exc:
@@ -100,11 +110,22 @@ class RedisOutboxStore:
     def _event_key(self, event_id: str) -> str:
         return f"{self._KEY_PREFIX}{event_id}"
 
+    @staticmethod
+    def _serialize_vectors(vectors: List[Any]) -> str:
+        return json.dumps([
+            dataclasses.asdict(v)
+            if dataclasses.is_dataclass(v) and not isinstance(v, type)
+            else v
+            for v in vectors
+        ])
+
     async def write_event(self, event: VectorSyncEvent) -> None:
         mapping = {
             "event_id": event.event_id,
             "collection": event.collection,
+            "operation": event.operation,
             "pruned_ids": json.dumps(event.pruned_ids),
+            "vectors": self._serialize_vectors(event.vectors),
             "status": event.status,
             "retry_count": str(event.retry_count),
         }
@@ -124,7 +145,12 @@ class RedisOutboxStore:
             events.append(VectorSyncEvent(
                 event_id=data["event_id"],
                 collection=data["collection"],
+                operation=data.get("operation", "delete"),
                 pruned_ids=json.loads(data["pruned_ids"]),
+                vectors=[
+                    VectorRecord(**v)
+                    for v in json.loads(data.get("vectors", "[]"))
+                ],
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", "0")),
             ))
@@ -166,9 +192,14 @@ class DurableOutboxDrainer:
         processed = 0
         for event in pending:
             try:
-                await self._vector_store.delete(
-                    event.collection, event.pruned_ids,
-                )
+                if event.operation == "upsert":
+                    await self._vector_store.upsert(
+                        event.collection, event.vectors,
+                    )
+                else:
+                    await self._vector_store.delete(
+                        event.collection, event.pruned_ids,
+                    )
                 await self._store.delete_event(event.event_id)
                 processed += 1
             except Exception as exc:

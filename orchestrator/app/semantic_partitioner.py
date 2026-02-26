@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, List, Set
+from typing import Any, Dict, FrozenSet, List, Set
 
 from orchestrator.app.graph_embeddings import GraphTopology
 
@@ -167,4 +167,77 @@ class SemanticPartitioner:
             communities=communities,
             node_to_community=node_to_community,
             modularity=modularity,
+        )
+
+
+GDS_NODE_THRESHOLD = 10_000
+
+
+class GDSPartitioner:
+    def __init__(self, driver: Any = None) -> None:
+        self._driver = driver
+        self._fallback = SemanticPartitioner()
+
+    async def partition_async(
+        self,
+        graph_name: str,
+        node_label: str,
+        relationship_type: str = "RELATES_TO",
+    ) -> PartitionResult:
+        async def _tx(tx: Any) -> list:
+            result = await tx.run(
+                "CALL gds.louvain.stream($graph_name, {"
+                "  nodeLabels: [$node_label],"
+                "  relationshipTypes: [$rel_type]"
+                "}) YIELD nodeId, communityId "
+                "RETURN gds.util.asNode(nodeId).name AS nodeId, "
+                "communityId",
+                graph_name=graph_name,
+                node_label=node_label,
+                rel_type=relationship_type,
+            )
+            return await result.data()
+
+        async with self._driver.session() as session:
+            records = await session.execute_read(_tx)
+
+        return self._records_to_result(records)
+
+    def partition_with_fallback(
+        self,
+        topology: GraphTopology,
+        node_threshold: int = GDS_NODE_THRESHOLD,
+    ) -> PartitionResult:
+        if len(topology.nodes) < node_threshold:
+            return self._fallback.partition(topology)
+        logger.info(
+            "Graph has %d nodes (threshold=%d), "
+            "requires async GDS partitioning via partition_async()",
+            len(topology.nodes), node_threshold,
+        )
+        return self._fallback.partition(topology)
+
+    @staticmethod
+    def _records_to_result(records: List[dict]) -> PartitionResult:
+        if not records:
+            return PartitionResult()
+
+        community_members: Dict[int, Set[str]] = defaultdict(set)
+        for rec in records:
+            community_members[rec["communityId"]].add(rec["nodeId"])
+
+        communities: List[Community] = []
+        node_to_community: Dict[str, str] = {}
+        for comm_id, members in sorted(community_members.items()):
+            cid = f"community-{comm_id}"
+            communities.append(Community(
+                community_id=cid,
+                members=frozenset(members),
+            ))
+            for member in members:
+                node_to_community[member] = cid
+
+        return PartitionResult(
+            communities=communities,
+            node_to_community=node_to_community,
         )

@@ -180,6 +180,14 @@ def _get_hop_edge_limit() -> int:
         return 500
 
 
+def _get_degree_cap() -> int:
+    raw = os.environ.get("DEGREE_CAP", "500")
+    try:
+        return int(raw)
+    except ValueError:
+        return 500
+
+
 def _search_results_to_dicts(results: List[SearchResult]) -> List[Dict[str, Any]]:
     return [{**r.metadata, "score": r.score} for r in results]
 
@@ -408,13 +416,14 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                     for c in candidates
                 ]
                 hop_limit = _get_hop_edge_limit()
+                degree_cap = _get_degree_cap()
                 hop_cypher, hop_acl = _apply_acl(
                     "MATCH (n)-[r]-(m) "
                     "WHERE n.name IN $names "
                     "AND r.tombstoned_at IS NULL "
+                    "AND size((m)--()) < $degree_cap "
                     "RETURN n.name AS source, type(r) AS rel, "
                     "m.name AS target "
-                    "ORDER BY size((n)--()) DESC "
                     "LIMIT $hop_limit",
                     state, alias="m",
                 )
@@ -422,7 +431,7 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                 async def _hop_tx(tx: AsyncManagedTransaction) -> list:
                     result = await tx.run(
                         hop_cypher, names=names, hop_limit=hop_limit,
-                        **hop_acl,
+                        degree_cap=degree_cap, **hop_acl,
                     )
                     return await result.data()
 

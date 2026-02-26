@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from orchestrator.app.graph_embeddings import GraphTopology
 from orchestrator.app.semantic_partitioner import (
     Community,
+    GDSPartitioner,
     PartitionResult,
     SemanticPartitioner,
     _compute_modularity,
@@ -121,3 +126,82 @@ class TestSemanticPartitioner:
         result = partitioner.partition(topo)
         assert result.community_count == 0
         assert result.node_to_community == {}
+
+
+class TestGDSPartitioner:
+
+    @pytest.mark.asyncio
+    async def test_gds_partitioner_returns_partition_result(self) -> None:
+        mock_session = AsyncMock()
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=[
+            {"nodeId": "a", "communityId": 0},
+            {"nodeId": "b", "communityId": 0},
+            {"nodeId": "c", "communityId": 1},
+        ])
+        mock_tx = AsyncMock()
+        mock_tx.run = AsyncMock(return_value=mock_result)
+
+        async def _exec_read(fn, **kw):
+            return await fn(mock_tx)
+
+        mock_session.execute_read = AsyncMock(side_effect=_exec_read)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session = MagicMock(return_value=mock_session)
+
+        partitioner = GDSPartitioner(driver=mock_driver)
+        result = await partitioner.partition_async(
+            graph_name="test-graph", node_label="Service",
+        )
+
+        assert isinstance(result, PartitionResult)
+        assert result.community_count == 2
+        assert result.node_to_community["a"] == result.node_to_community["b"]
+        assert result.node_to_community["a"] != result.node_to_community["c"]
+
+    @pytest.mark.asyncio
+    async def test_gds_partitioner_cypher_uses_gds_louvain(self) -> None:
+        captured_queries: list = []
+
+        mock_session = AsyncMock()
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=[])
+        mock_tx = AsyncMock()
+
+        async def _capture_run(query, **kw):
+            captured_queries.append(query)
+            return mock_result
+        mock_tx.run = _capture_run
+
+        async def _exec_read(fn, **kw):
+            return await fn(mock_tx)
+
+        mock_session.execute_read = AsyncMock(side_effect=_exec_read)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session = MagicMock(return_value=mock_session)
+
+        partitioner = GDSPartitioner(driver=mock_driver)
+        await partitioner.partition_async(
+            graph_name="test-graph", node_label="Service",
+        )
+
+        assert len(captured_queries) >= 1
+        assert "gds.louvain" in captured_queries[0].lower(), (
+            f"GDS partitioner must use gds.louvain. Got: {captured_queries[0]}"
+        )
+
+    def test_gds_partitioner_falls_back_to_python_on_small_graphs(self) -> None:
+        topo = GraphTopology(
+            nodes=["a", "b", "c"],
+            adjacency={"a": ["b", "c"], "b": ["a", "c"], "c": ["a", "b"]},
+        )
+        partitioner = GDSPartitioner(driver=MagicMock())
+        result = partitioner.partition_with_fallback(topo, node_threshold=100)
+        assert isinstance(result, PartitionResult)
+        assert result.community_count >= 1
