@@ -5,6 +5,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Set, Tuple
 
+from orchestrator.app.prompt_sanitizer import sanitize_source_content
+
 
 @dataclass(frozen=True)
 class TokenBudget:
@@ -252,6 +254,9 @@ def format_context_for_prompt(
     for i, record in enumerate(context, 1):
         lines.append(f"[{i}]")
         for key, value in record.items():
-            formatted = _truncate_value(value, max_chars_per_value)
-            lines.append(f"  {key}: {formatted}")
-    return "\n".join(lines)
+            sanitized_key = sanitize_source_content(str(key), f"context_key_{i}")
+            truncated = _truncate_value(value, max_chars_per_value)
+            sanitized_value = sanitize_source_content(truncated, f"context_field_{key}")
+            lines.append(f"  {sanitized_key}: {sanitized_value}")
+    body = "\n".join(lines)
+    return f"<graph_context>{body}</graph_context>"
