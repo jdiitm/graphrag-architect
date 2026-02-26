@@ -12,11 +12,9 @@ import pytest
 def _ensure_qdrant_models_importable() -> None:
     if "qdrant_client" in sys.modules or "qdrant_client.models" in sys.modules:
         return
-    try:
-        import qdrant_client as _  # noqa: F401
+    from importlib.util import find_spec
+    if find_spec("qdrant_client") is not None:
         return
-    except ModuleNotFoundError:
-        pass
 
     class _PointIdsList:
         def __init__(self, *, points: Any = None) -> None:
@@ -40,14 +38,17 @@ def _ensure_qdrant_models_importable() -> None:
             self.must = must or []
 
     models = types.ModuleType("qdrant_client.models")
-    models.PointIdsList = _PointIdsList  # type: ignore[attr-defined]
-    models.HasIdCondition = _HasIdCondition  # type: ignore[attr-defined]
-    models.FieldCondition = _FieldCondition  # type: ignore[attr-defined]
-    models.MatchValue = _MatchValue  # type: ignore[attr-defined]
-    models.Filter = _Filter  # type: ignore[attr-defined]
+    for attr, cls in (
+        ("PointIdsList", _PointIdsList),
+        ("HasIdCondition", _HasIdCondition),
+        ("FieldCondition", _FieldCondition),
+        ("MatchValue", _MatchValue),
+        ("Filter", _Filter),
+    ):
+        setattr(models, attr, cls)
 
     pkg = types.ModuleType("qdrant_client")
-    pkg.models = models  # type: ignore[attr-defined]
+    setattr(pkg, "models", models)
 
     sys.modules["qdrant_client"] = pkg
     sys.modules["qdrant_client.models"] = models
