@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -280,13 +281,20 @@ class GraphRepository:
         circuit_breaker: Optional[CircuitBreaker] = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
         database: Optional[str] = None,
-        write_concurrency: int = DEFAULT_WRITE_CONCURRENCY,
+        write_concurrency: Optional[int] = None,
     ) -> None:
         self._driver = driver
         self._cb = circuit_breaker or CircuitBreaker(CircuitBreakerConfig())
         self._batch_size = batch_size
         self._database = database
-        self._write_concurrency = max(1, write_concurrency)
+        resolved = (
+            write_concurrency
+            if write_concurrency is not None
+            else int(os.environ.get(
+                "WRITE_CONCURRENCY", str(DEFAULT_WRITE_CONCURRENCY),
+            ))
+        )
+        self._write_concurrency = max(1, resolved)
 
     def _session(self, access_mode: Optional[str] = None) -> Any:
         kwargs: Dict[str, Any] = {}

@@ -16,6 +16,16 @@ class MessageProducer(Protocol):
     ) -> None: ...
 
 
+def _entity_sort_key(entity: Any) -> str:
+    entity_id = getattr(entity, "id", None)
+    if entity_id is not None:
+        return str(entity_id)
+    name = getattr(entity, "name", None)
+    if name is not None:
+        return str(name)
+    return str(entity)
+
+
 def _get_partition_key(entity: Any) -> str:
     namespace_acl = getattr(entity, "namespace_acl", None)
     if namespace_acl and isinstance(namespace_acl, list) and namespace_acl:
@@ -52,7 +62,9 @@ class IncrementalNodeSink:
         self._buffer.extend(nodes)
         self._total_entities += len(nodes)
         while len(self._buffer) >= self._batch_size:
-            batch = self._buffer[:self._batch_size]
+            batch = sorted(
+                self._buffer[:self._batch_size], key=_entity_sort_key,
+            )
             self._buffer = self._buffer[self._batch_size:]
             if self._parallel:
                 await self._commit_partitioned(batch)
@@ -62,10 +74,11 @@ class IncrementalNodeSink:
 
     async def flush(self) -> None:
         if self._buffer:
+            sorted_buffer = sorted(self._buffer, key=_entity_sort_key)
             if self._parallel:
-                await self._commit_partitioned(list(self._buffer))
+                await self._commit_partitioned(sorted_buffer)
             else:
-                await self._committer.commit_topology(list(self._buffer))
+                await self._committer.commit_topology(sorted_buffer)
             self._flush_count += 1
             self._buffer.clear()
 
@@ -75,10 +88,14 @@ class IncrementalNodeSink:
             key = _get_partition_key(entity)
             partitions[key].append(entity)
         if len(partitions) <= 1:
-            await self._committer.commit_topology(batch)
+            await self._committer.commit_topology(
+                sorted(batch, key=_entity_sort_key),
+            )
             return
         tasks = [
-            self._committer.commit_topology(partition_batch)
+            self._committer.commit_topology(
+                sorted(partition_batch, key=_entity_sort_key),
+            )
             for partition_batch in partitions.values()
         ]
         await asyncio.gather(*tasks)
