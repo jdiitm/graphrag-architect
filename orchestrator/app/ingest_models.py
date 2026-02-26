@@ -1,7 +1,7 @@
 import time
 import uuid
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -91,5 +91,5 @@ class IngestJobStore:
             self._mono.pop(jid, None)
 
 
-def create_ingest_job_store(ttl_seconds: float = 300.0) -> Any:
+def create_ingest_job_store(ttl_seconds: float = 300.0) -> IngestJobStore:
     return IngestJobStore(ttl_seconds=ttl_seconds)

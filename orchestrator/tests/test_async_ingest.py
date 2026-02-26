@@ -1,10 +1,11 @@
+import asyncio
 import base64
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from starlette.testclient import TestClient
 
-from orchestrator.app.main import app
+from orchestrator.app.main import app, set_ingestion_semaphore
 
 
 @pytest.fixture(name="client")
@@ -89,3 +90,52 @@ class TestCompletedIngestJob:
         assert completed.result.status == "success"
         assert completed.result.entities_extracted == 3
         assert completed.result.errors == ["warn: partial parse"]
+
+
+class TestAsyncIngestSemaphoreGating:
+    @pytest.mark.asyncio
+    @patch("orchestrator.app.main.ingestion_graph")
+    async def test_run_ingest_job_acquires_and_releases_semaphore(
+        self, mock_graph
+    ):
+        from orchestrator.app.main import _INGEST_JOB_STORE, _run_ingest_job
+
+        sem = asyncio.Semaphore(1)
+        set_ingestion_semaphore(sem)
+
+        mock_graph.ainvoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "extraction_errors": [],
+            "commit_status": "success",
+        })
+        job = await _INGEST_JOB_STORE.create()
+        await _run_ingest_job(
+            job.job_id,
+            [{"path": "main.go", "content": "package main"}],
+        )
+        assert not sem.locked()
+        set_ingestion_semaphore(None)
+
+    @pytest.mark.asyncio
+    @patch("orchestrator.app.main.ingestion_graph")
+    async def test_run_ingest_job_releases_semaphore_on_failure(
+        self, mock_graph
+    ):
+        from orchestrator.app.main import _INGEST_JOB_STORE, _run_ingest_job
+
+        sem = asyncio.Semaphore(1)
+        set_ingestion_semaphore(sem)
+
+        mock_graph.ainvoke = AsyncMock(
+            side_effect=RuntimeError("graph exploded")
+        )
+        job = await _INGEST_JOB_STORE.create()
+        await _run_ingest_job(
+            job.job_id,
+            [{"path": "main.go", "content": "package main"}],
+        )
+        assert not sem.locked()
+        completed = await _INGEST_JOB_STORE.get(job.job_id)
+        assert completed is not None
+        assert completed.status.value == "failed"
+        set_ingestion_semaphore(None)

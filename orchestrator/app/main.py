@@ -202,7 +202,7 @@ def _verify_ingest_auth(authorization: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
-@app.post("/ingest", response_model=IngestResponse)
+@app.post("/ingest")
 async def ingest(
     request: IngestRequest,
     authorization: Optional[str] = Header(default=None),
@@ -269,10 +269,10 @@ async def _run_streaming_ingestion(directory_path: str) -> IngestResponse:
     )
 
 
-async def _invoke_ingestion_graph(
+def _build_ingestion_initial_state(
     raw_files: List[Dict[str, str]],
 ) -> Dict[str, Any]:
-    initial_state: Dict[str, Any] = {
+    return {
         "directory_path": "",
         "raw_files": raw_files,
         "extracted_nodes": [],
@@ -281,8 +281,15 @@ async def _invoke_ingestion_graph(
         "commit_status": "",
         "tenant_id": "default",
     }
+
+
+async def _invoke_ingestion_graph(
+    raw_files: List[Dict[str, str]],
+) -> Dict[str, Any]:
     try:
-        return await ingestion_graph.ainvoke(initial_state)
+        return await ingestion_graph.ainvoke(
+            _build_ingestion_initial_state(raw_files)
+        )
     except CircuitOpenError:
         raise
     except Exception as exc:
@@ -304,21 +311,19 @@ async def _run_ingest_job(
     job_id: str, raw_files: List[Dict[str, str]],
 ) -> None:
     await _INGEST_JOB_STORE.mark_running(job_id)
+    sem = get_ingestion_semaphore()
+    await sem.acquire()
     try:
-        result = await ingestion_graph.ainvoke({
-            "directory_path": "",
-            "raw_files": raw_files,
-            "extracted_nodes": [],
-            "extraction_errors": [],
-            "validation_retries": 0,
-            "commit_status": "",
-            "tenant_id": "default",
-        })
+        result = await ingestion_graph.ainvoke(
+            _build_ingestion_initial_state(raw_files)
+        )
         response = _build_ingest_response(result)
         await _INGEST_JOB_STORE.complete(job_id, response)
     except Exception as exc:
         logger.exception("Background ingest job %s failed", job_id)
         await _INGEST_JOB_STORE.fail(job_id, str(exc))
+    finally:
+        sem.release()
 
 
 @app.get("/ingest/{job_id}", response_model=IngestJobResponse)
