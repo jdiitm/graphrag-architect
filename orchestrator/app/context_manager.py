@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Set, Tuple
@@ -14,6 +15,12 @@ from orchestrator.app.semantic_partitioner import SemanticPartitioner
 class TokenBudget:
     max_context_tokens: int = 32_000
     max_results: int = 50
+
+
+@dataclass(frozen=True)
+class ContextBlock:
+    content: str
+    delimiter: str
 
 
 def estimate_tokens(text: str) -> int:
@@ -425,12 +432,17 @@ def _truncate_value(value: Any, max_chars: int) -> str:
     return text
 
 
+def _generate_context_delimiter() -> str:
+    return f"GRAPHCTX_{uuid.uuid4().hex[:12]}"
+
+
 def format_context_for_prompt(
     context: List[Dict[str, Any]],
     max_chars_per_value: int = 500,
-) -> str:
+) -> ContextBlock:
     if not context:
-        return ""
+        return ContextBlock(content="", delimiter="")
+    delimiter = _generate_context_delimiter()
     lines: List[str] = []
     for i, record in enumerate(context, 1):
         lines.append(f"[{i}]")
@@ -440,4 +452,7 @@ def format_context_for_prompt(
             sanitized_value = sanitize_source_content(truncated, f"context_field_{key}")
             lines.append(f"  {sanitized_key}: {sanitized_value}")
     body = "\n".join(lines)
-    return f"<graph_context>{body}</graph_context>"
+    return ContextBlock(
+        content=f"<{delimiter}>{body}</{delimiter}>",
+        delimiter=delimiter,
+    )

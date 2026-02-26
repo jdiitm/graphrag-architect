@@ -31,13 +31,17 @@ type JobSource interface {
 	Close()
 }
 
+const defaultHealthThreshold = 3
+
 type Consumer struct {
-	source       JobSource
-	observer     metrics.PipelineObserver
-	jobs         chan<- domain.Job
-	acks         <-chan struct{}
-	ackTimeout   time.Duration
-	maxBatchWait time.Duration
+	source              JobSource
+	observer            metrics.PipelineObserver
+	jobs                chan<- domain.Job
+	acks                <-chan struct{}
+	ackTimeout          time.Duration
+	maxBatchWait        time.Duration
+	healthThreshold     int
+	consecutiveTimeouts int
 }
 
 type ConsumerOption func(*Consumer)
@@ -60,17 +64,28 @@ func WithMaxBatchWait(d time.Duration) ConsumerOption {
 	}
 }
 
+func WithHealthThreshold(n int) ConsumerOption {
+	return func(c *Consumer) {
+		c.healthThreshold = n
+	}
+}
+
 func New(source JobSource, jobs chan<- domain.Job, acks <-chan struct{}, opts ...ConsumerOption) *Consumer {
 	c := &Consumer{
-		source:   source,
-		observer: metrics.NoopObserver{},
-		jobs:     jobs,
-		acks:     acks,
+		source:          source,
+		observer:        metrics.NoopObserver{},
+		jobs:            jobs,
+		acks:            acks,
+		healthThreshold: defaultHealthThreshold,
 	}
 	for _, o := range opts {
 		o(c)
 	}
 	return c
+}
+
+func (c *Consumer) Healthy() bool {
+	return c.consecutiveTimeouts < c.healthThreshold
 }
 
 func (c *Consumer) Run(ctx context.Context) error {
@@ -108,6 +123,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 		if err := c.awaitAcks(pollCtx, len(batch)); err != nil {
 			batchCancel()
 			if errors.Is(err, ErrAckTimeout) || errors.Is(err, context.DeadlineExceeded) {
+				c.consecutiveTimeouts++
 				c.observer.RecordBatchDuration(time.Since(batchStart).Seconds())
 				pollSpan.End()
 				continue
@@ -119,6 +135,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 			return err
 		}
 
+		c.consecutiveTimeouts = 0
 		commitCtx, commitSpan := telemetry.StartCommitSpan(pollCtx)
 		if err := c.source.Commit(commitCtx); err != nil {
 			commitSpan.End()

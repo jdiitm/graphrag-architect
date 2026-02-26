@@ -403,8 +403,31 @@ class RedisSemanticQueryCache:
         except Exception:
             logger.debug("Redis semantic cache store failed (non-fatal)")
 
-    def invalidate_tenant(self, tenant_id: str) -> int:
-        return self._l1.invalidate_tenant(tenant_id)
+    async def invalidate_tenant(self, tenant_id: str) -> int:
+        l1_removed = self._l1.invalidate_tenant(tenant_id)
+        try:
+            cursor = None
+            pattern = f"{self._prefix}*"
+            keys_to_delete = []
+            while cursor != 0:
+                cursor, keys = await self._redis.scan(
+                    cursor=cursor or 0, match=pattern, count=100,
+                )
+                for key in keys:
+                    raw = await self._redis.get(key)
+                    if raw is None:
+                        continue
+                    try:
+                        entry = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if entry.get("tenant_id") == tenant_id:
+                        keys_to_delete.append(key)
+            if keys_to_delete:
+                await self._redis.delete(*keys_to_delete)
+        except Exception:
+            logger.warning("Redis tenant invalidation failed (non-fatal)")
+        return l1_removed
 
     async def invalidate_all(self) -> int:
         count = self._l1.invalidate_all()

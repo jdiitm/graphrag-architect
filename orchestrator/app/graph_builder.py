@@ -100,7 +100,9 @@ async def invalidate_caches_after_ingest(tenant_id: str = "") -> None:
         if tenant_id:
             _SUBGRAPH_CACHE.invalidate_tenant(tenant_id)
             if _SEMANTIC_CACHE is not None:
-                _SEMANTIC_CACHE.invalidate_tenant(tenant_id)
+                result = _SEMANTIC_CACHE.invalidate_tenant(tenant_id)
+                if hasattr(result, "__await__"):
+                    await result
             logger.info(
                 "Tenant-scoped cache invalidation complete: %s", tenant_id,
             )

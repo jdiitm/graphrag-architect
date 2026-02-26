@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from orchestrator.app.vector_sync_outbox import (
+    DurableOutboxDrainer,
     OutboxDrainer,
+    OutboxStore,
+    RedisOutboxStore,
     VectorSyncEvent,
     VectorSyncOutbox,
 )
@@ -199,3 +202,114 @@ class TestOutboxDrainer:
 
         assert processed == 0
         mock_vs.delete.assert_not_called()
+
+
+class TestRedisOutboxStore:
+
+    @pytest.mark.asyncio
+    async def test_write_event_persists_to_redis(self) -> None:
+        mock_redis = AsyncMock()
+        store = RedisOutboxStore(redis_conn=mock_redis)
+        event = VectorSyncEvent(collection="svc", pruned_ids=["a", "b"])
+        await store.write_event(event)
+        mock_redis.hset.assert_called_once()
+        call_args = mock_redis.hset.call_args
+        assert event.event_id in str(call_args)
+
+    @pytest.mark.asyncio
+    async def test_load_pending_returns_stored_events(self) -> None:
+        mock_redis = AsyncMock()
+        event = VectorSyncEvent(collection="svc", pruned_ids=["x"])
+        mock_redis.smembers = AsyncMock(return_value={event.event_id})
+        mock_redis.hgetall = AsyncMock(return_value={
+            "event_id": event.event_id,
+            "collection": "svc",
+            "pruned_ids": '["x"]',
+            "status": "pending",
+            "retry_count": "0",
+        })
+        store = RedisOutboxStore(redis_conn=mock_redis)
+        pending = await store.load_pending()
+        assert len(pending) == 1
+        assert pending[0].collection == "svc"
+        assert pending[0].pruned_ids == ["x"]
+
+    @pytest.mark.asyncio
+    async def test_delete_event_removes_from_redis(self) -> None:
+        mock_redis = AsyncMock()
+        store = RedisOutboxStore(redis_conn=mock_redis)
+        await store.delete_event("evt-123")
+        mock_redis.delete.assert_called()
+        mock_redis.srem.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_update_retry_count_increments_field(self) -> None:
+        mock_redis = AsyncMock()
+        store = RedisOutboxStore(redis_conn=mock_redis)
+        await store.update_retry_count("evt-123", 3)
+        mock_redis.hset.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_load_pending_skips_missing_keys(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.smembers = AsyncMock(return_value={"gone-event"})
+        mock_redis.hgetall = AsyncMock(return_value={})
+        store = RedisOutboxStore(redis_conn=mock_redis)
+        pending = await store.load_pending()
+        assert len(pending) == 0
+
+
+class TestDurableOutboxDrainerIntegration:
+
+    @pytest.mark.asyncio
+    async def test_durable_drainer_processes_and_deletes_events(self) -> None:
+        mock_store = AsyncMock(spec=OutboxStore)
+        event = VectorSyncEvent(collection="svc", pruned_ids=["v1"])
+        mock_store.load_pending = AsyncMock(return_value=[event])
+        mock_vs = AsyncMock()
+        mock_vs.delete = AsyncMock(return_value=1)
+
+        drainer = DurableOutboxDrainer(
+            store=mock_store, vector_store=mock_vs, max_retries=3,
+        )
+        processed = await drainer.process_once()
+
+        assert processed == 1
+        mock_store.delete_event.assert_called_once_with(event.event_id)
+        mock_vs.delete.assert_called_once_with("svc", ["v1"])
+
+    @pytest.mark.asyncio
+    async def test_durable_drainer_retries_on_failure(self) -> None:
+        mock_store = AsyncMock(spec=OutboxStore)
+        event = VectorSyncEvent(collection="svc", pruned_ids=["v1"])
+        event.retry_count = 0
+        mock_store.load_pending = AsyncMock(return_value=[event])
+        mock_vs = AsyncMock()
+        mock_vs.delete = AsyncMock(side_effect=RuntimeError("qdrant down"))
+
+        drainer = DurableOutboxDrainer(
+            store=mock_store, vector_store=mock_vs, max_retries=3,
+        )
+        processed = await drainer.process_once()
+
+        assert processed == 0
+        mock_store.update_retry_count.assert_called_once_with(
+            event.event_id, 1,
+        )
+
+    @pytest.mark.asyncio
+    async def test_durable_drainer_discards_after_max_retries(self) -> None:
+        mock_store = AsyncMock(spec=OutboxStore)
+        event = VectorSyncEvent(collection="svc", pruned_ids=["v1"])
+        event.retry_count = 4
+        mock_store.load_pending = AsyncMock(return_value=[event])
+        mock_vs = AsyncMock()
+        mock_vs.delete = AsyncMock(side_effect=RuntimeError("qdrant down"))
+
+        drainer = DurableOutboxDrainer(
+            store=mock_store, vector_store=mock_vs, max_retries=5,
+        )
+        processed = await drainer.process_once()
+
+        assert processed == 0
+        mock_store.delete_event.assert_called_once_with(event.event_id)
