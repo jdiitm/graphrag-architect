@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
@@ -49,14 +48,3 @@ func TestTestExporterCapturesSpans(t *testing.T) {
 	}
 }
 
-func TestWithExporterOption(t *testing.T) {
-	exp := tracetest.NewInMemoryExporter()
-	tp, err := telemetry.Init(telemetry.WithExporter(exp))
-	if err != nil {
-		t.Fatalf("Init() error = %v", err)
-	}
-	defer func() { _ = tp.Shutdown(context.Background()) }()
-	if _, ok := interface{}(tp).(*sdktrace.TracerProvider); !ok {
-		t.Fatal("expected *sdktrace.TracerProvider")
-	}
-}

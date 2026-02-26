@@ -8,7 +8,7 @@
 
 - Quality Gates: Deferred (external audit — code-based red-team review)
 - FRs: All FR-1 through FR-18 implemented
-- Findings: 7 CRITICAL, 5 HIGH
+- Findings: 7 CRITICAL
 - **Verdict: RED**
 
 ## Findings

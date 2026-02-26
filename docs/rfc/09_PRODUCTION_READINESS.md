@@ -257,7 +257,7 @@ gantt
 
 | Stage | Timeline | Characteristics | Key Metrics |
 |---|---|---|---|
-| **Prototype** | Current | Feature-complete Phase 1. 7 audit findings. Single-tenant. No production deployment. | Pylint 10/10, 398 Python tests, 69 Go tests |
+| **Prototype** | Current | Feature-complete Phase 1. 7 audit findings. Single-tenant. No production deployment. | Pylint 10/10, 1,632 Python tests, 177 Go tests |
 | **Beta** | Month 1-4 | Audit findings resolved. Vector embeddings. Basic observability. Internal users. | SLOs defined, 0 CRITICAL/HIGH findings |
 | **Production** | Month 4-6 | Multi-tenant (logical). Load tested to 10x. SLOs measured 30+ days. E2E + contract tests. | 99.9% availability, < 3s query p99 |
 | **Enterprise** | Month 6-9 | Physical tenant isolation. SOC2 controls. Secret management. Enterprise customers. | SOC2 Type I initiated, < 0.01% DLQ rate |

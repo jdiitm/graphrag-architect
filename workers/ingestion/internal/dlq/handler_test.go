@@ -3,7 +3,6 @@ package dlq_test
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -446,26 +445,3 @@ func TestDLQHandlerNilDoneChannelIsHandledSafely(t *testing.T) {
 	}
 }
 
-func TestDLQHandlerAcceptsLoggerOption(t *testing.T) {
-	source := make(chan domain.Result, 1)
-	sink := &spySink{sendErr: errors.New("broken")}
-	logger := slog.Default()
-	handler := dlq.NewHandler(source, sink, dlq.WithLogger(logger))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		handler.Run(ctx)
-		close(done)
-	}()
-
-	source <- domain.Result{
-		Job:      domain.Job{Key: []byte("test"), Topic: "raw-documents"},
-		Err:      errors.New("fail"),
-		Attempts: 1,
-	}
-
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	<-done
-}

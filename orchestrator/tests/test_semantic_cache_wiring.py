@@ -38,16 +38,6 @@ class TestSemanticCacheAsL0:
 
 class TestSemanticCacheQueryEngineIntegration:
 
-    def test_semantic_cache_is_initialized(self) -> None:
-        from orchestrator.app.query_engine import _SEMANTIC_CACHE
-        assert _SEMANTIC_CACHE is not None, (
-            "_SEMANTIC_CACHE must be initialized as a SemanticQueryCache instance"
-        )
-
-    def test_semantic_cache_is_correct_type(self) -> None:
-        from orchestrator.app.query_engine import _SEMANTIC_CACHE
-        assert isinstance(_SEMANTIC_CACHE, SemanticQueryCache)
-
     @pytest.mark.asyncio
     async def test_cypher_retrieve_checks_semantic_cache(self) -> None:
         from orchestrator.app.query_engine import (

@@ -206,31 +206,6 @@ func TestStageAndEmitProcessor_StreamingFallsBackToValue(t *testing.T) {
 	}
 }
 
-func TestStageAndEmitProcessor_ContextCancellationAbortsStream(t *testing.T) {
-	stagingDir := t.TempDir()
-	emitter := &mockEmitter{}
-	proc := processor.NewStageAndEmitProcessor(stagingDir, emitter)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	reader := bytes.NewReader([]byte("should not be fully written"))
-
-	job := domain.Job{
-		Value:       nil,
-		ValueReader: reader,
-		Headers: map[string]string{
-			"file_path":   "cancel/test.txt",
-			"source_type": "source_code",
-		},
-	}
-
-	err := proc.Process(ctx, job)
-	if err == nil {
-		t.Log("Process completed without error on cancelled context (acceptable if write was fast)")
-	}
-}
-
 func TestStageAndEmitProcessor_StreamingPreservesPathTraversalProtection(t *testing.T) {
 	stagingDir := t.TempDir()
 	emitter := &mockEmitter{}

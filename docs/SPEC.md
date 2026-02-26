@@ -247,7 +247,7 @@ graph TB
 
 **Current State (2 Deployable Services):**
 
-1. **Python Orchestrator** (`orchestrator/`): FastAPI application containing both the LangGraph ingestion DAG and query DAG, LLM extraction, Neo4j client, access control, tenant isolation, and observability. 62 Python modules, 117 test files, 1542+ tests.
+1. **Python Orchestrator** (`orchestrator/`): FastAPI application containing both the LangGraph ingestion DAG and query DAG, LLM extraction, Neo4j client, access control, tenant isolation, and observability. 62 Python modules, 125 test files, 1,632 tests.
 2. **Go Ingestion Workers** (`workers/ingestion/`): Kafka consumer with dispatcher, forwarding processor, DLQ handler, AST processor, blob forwarding, rate limiter, deduplication, outbox, healthz, and metrics server.
 
 **Target State (6 Logical Services):**
@@ -1697,7 +1697,7 @@ flowchart TD
     end
     G1 --> G2
     subgraph G2 ["Gate 2: Unit Tests"]
-        Py["pytest 1542+ tests<br/>--cov-fail-under=80"]
+        Py["pytest 1632 tests<br/>--cov-fail-under=80"]
         Go["go test -race -cover<br/>(70% coverage)"]
     end
     G2 --> G3
@@ -1727,7 +1727,7 @@ All gates blocking. No deployment without all gates green.
 
 | Layer | Count | Coverage Target | Infrastructure |
 |---|---|---|---|
-| Unit Tests | 1542+ Python, 69+ Go | Python 80%, Go 70%, 100% on security-critical paths | In-process mocks |
+| Unit Tests | 1,632 Python, 177 Go | Python 80%, Go 70%, 100% on security-critical paths | In-process mocks |
 | Contract Tests | ~15 | Go worker ↔ Python orchestrator HTTP API | Pact |
 | Integration Tests | ~30 | Component interactions with real Neo4j + Kafka | Testcontainers |
 | E2E Tests | ~10 | Full pipeline (Kafka → Go → Python → Neo4j → query) | Testcontainers |
@@ -1988,7 +1988,7 @@ graph TB
 
 | Stage | Timeline | Characteristics | Key Metrics |
 |---|---|---|---|
-| **Prototype** | Current | Feature-complete Phase 1. Audit findings open. Single-tenant. | Pylint 10/10, 1542 Python tests, 69 Go tests |
+| **Prototype** | Current | Feature-complete Phase 1. Audit findings open. Single-tenant. | Pylint 10/10, 1,632 Python tests, 177 Go tests |
 | **Beta** | Month 1-4 | Audit resolved. Vector embeddings. Basic observability. Internal users. | SLOs defined, 0 CRITICAL/HIGH findings |
 | **Production** | Month 4-6 | Multi-tenant (logical). Load tested 10x. SLOs measured 30+ days. | 99.9% availability, < 3s query p99 |
 | **Enterprise** | Month 6-9 | Physical isolation. SOC2 controls. Secret management. | SOC2 Type I initiated, < 0.01% DLQ |

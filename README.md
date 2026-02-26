@@ -82,7 +82,7 @@ graphrag-architect/
 │   │   ├── workspace_loader.py          # Filesystem workspace scanner
 │   │   └── schema_init.cypher           # Neo4j constraints and indexes
 │   │   # ... plus 30 additional modules (guardrails, caching, audit, etc.)
-│   ├── tests/                           # 117 test files, 1542 tests
+│   ├── tests/                           # 125 test files, 1632 tests
 │   │   ├── conftest.py                  # Shared fixtures (query state, mock helpers)
 │   │   ├── test_access_control.py
 │   │   ├── test_agentic_traversal.py
@@ -105,7 +105,7 @@ graphrag-architect/
 │   │   ├── test_tenant_isolation.py
 │   │   ├── test_vector_store.py
 │   │   ├── test_workspace_loader.py
-│   │   └── ... (96 more test files)
+│   │   └── ... (104 more test files)
 │   └── requirements.txt
 ├── workers/                             # Go high-throughput ingestion
 │   └── ingestion/
@@ -219,3 +219,13 @@ cd workers/ingestion && go test ./... -v
 ## Development
 
 This project follows strict TDD (Red-Green-Refactor). See `CLAUDE.md` for the agentic execution loop and coding invariants.
+
+## Testing Philosophy
+
+The test suite prioritizes **behavioral correctness over implementation coverage**:
+
+- **Behavior-first testing** — Assert outcomes and side effects, not call sequences or internal method dispatch. Tests should fail when the feature breaks, not when the implementation is refactored.
+- **Minimal mocking** — Only mock external boundaries (Neo4j, LLM providers, Redis, Kafka). Internal components are tested against real implementations wherever possible.
+- **Security defeat tests** — Adversarial inputs that verify defenses hold: SQL/Cypher injection, path traversal, ACL bypass, prompt injection, cross-tenant leakage.
+- **Observability contract tests** — Span names and metric labels are treated as API contracts; tests verify their existence because downstream dashboards and alerting depend on them.
+- **Schema compliance tests** — Cypher MERGE/MATCH patterns are scanned to verify tenant_id inclusion, preventing cross-tenant data leakage at the query level.

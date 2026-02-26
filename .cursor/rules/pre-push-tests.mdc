@@ -13,16 +13,16 @@ Run these sequentially. ALL must exit 0 before proceeding.
 
 ```bash
 # 1. Python lint (from repo root, inside venv)
-cd /home/j/side/graphrag-architect && source .venv/bin/activate && pylint orchestrator/
+cd /Users/jd/side/graphrag-architect && source .venv/bin/activate && pylint orchestrator/
 
 # 2. Python tests (from repo root, inside venv)
 python -m pytest orchestrator/tests/ -v
 
 # 3. Go tests (from Go module root)
-cd /home/j/side/graphrag-architect/workers/ingestion && go test ./... -v -count=1 -timeout 30s
+cd /Users/jd/side/graphrag-architect/workers/ingestion && go test ./... -v -count=1 -timeout 30s
 
 # 4. Go lint (from Go module root)
-cd /home/j/side/graphrag-architect/workers/ingestion && golangci-lint run ./...
+cd /Users/jd/side/graphrag-architect/workers/ingestion && golangci-lint run ./...
 ```
 
 ## Rules

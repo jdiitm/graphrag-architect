@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,12 +17,23 @@ import (
 )
 
 type stubSink struct {
+	mu      sync.Mutex
 	results []domain.Result
 }
 
 func (s *stubSink) Send(_ context.Context, r domain.Result) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.results = append(s.results, r)
 	return nil
+}
+
+func (s *stubSink) Results() []domain.Result {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]domain.Result, len(s.results))
+	copy(cp, s.results)
+	return cp
 }
 
 type stubJobSource struct {
@@ -162,10 +174,11 @@ func TestEndToEnd_FailedJobRoutesToDLQ(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	cancel()
 
-	if len(sink.results) != 1 {
-		t.Fatalf("DLQ received %d results, want 1", len(sink.results))
+	results := sink.Results()
+	if len(results) != 1 {
+		t.Fatalf("DLQ received %d results, want 1", len(results))
 	}
-	if sink.results[0].Err == nil {
+	if results[0].Err == nil {
 		t.Error("DLQ result should have error")
 	}
 }

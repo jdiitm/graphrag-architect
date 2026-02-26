@@ -141,7 +141,7 @@ flowchart TD
     end
 
     subgraph gate2 ["Gate 2: Unit Tests (parallel)"]
-        PythonTests["pytest (398+ tests)<br/>--cov --cov-fail-under=80"]
+        PythonTests["pytest (1632 tests)<br/>--cov --cov-fail-under=80"]
         GoTests["go test -race -cover<br/>(69+ tests, 70% coverage)"]
     end
 
@@ -222,7 +222,7 @@ graph TB
 
 ### 3.2 Test Categories
 
-#### Unit Tests (Current: 398 Python + 69 Go)
+#### Unit Tests (Current: 1,632 Python + 177 Go)
 
 **Coverage targets:**
 - Python: 80% line coverage, 100% on security-critical paths (`access_control.py`, `cypher_validator.py`, `circuit_breaker.py`)

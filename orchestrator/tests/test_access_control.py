@@ -622,3 +622,26 @@ class TestNodeMetadataOnIngestion:
         assert "namespace_acl" in cypher
         assert params["team_owner"] == "platform"
         assert params["namespace_acl"] == ["production"]
+
+
+class TestCallIsolationWiredIntoACL:
+
+    def test_ast_injection_covers_call_subquery_match(self) -> None:
+        principal = SecurityPrincipal(
+            team="team-a",
+            namespace="ns-1",
+            role="viewer",
+        )
+        pf = CypherPermissionFilter(principal)
+        cypher_with_call = (
+            "MATCH (n:Service) WHERE n.team_owner = 'team-a' "
+            "CALL { MATCH (m:Service) RETURN m } RETURN n"
+        )
+        result, params = pf.inject_into_cypher(cypher_with_call)
+
+        subquery_start = result.find("CALL")
+        subquery_end = result.find("}", subquery_start)
+        subquery_body = result[subquery_start:subquery_end]
+        assert "n.team_owner" in subquery_body, (
+            "AST-level injection must cover MATCH clauses inside CALL subqueries"
+        )
