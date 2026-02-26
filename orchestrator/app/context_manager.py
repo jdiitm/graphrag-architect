@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Set, Tuple
 from orchestrator.app.graph_embeddings import GraphTopology
 from orchestrator.app.prompt_sanitizer import sanitize_source_content
 from orchestrator.app.semantic_partitioner import SemanticPartitioner
+from orchestrator.app.token_counter import count_tokens
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,7 @@ class ContextBlock:
 
 
 def estimate_tokens(text: str) -> int:
-    return max(1, len(text) // 4)
+    return max(1, count_tokens(text))
 
 
 def _serialize_candidate(candidate: Any) -> str:

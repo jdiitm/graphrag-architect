@@ -31,7 +31,7 @@ class TestEstimateTokens:
     def test_long_string_proportional(self) -> None:
         text = "a" * 400
         tokens = estimate_tokens(text)
-        assert tokens == 100
+        assert tokens == 50
 
 
 class TestTruncateContext:

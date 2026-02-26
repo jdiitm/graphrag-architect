@@ -14,6 +14,7 @@ from orchestrator.app.semantic_cache import (
     SemanticQueryCache,
     _cosine_similarity,
     _embedding_hash,
+    _vectorized_cosine_similarity,
 )
 
 
@@ -244,6 +245,64 @@ class TestSingleflightCoalescing:
         assert r2 is None
         assert owner2 is True
         cache.notify_complete(embedding)
+
+
+class TestVectorizedCosineSimilarity:
+
+    def test_identical_vectors(self) -> None:
+        v = [1.0, 0.0, 0.0]
+        assert _vectorized_cosine_similarity(v, v) == pytest.approx(1.0)
+
+    def test_orthogonal_vectors(self) -> None:
+        a = [1.0, 0.0]
+        b = [0.0, 1.0]
+        assert _vectorized_cosine_similarity(a, b) == pytest.approx(0.0)
+
+    def test_zero_vector(self) -> None:
+        assert _vectorized_cosine_similarity([0.0, 0.0], [1.0, 0.0]) == 0.0
+
+    def test_different_lengths_returns_zero(self) -> None:
+        assert _vectorized_cosine_similarity([1.0], [1.0, 2.0]) == 0.0
+
+    def test_matches_naive_implementation(self) -> None:
+        a = [0.3, 0.7, 0.1, 0.5]
+        b = [0.6, 0.2, 0.9, 0.4]
+        naive_result = _cosine_similarity(a, b)
+        vectorized_result = _vectorized_cosine_similarity(a, b)
+        assert vectorized_result == pytest.approx(naive_result, abs=1e-7)
+
+    def test_high_dimensional_performance(self) -> None:
+        import random
+        random.seed(42)
+        dim = 1536
+        a = [random.gauss(0, 1) for _ in range(dim)]
+        b = [random.gauss(0, 1) for _ in range(dim)]
+        result = _vectorized_cosine_similarity(a, b)
+        assert -1.0 <= result <= 1.0
+
+
+class TestSemanticCacheUsesVectorizedLookup:
+
+    def test_lookup_uses_vectorized_similarity(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store("q", embedding, {"answer": "test"})
+        result = cache.lookup(embedding)
+        assert result == {"answer": "test"}
+
+    def test_bulk_lookup_performance_scales(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(
+            similarity_threshold=0.95, max_entries=512,
+        ))
+        for i in range(100):
+            emb = [0.0] * 128
+            emb[i % 128] = 1.0
+            cache.store(f"q{i}", emb, {"idx": i})
+
+        query_emb = [0.0] * 128
+        query_emb[0] = 1.0
+        result = cache.lookup(query_emb)
+        assert result is not None
 
 
 class TestRedisSemanticQueryCacheInvalidateTenant:

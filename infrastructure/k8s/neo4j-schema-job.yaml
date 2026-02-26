@@ -68,3 +68,7 @@ data:
     CREATE INDEX service_lang_idx IF NOT EXISTS FOR (s:Service) ON (s.language);
     CREATE INDEX service_framework_idx IF NOT EXISTS FOR (s:Service) ON (s.framework);
     CREATE FULLTEXT INDEX service_name_index IF NOT EXISTS FOR (n:Service) ON EACH [n.name];
+    CREATE RANGE INDEX tombstone_calls_idx IF NOT EXISTS FOR ()-[r:CALLS]-() ON (r.tombstoned_at);
+    CREATE RANGE INDEX tombstone_produces_idx IF NOT EXISTS FOR ()-[r:PRODUCES]-() ON (r.tombstoned_at);
+    CREATE RANGE INDEX tombstone_consumes_idx IF NOT EXISTS FOR ()-[r:CONSUMES]-() ON (r.tombstoned_at);
+    CREATE RANGE INDEX tombstone_deployed_in_idx IF NOT EXISTS FOR ()-[r:DEPLOYED_IN]-() ON (r.tombstoned_at);

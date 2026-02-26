@@ -417,6 +417,45 @@ class TestReadReplicaRouting:
         assert access == WRITE_ACCESS
 
 
+class TestEnsureTombstoneIndex:
+
+    @pytest.mark.asyncio
+    async def test_creates_index_for_all_four_relationship_types(self) -> None:
+        driver, session, tx = _mock_driver()
+        mock_session_obj = AsyncMock()
+        mock_session_obj.run = AsyncMock()
+        mock_session_obj.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_obj.__aexit__ = AsyncMock(return_value=False)
+        driver.session.return_value = mock_session_obj
+
+        repo = GraphRepository(driver)
+        await repo.ensure_tombstone_index()
+
+        calls = mock_session_obj.run.call_args_list
+        cypher_statements = [c.args[0] for c in calls]
+        assert len(cypher_statements) == 4, (
+            f"Expected 4 index statements, got {len(cypher_statements)}: "
+            f"{cypher_statements}"
+        )
+
+        expected_rel_types = {"CALLS", "PRODUCES", "CONSUMES", "DEPLOYED_IN"}
+        found_rel_types: set[str] = set()
+        for stmt in cypher_statements:
+            assert "RANGE INDEX" in stmt, (
+                f"Expected RANGE INDEX in statement: {stmt}"
+            )
+            assert "tombstoned_at" in stmt, (
+                f"Expected tombstoned_at in statement: {stmt}"
+            )
+            for rel_type in expected_rel_types:
+                if f":{rel_type}]" in stmt:
+                    found_rel_types.add(rel_type)
+
+        assert found_rel_types == expected_rel_types, (
+            f"Missing relationship types: {expected_rel_types - found_rel_types}"
+        )
+
+
 class TestCommitTopologyIdempotent:
 
     @pytest.mark.asyncio
