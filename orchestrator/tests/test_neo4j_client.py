@@ -37,23 +37,27 @@ SAMPLE_CALLS = CallsEdge(
     source_service_id="user-service",
     target_service_id="order-service",
     protocol="http",
+    tenant_id="test-tenant",
 )
 
 SAMPLE_PRODUCES = ProducesEdge(
     service_id="order-service",
     topic_name="order-events",
     event_schema="OrderCreated",
+    tenant_id="test-tenant",
 )
 
 SAMPLE_CONSUMES = ConsumesEdge(
     service_id="notification-service",
     topic_name="order-events",
     consumer_group="notification-cg",
+    tenant_id="test-tenant",
 )
 
 SAMPLE_DEPLOYED_IN = DeployedInEdge(
     service_id="order-service",
     deployment_id="order-deploy",
+    tenant_id="test-tenant",
 )
 
 
@@ -62,7 +66,8 @@ class TestCypherOpForServiceNode:
     def test_returns_merge_on_id(self) -> None:
         query, params = cypher_op_for_entity(SAMPLE_SERVICE)
         assert "MERGE" in query
-        assert "{id: $id}" in query
+        assert "id: $id" in query
+        assert "tenant_id: $tenant_id" in query
         assert ":Service" in query
         assert params["id"] == "order-service"
 
@@ -90,7 +95,8 @@ class TestCypherOpForKafkaTopicNode:
         query, params = cypher_op_for_entity(SAMPLE_TOPIC)
         assert "MERGE" in query
         assert ":KafkaTopic" in query
-        assert "{name: $name}" in query
+        assert "name: $name" in query
+        assert "tenant_id: $tenant_id" in query
         assert params["name"] == "order-events"
         assert params["partitions"] == 6
         assert params["retention_ms"] == 604800000

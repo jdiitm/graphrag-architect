@@ -47,7 +47,7 @@ from orchestrator.app.subgraph_cache import (
 )
 from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.vector_store import SearchResult, create_vector_store
-from orchestrator.app.neo4j_pool import get_driver, get_query_timeout
+from orchestrator.app.neo4j_pool import get_driver, get_query_timeout, resolve_driver_for_tenant
 from orchestrator.app.observability import EMBEDDING_FALLBACK_TOTAL, QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
@@ -185,8 +185,12 @@ def _search_results_to_dicts(results: List[SearchResult]) -> List[Dict[str, Any]
 
 
 @asynccontextmanager
-async def _neo4j_session() -> AsyncIterator[AsyncDriver]:
-    yield _get_neo4j_driver()
+async def _neo4j_session(tenant_id: str = "") -> AsyncIterator[AsyncDriver]:
+    if tenant_id:
+        driver, _db = resolve_driver_for_tenant(None, tenant_id)
+        yield driver
+    else:
+        yield _get_neo4j_driver()
 
 
 def _build_acl_filter(

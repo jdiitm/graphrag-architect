@@ -105,6 +105,7 @@ class CallsEdge(BaseModel):
     source_service_id: str
     target_service_id: str
     protocol: str
+    tenant_id: str = Field(..., min_length=1)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     ingestion_id: str = ""
     last_seen_at: str = ""
@@ -119,6 +120,7 @@ class ProducesEdge(BaseModel):
     service_id: str
     topic_name: str
     event_schema: str
+    tenant_id: str = Field(..., min_length=1)
     ingestion_id: str = ""
     last_seen_at: str = ""
 
@@ -132,6 +134,7 @@ class ConsumesEdge(BaseModel):
     service_id: str
     topic_name: str
     consumer_group: str
+    tenant_id: str = Field(..., min_length=1)
     ingestion_id: str = ""
     last_seen_at: str = ""
 
@@ -144,6 +147,7 @@ class ConsumesEdge(BaseModel):
 class DeployedInEdge(BaseModel):
     service_id: str
     deployment_id: str
+    tenant_id: str = Field(..., min_length=1)
     ingestion_id: str = ""
     last_seen_at: str = ""
 

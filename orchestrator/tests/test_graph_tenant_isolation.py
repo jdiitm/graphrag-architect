@@ -34,17 +34,17 @@ def _read_file(path: str) -> str:
 
 class TestSchemaNotNullConstraints:
 
-    def test_tenant_id_not_null_constraint_exists_for_all_labels(self) -> None:
+    def test_tenant_id_node_key_constraint_exists_for_all_labels(self) -> None:
         schema = _read_file(_SCHEMA_PATH)
         for label in _NODE_LABELS:
             pattern = (
                 rf"CREATE\s+CONSTRAINT\s+\S+\s+IF\s+NOT\s+EXISTS\s+"
                 rf"FOR\s+\(\w+:{re.escape(label)}\)\s+"
-                rf"REQUIRE\s+\w+\.tenant_id\s+IS\s+NOT\s+NULL"
+                rf"REQUIRE\s+\(.*?tenant_id.*?\)\s+IS\s+NODE\s+KEY"
             )
             assert re.search(pattern, schema, re.IGNORECASE), (
-                f"Missing IS NOT NULL constraint for tenant_id on {label} "
-                f"in {_SCHEMA_PATH}"
+                f"Missing composite NODE KEY constraint with tenant_id on "
+                f"{label} in {_SCHEMA_PATH}"
             )
 
     def test_tenant_id_index_exists_for_all_labels(self) -> None:
@@ -62,20 +62,19 @@ class TestSchemaNotNullConstraints:
 
 class TestK8sConfigMapSync:
 
-    def test_configmap_contains_all_not_null_constraints(self) -> None:
+    def test_configmap_contains_composite_node_key_constraints(self) -> None:
         k8s_yaml = _read_file(_K8S_SCHEMA_JOB_PATH)
-        for label in _NODE_LABELS:
-            assert f"tenant_id IS NOT NULL" in k8s_yaml, (
-                f"K8s ConfigMap missing tenant_id IS NOT NULL for {label}"
-            )
+        assert "IS NODE KEY" in k8s_yaml, (
+            "K8s ConfigMap missing composite NODE KEY constraints"
+        )
 
     def test_configmap_constraint_count_matches_canonical(self) -> None:
         schema = _read_file(_SCHEMA_PATH)
         k8s_yaml = _read_file(_K8S_SCHEMA_JOB_PATH)
-        canonical_count = schema.lower().count("tenant_id is not null")
-        k8s_count = k8s_yaml.lower().count("tenant_id is not null")
+        canonical_count = schema.lower().count("is node key")
+        k8s_count = k8s_yaml.lower().count("is node key")
         assert k8s_count == canonical_count, (
-            f"Canonical schema has {canonical_count} tenant_id NOT NULL "
+            f"Canonical schema has {canonical_count} NODE KEY "
             f"constraints but K8s ConfigMap has {k8s_count}"
         )
 

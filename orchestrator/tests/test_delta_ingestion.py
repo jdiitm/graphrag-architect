@@ -116,6 +116,7 @@ class TestComputeHashes:
                 source_service_id="a",
                 target_service_id="b",
                 protocol="http",
+                tenant_id="test-tenant",
             ),
         ]
         result = compute_hashes(entities)

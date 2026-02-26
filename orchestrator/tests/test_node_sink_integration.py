@@ -37,6 +37,7 @@ def _make_edges(count: int) -> List[CallsEdge]:
             target_service_id=f"svc-{i + 1}",
             protocol="grpc",
             confidence=1.0,
+            tenant_id="test-tenant",
         )
         for i in range(count)
     ]

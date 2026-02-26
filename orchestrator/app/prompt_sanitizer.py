@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 from typing import List, Tuple
 
@@ -93,4 +94,5 @@ def sanitize_source_content(
     cleaned = _strip_xml_boundaries(cleaned)
     cleaned = _apply_secret_filters(cleaned)
     cleaned = _apply_injection_filters(cleaned)
+    cleaned = html.escape(cleaned, quote=False)
     return cleaned

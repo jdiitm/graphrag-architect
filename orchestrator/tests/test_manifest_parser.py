@@ -424,6 +424,7 @@ class TestDagNodeIntegration:
         )
         edge = CallsEdge(
             source_service_id="svc-a", target_service_id="svc-b", protocol="grpc",
+            tenant_id="test-tenant",
         )
         state = {
             "directory_path": "",

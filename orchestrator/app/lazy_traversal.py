@@ -52,17 +52,23 @@ def _ppr_iterate(
     return scores
 
 
+_DEFAULT_MAX_EDGES = 2000
+
+
 def personalized_pagerank(
     edges: List[Dict[str, Any]],
     seed_nodes: List[str],
     iterations: int = 20,
     damping: float = 0.85,
     top_n: int = 50,
+    max_edges: int = _DEFAULT_MAX_EDGES,
 ) -> List[Tuple[str, float]]:
     if not edges:
         return []
 
-    adjacency, nodes = _build_undirected_adjacency(edges)
+    bounded_edges = edges[:max_edges] if len(edges) > max_edges else edges
+
+    adjacency, nodes = _build_undirected_adjacency(bounded_edges)
     if not nodes:
         return []
 

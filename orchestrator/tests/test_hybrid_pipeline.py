@@ -17,6 +17,7 @@ class TestConfidenceField:
             source_service_id="auth",
             target_service_id="orders",
             protocol="http",
+            tenant_id="test-tenant",
         )
         assert edge.confidence == 1.0
 
@@ -26,6 +27,7 @@ class TestConfidenceField:
             target_service_id="orders",
             protocol="http",
             confidence=0.7,
+            tenant_id="test-tenant",
         )
         assert edge.confidence == 0.7
 
@@ -62,14 +64,14 @@ class TestConfidenceBounds:
         with pytest.raises(ValidationError):
             CallsEdge(
                 source_service_id="auth", target_service_id="orders",
-                protocol="http", confidence=2.0,
+                protocol="http", confidence=2.0, tenant_id="test-tenant",
             )
 
     def test_calls_edge_rejects_negative_confidence(self):
         with pytest.raises(ValidationError):
             CallsEdge(
                 source_service_id="auth", target_service_id="orders",
-                protocol="http", confidence=-0.5,
+                protocol="http", confidence=-0.5, tenant_id="test-tenant",
             )
 
 
@@ -91,7 +93,7 @@ class TestCypherIncludesConfidence:
 
         edge = CallsEdge(
             source_service_id="auth", target_service_id="orders",
-            protocol="http", confidence=0.7,
+            protocol="http", confidence=0.7, tenant_id="test-tenant",
         )
         query, params = _calls_cypher(edge)
         assert "confidence" in query
@@ -197,7 +199,7 @@ class TestFixExtractionErrorsPreservesAST:
         )
         ast_edge = CallsEdge(
             source_service_id="auth", target_service_id="orders",
-            protocol="http", confidence=1.0,
+            protocol="http", confidence=1.0, tenant_id="test-tenant",
         )
         llm_service = ServiceNode(
             id="payments", name="payments", language="python",
@@ -334,7 +336,7 @@ class TestEdgeDeduplication:
 
         ast_edge = CallsEdge(
             source_service_id="auth", target_service_id="orders",
-            protocol="http", confidence=1.0,
+            protocol="http", confidence=1.0, tenant_id="test-tenant",
         )
         state = {
             "directory_path": "",
@@ -347,7 +349,7 @@ class TestEdgeDeduplication:
 
         llm_edge = CallsEdge(
             source_service_id="auth", target_service_id="orders",
-            protocol="http", confidence=0.7,
+            protocol="http", confidence=0.7, tenant_id="test-tenant",
         )
         mock_result = ServiceExtractionResult(services=[], calls=[llm_edge])
         mock_extractor = AsyncMock()
@@ -372,7 +374,7 @@ class TestEdgeDeduplication:
 
         ast_edge = CallsEdge(
             source_service_id="auth", target_service_id="orders",
-            protocol="http", confidence=1.0,
+            protocol="http", confidence=1.0, tenant_id="test-tenant",
         )
         state = {
             "directory_path": "",
@@ -385,7 +387,7 @@ class TestEdgeDeduplication:
 
         llm_edge = CallsEdge(
             source_service_id="auth", target_service_id="payments",
-            protocol="grpc", confidence=0.7,
+            protocol="grpc", confidence=0.7, tenant_id="test-tenant",
         )
         mock_result = ServiceExtractionResult(services=[], calls=[llm_edge])
         mock_extractor = AsyncMock()

@@ -43,11 +43,11 @@ class TestEntitySortForDeadlockPrevention:
         entities: List[Any] = [
             CallsEdge(
                 source_service_id="svc-b", target_service_id="svc-c",
-                protocol="grpc",
+                protocol="grpc", tenant_id="test-tenant",
             ),
             CallsEdge(
                 source_service_id="svc-a", target_service_id="svc-b",
-                protocol="http",
+                protocol="http", tenant_id="test-tenant",
             ),
         ]
         sorted_entities = _sort_entities_for_write(entities)

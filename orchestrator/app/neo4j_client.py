@@ -45,10 +45,9 @@ _EDGE_TYPES = (CallsEdge, ProducesEdge, ConsumesEdge, DeployedInEdge)
 
 def _service_cypher(entity: ServiceNode) -> CypherOp:
     query = (
-        "MERGE (n:Service {id: $id}) "
+        "MERGE (n:Service {id: $id, tenant_id: $tenant_id}) "
         "SET n.name = $name, n.language = $language, "
         "n.framework = $framework, n.opentelemetry_enabled = $opentelemetry_enabled, "
-        "n.tenant_id = $tenant_id, "
         "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl, "
         "n.confidence = $confidence"
     )
@@ -57,9 +56,8 @@ def _service_cypher(entity: ServiceNode) -> CypherOp:
 
 def _database_cypher(entity: DatabaseNode) -> CypherOp:
     query = (
-        "MERGE (n:Database {id: $id}) "
+        "MERGE (n:Database {id: $id, tenant_id: $tenant_id}) "
         "SET n.type = $type, "
-        "n.tenant_id = $tenant_id, "
         "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
     )
     return query, entity.model_dump()
@@ -67,9 +65,8 @@ def _database_cypher(entity: DatabaseNode) -> CypherOp:
 
 def _kafka_topic_cypher(entity: KafkaTopicNode) -> CypherOp:
     query = (
-        "MERGE (n:KafkaTopic {name: $name}) "
+        "MERGE (n:KafkaTopic {name: $name, tenant_id: $tenant_id}) "
         "SET n.partitions = $partitions, n.retention_ms = $retention_ms, "
-        "n.tenant_id = $tenant_id, "
         "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
     )
     return query, entity.model_dump()
@@ -77,9 +74,8 @@ def _kafka_topic_cypher(entity: KafkaTopicNode) -> CypherOp:
 
 def _k8s_deployment_cypher(entity: K8sDeploymentNode) -> CypherOp:
     query = (
-        "MERGE (n:K8sDeployment {id: $id}) "
+        "MERGE (n:K8sDeployment {id: $id, tenant_id: $tenant_id}) "
         "SET n.namespace = $namespace, n.replicas = $replicas, "
-        "n.tenant_id = $tenant_id, "
         "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
     )
     return query, entity.model_dump()
@@ -87,8 +83,8 @@ def _k8s_deployment_cypher(entity: K8sDeploymentNode) -> CypherOp:
 
 def _calls_cypher(entity: CallsEdge) -> CypherOp:
     query = (
-        "MATCH (a:Service {id: $source_service_id}), "
-        "(b:Service {id: $target_service_id}) "
+        "MATCH (a:Service {id: $source_service_id, tenant_id: $tenant_id}), "
+        "(b:Service {id: $target_service_id, tenant_id: $tenant_id}) "
         "MERGE (a)-[r:CALLS]->(b) SET r.protocol = $protocol, "
         "r.confidence = $confidence, "
         "r.ingestion_id = $ingestion_id, "
@@ -99,8 +95,8 @@ def _calls_cypher(entity: CallsEdge) -> CypherOp:
 
 def _produces_cypher(entity: ProducesEdge) -> CypherOp:
     query = (
-        "MATCH (s:Service {id: $service_id}), "
-        "(t:KafkaTopic {name: $topic_name}) "
+        "MATCH (s:Service {id: $service_id, tenant_id: $tenant_id}), "
+        "(t:KafkaTopic {name: $topic_name, tenant_id: $tenant_id}) "
         "MERGE (s)-[r:PRODUCES]->(t) SET r.event_schema = $event_schema, "
         "r.ingestion_id = $ingestion_id, "
         "r.last_seen_at = $last_seen_at"
@@ -110,8 +106,8 @@ def _produces_cypher(entity: ProducesEdge) -> CypherOp:
 
 def _consumes_cypher(entity: ConsumesEdge) -> CypherOp:
     query = (
-        "MATCH (s:Service {id: $service_id}), "
-        "(t:KafkaTopic {name: $topic_name}) "
+        "MATCH (s:Service {id: $service_id, tenant_id: $tenant_id}), "
+        "(t:KafkaTopic {name: $topic_name, tenant_id: $tenant_id}) "
         "MERGE (s)-[r:CONSUMES]->(t) SET r.consumer_group = $consumer_group, "
         "r.ingestion_id = $ingestion_id, "
         "r.last_seen_at = $last_seen_at"
@@ -121,8 +117,8 @@ def _consumes_cypher(entity: ConsumesEdge) -> CypherOp:
 
 def _deployed_in_cypher(entity: DeployedInEdge) -> CypherOp:
     query = (
-        "MATCH (s:Service {id: $service_id}), "
-        "(k:K8sDeployment {id: $deployment_id}) "
+        "MATCH (s:Service {id: $service_id, tenant_id: $tenant_id}), "
+        "(k:K8sDeployment {id: $deployment_id, tenant_id: $tenant_id}) "
         "MERGE (s)-[r:DEPLOYED_IN]->(k) "
         "SET r.ingestion_id = $ingestion_id, "
         "r.last_seen_at = $last_seen_at"
@@ -206,45 +202,41 @@ def _group_by_type(
 _UNWIND_QUERIES: Dict[type, str] = {
     ServiceNode: (
         "UNWIND $batch AS row "
-        "MERGE (n:Service {id: row.id}) "
+        "MERGE (n:Service {id: row.id, tenant_id: row.tenant_id}) "
         "SET n.name = row.name, n.language = row.language, "
         "n.framework = row.framework, "
         "n.opentelemetry_enabled = row.opentelemetry_enabled, "
-        "n.tenant_id = row.tenant_id, "
         "n.team_owner = row.team_owner, "
         "n.namespace_acl = row.namespace_acl, "
         "n.confidence = row.confidence"
     ),
     DatabaseNode: (
         "UNWIND $batch AS row "
-        "MERGE (n:Database {id: row.id}) "
+        "MERGE (n:Database {id: row.id, tenant_id: row.tenant_id}) "
         "SET n.type = row.type, "
-        "n.tenant_id = row.tenant_id, "
         "n.team_owner = row.team_owner, "
         "n.namespace_acl = row.namespace_acl"
     ),
     KafkaTopicNode: (
         "UNWIND $batch AS row "
-        "MERGE (n:KafkaTopic {name: row.name}) "
+        "MERGE (n:KafkaTopic {name: row.name, tenant_id: row.tenant_id}) "
         "SET n.partitions = row.partitions, "
         "n.retention_ms = row.retention_ms, "
-        "n.tenant_id = row.tenant_id, "
         "n.team_owner = row.team_owner, "
         "n.namespace_acl = row.namespace_acl"
     ),
     K8sDeploymentNode: (
         "UNWIND $batch AS row "
-        "MERGE (n:K8sDeployment {id: row.id}) "
+        "MERGE (n:K8sDeployment {id: row.id, tenant_id: row.tenant_id}) "
         "SET n.namespace = row.namespace, "
         "n.replicas = row.replicas, "
-        "n.tenant_id = row.tenant_id, "
         "n.team_owner = row.team_owner, "
         "n.namespace_acl = row.namespace_acl"
     ),
     CallsEdge: (
         "UNWIND $batch AS row "
-        "MATCH (a:Service {id: row.source_service_id}), "
-        "(b:Service {id: row.target_service_id}) "
+        "MATCH (a:Service {id: row.source_service_id, tenant_id: row.tenant_id}), "
+        "(b:Service {id: row.target_service_id, tenant_id: row.tenant_id}) "
         "MERGE (a)-[r:CALLS]->(b) "
         "SET r.protocol = row.protocol, "
         "r.confidence = row.confidence, "
@@ -253,8 +245,8 @@ _UNWIND_QUERIES: Dict[type, str] = {
     ),
     ProducesEdge: (
         "UNWIND $batch AS row "
-        "MATCH (s:Service {id: row.service_id}), "
-        "(t:KafkaTopic {name: row.topic_name}) "
+        "MATCH (s:Service {id: row.service_id, tenant_id: row.tenant_id}), "
+        "(t:KafkaTopic {name: row.topic_name, tenant_id: row.tenant_id}) "
         "MERGE (s)-[r:PRODUCES]->(t) "
         "SET r.event_schema = row.event_schema, "
         "r.ingestion_id = row.ingestion_id, "
@@ -262,8 +254,8 @@ _UNWIND_QUERIES: Dict[type, str] = {
     ),
     ConsumesEdge: (
         "UNWIND $batch AS row "
-        "MATCH (s:Service {id: row.service_id}), "
-        "(t:KafkaTopic {name: row.topic_name}) "
+        "MATCH (s:Service {id: row.service_id, tenant_id: row.tenant_id}), "
+        "(t:KafkaTopic {name: row.topic_name, tenant_id: row.tenant_id}) "
         "MERGE (s)-[r:CONSUMES]->(t) "
         "SET r.consumer_group = row.consumer_group, "
         "r.ingestion_id = row.ingestion_id, "
@@ -271,8 +263,8 @@ _UNWIND_QUERIES: Dict[type, str] = {
     ),
     DeployedInEdge: (
         "UNWIND $batch AS row "
-        "MATCH (s:Service {id: row.service_id}), "
-        "(k:K8sDeployment {id: row.deployment_id}) "
+        "MATCH (s:Service {id: row.service_id, tenant_id: row.tenant_id}), "
+        "(k:K8sDeployment {id: row.deployment_id, tenant_id: row.tenant_id}) "
         "MERGE (s)-[r:DEPLOYED_IN]->(k) "
         "SET r.ingestion_id = row.ingestion_id, "
         "r.last_seen_at = row.last_seen_at"

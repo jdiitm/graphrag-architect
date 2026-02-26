@@ -91,6 +91,7 @@ class TestIngestionDAGFlow:
                 source_service_id="svc-1",
                 target_service_id="svc-2",
                 protocol="grpc",
+                tenant_id="test-tenant",
             ),
         ]
 
@@ -177,6 +178,7 @@ class TestHTTPThroughDAGIntegration:
                 source_service_id="svc-1",
                 target_service_id="svc-2",
                 protocol="grpc",
+                tenant_id="test-tenant",
             ),
         ]
 

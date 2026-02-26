@@ -52,7 +52,7 @@ class VectorStore(Protocol):
     ) -> List[SearchResult]:
         ...
 
-    async def delete(self, collection: str, ids: List[str]) -> int:
+    async def delete(self, collection: str, ids: List[str], tenant_id: str = "") -> int:
         ...
 
 
@@ -88,14 +88,18 @@ class InMemoryVectorStore:
             for r, s in scored[:limit]
         ]
 
-    async def delete(self, collection: str, ids: List[str]) -> int:
+    async def delete(self, collection: str, ids: List[str], tenant_id: str = "") -> int:
         if collection not in self._store:
             return 0
         removed = 0
         for record_id in ids:
-            if record_id in self._store[collection]:
-                del self._store[collection][record_id]
-                removed += 1
+            record = self._store[collection].get(record_id)
+            if record is None:
+                continue
+            if tenant_id and record.metadata.get("tenant_id") != tenant_id:
+                continue
+            del self._store[collection][record_id]
+            removed += 1
         return removed
 
     async def search_with_tenant(
@@ -181,16 +185,26 @@ class Neo4jVectorStore:
             for r in records
         ]
 
-    async def delete(self, collection: str, ids: List[str]) -> int:
+    async def delete(self, collection: str, ids: List[str], tenant_id: str = "") -> int:
         async def _tx(tx: Any) -> int:
-            result = await tx.run(
-                "MATCH (n) WHERE n.id IN $ids "
-                "REMOVE n.embedding "
-                "SET n.embedding_removed = true, "
-                "n.embedding_removed_at = datetime() "
-                "RETURN count(n) AS removed",
-                ids=ids,
-            )
+            if tenant_id:
+                cypher = (
+                    "MATCH (n) WHERE n.id IN $ids AND n.tenant_id = $tenant_id "
+                    "REMOVE n.embedding "
+                    "SET n.embedding_removed = true, "
+                    "n.embedding_removed_at = datetime() "
+                    "RETURN count(n) AS removed"
+                )
+                result = await tx.run(cypher, ids=ids, tenant_id=tenant_id)
+            else:
+                cypher = (
+                    "MATCH (n) WHERE n.id IN $ids "
+                    "REMOVE n.embedding "
+                    "SET n.embedding_removed = true, "
+                    "n.embedding_removed_at = datetime() "
+                    "RETURN count(n) AS removed"
+                )
+                result = await tx.run(cypher, ids=ids)
             data = await result.data()
             return data[0]["removed"] if data else 0
 
@@ -275,9 +289,20 @@ class QdrantVectorStore:
             for hit in results
         ]
 
-    async def delete(self, collection: str, ids: List[str]) -> int:
+    async def delete(self, collection: str, ids: List[str], tenant_id: str = "") -> int:
         client = self._get_client()
         from qdrant_client.models import PointIdsList
+        if tenant_id:
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+            await client.delete(
+                collection_name=collection,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
+                    ],
+                ),
+            )
+            return len(ids)
         await client.delete(
             collection_name=collection,
             points_selector=PointIdsList(points=ids),
@@ -440,10 +465,23 @@ class PooledQdrantVectorStore:
         finally:
             await self._pool.release(client)
 
-    async def delete(self, collection: str, ids: List[str]) -> int:
+    async def delete(self, collection: str, ids: List[str], tenant_id: str = "") -> int:
         client = await self._pool.acquire()
         try:
             from qdrant_client.models import PointIdsList
+            if tenant_id:
+                from qdrant_client.models import FieldCondition, Filter, MatchValue
+                await client.delete(
+                    collection_name=collection,
+                    points_selector=Filter(
+                        must=[
+                            FieldCondition(
+                                key="tenant_id", match=MatchValue(value=tenant_id),
+                            ),
+                        ],
+                    ),
+                )
+                return len(ids)
             await client.delete(
                 collection_name=collection,
                 points_selector=PointIdsList(points=ids),

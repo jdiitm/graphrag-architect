@@ -174,6 +174,7 @@ class TestCallsEdgeValidation:
             source_service_id="auth-service",
             target_service_id="order-service",
             protocol="grpc",
+            tenant_id="test-tenant",
         )
         assert edge.source_service_id == "auth-service"
 
@@ -182,6 +183,7 @@ class TestCallsEdgeValidation:
             source_service_id="::services::gateway",
             target_service_id="http://auth-svc/verify",
             protocol="http",
+            tenant_id="test-tenant",
         )
         assert edge.source_service_id == "::services::gateway"
 
@@ -191,6 +193,7 @@ class TestCallsEdgeValidation:
                 source_service_id="auth'; DROP",
                 target_service_id="order-service",
                 protocol="grpc",
+                tenant_id="test-tenant",
             )
 
     def test_rejects_curly_brace_injection(self) -> None:
@@ -199,6 +202,7 @@ class TestCallsEdgeValidation:
                 source_service_id="auth-service",
                 target_service_id="order{evil}",
                 protocol="grpc",
+                tenant_id="test-tenant",
             )
 
     def test_rejects_semicolon_injection(self) -> None:
@@ -207,6 +211,7 @@ class TestCallsEdgeValidation:
                 source_service_id="auth;DROP",
                 target_service_id="order-service",
                 protocol="grpc",
+                tenant_id="test-tenant",
             )
 
     def test_rejects_empty_source(self) -> None:
@@ -215,6 +220,7 @@ class TestCallsEdgeValidation:
                 source_service_id="",
                 target_service_id="order-service",
                 protocol="grpc",
+                tenant_id="test-tenant",
             )
 
 
@@ -225,6 +231,7 @@ class TestProducesEdgeValidation:
             service_id="order-service",
             topic_name="order-events",
             event_schema="OrderCreated",
+            tenant_id="test-tenant",
         )
         assert edge.topic_name == "order-events"
 
@@ -234,6 +241,7 @@ class TestProducesEdgeValidation:
                 service_id="svc; DROP",
                 topic_name="order-events",
                 event_schema="OrderCreated",
+                tenant_id="test-tenant",
             )
 
     def test_rejects_single_quote_in_topic(self) -> None:
@@ -242,6 +250,7 @@ class TestProducesEdgeValidation:
                 service_id="order-service",
                 topic_name="topic'injection",
                 event_schema="OrderCreated",
+                tenant_id="test-tenant",
             )
 
 
@@ -252,6 +261,7 @@ class TestConsumesEdgeValidation:
             service_id="payment-service",
             topic_name="order-events",
             consumer_group="payment-cg",
+            tenant_id="test-tenant",
         )
         assert edge.consumer_group == "payment-cg"
 
@@ -261,6 +271,7 @@ class TestConsumesEdgeValidation:
                 service_id="payment-service",
                 topic_name="order-events",
                 consumer_group="cg{bad}",
+                tenant_id="test-tenant",
             )
 
 
@@ -270,6 +281,7 @@ class TestDeployedInEdgeValidation:
         edge = DeployedInEdge(
             service_id="auth-service",
             deployment_id="auth-deploy-v2",
+            tenant_id="test-tenant",
         )
         assert edge.deployment_id == "auth-deploy-v2"
 
@@ -278,6 +290,7 @@ class TestDeployedInEdgeValidation:
             DeployedInEdge(
                 service_id="auth-service",
                 deployment_id="deploy'; DROP",
+                tenant_id="test-tenant",
             )
 
     def test_rejects_backslash_in_service_id(self) -> None:
@@ -285,6 +298,7 @@ class TestDeployedInEdgeValidation:
             DeployedInEdge(
                 service_id="svc\\escape",
                 deployment_id="auth-deploy-v2",
+                tenant_id="test-tenant",
             )
 
     def test_rejects_null_byte(self) -> None:
@@ -292,6 +306,7 @@ class TestDeployedInEdgeValidation:
             DeployedInEdge(
                 service_id="svc\x00injected",
                 deployment_id="auth-deploy-v2",
+                tenant_id="test-tenant",
             )
 
 

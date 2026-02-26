@@ -220,6 +220,7 @@ async def parse_source_ast(state: IngestionState) -> dict:
                 target_service_id=ast_call.target_hint,
                 protocol=ast_call.protocol,
                 confidence=1.0,
+                tenant_id=tenant_id,
             ))
         INGESTION_DURATION.record(
             (time.monotonic() - start) * 1000, {"node": "parse_source_ast"}
