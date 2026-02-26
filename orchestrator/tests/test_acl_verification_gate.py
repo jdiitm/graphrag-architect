@@ -60,7 +60,7 @@ class TestACLVerificationGateComplexQueries:
 
 
 class TestACLCoverageErrorRaised:
-    def test_inject_raises_on_coverage_failure(self):
+    def test_inject_passes_when_all_scopes_covered(self):
         principal = SecurityPrincipal(
             team="platform", namespace="production", role="viewer",
         )
@@ -68,6 +68,34 @@ class TestACLCoverageErrorRaised:
         cypher = "MATCH (n:Service) RETURN n"
         injected, params = filt.inject_into_cypher(cypher)
         assert "n.team_owner" in injected
+
+    def test_inject_raises_acl_coverage_error_on_validation_failure(self):
+        from unittest.mock import patch
+        principal = SecurityPrincipal(
+            team="platform", namespace="production", role="viewer",
+        )
+        filt = CypherPermissionFilter(principal, verify_coverage=True)
+        cypher = "MATCH (n:Service) RETURN n"
+        with patch(
+            "orchestrator.app.access_control.validate_acl_coverage",
+            return_value=False,
+        ):
+            with pytest.raises(ACLCoverageError):
+                filt.inject_into_cypher(cypher)
+
+    def test_no_error_when_verify_coverage_disabled(self):
+        from unittest.mock import patch
+        principal = SecurityPrincipal(
+            team="platform", namespace="production", role="viewer",
+        )
+        filt = CypherPermissionFilter(principal, verify_coverage=False)
+        cypher = "MATCH (n:Service) RETURN n"
+        with patch(
+            "orchestrator.app.access_control.validate_acl_coverage",
+            return_value=False,
+        ):
+            injected, _ = filt.inject_into_cypher(cypher)
+            assert "n.team_owner" in injected
 
     def test_verify_coverage_flag_defaults_true(self):
         filt = CypherPermissionFilter(

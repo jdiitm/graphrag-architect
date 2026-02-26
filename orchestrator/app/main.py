@@ -333,6 +333,7 @@ async def _run_ingest_job(
     job_id: str, raw_files: List[Dict[str, str]],
 ) -> None:
     await _INGEST_JOB_STORE.mark_running(job_id)
+    await _INGEST_JOB_STORE.heartbeat(job_id)
     sem = get_ingestion_semaphore()
     await sem.acquire()
     try:
@@ -463,6 +464,7 @@ async def query(
 
 async def _run_query_job(job_id: str, initial_state: Dict[str, Any]) -> None:
     await _JOB_STORE.mark_running(job_id)
+    await _JOB_STORE.heartbeat(job_id)
     try:
         result = await query_graph.ainvoke(initial_state)
         response = _result_to_response(result)

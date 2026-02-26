@@ -73,3 +73,43 @@ class TestMainUsesConfigurableTTL:
         config = JobStoreConfig.from_env()
         store = QueryJobStore(ttl_seconds=config.ttl_seconds)
         assert store._ttl == 1800.0
+
+
+class TestHeartbeatWiredInProduction:
+    @pytest.mark.asyncio
+    async def test_run_query_job_calls_heartbeat(self):
+        from unittest.mock import AsyncMock, patch, MagicMock
+        store = QueryJobStore(ttl_seconds=3600.0)
+        job = await store.create()
+        mock_graph = AsyncMock(return_value={
+            "answer": "test", "sources": [],
+            "complexity": "entity_lookup", "retrieval_path": "vector",
+        })
+        with patch("orchestrator.app.main._JOB_STORE", store), \
+             patch("orchestrator.app.main.query_graph") as mg:
+            mg.ainvoke = mock_graph
+            store.heartbeat = AsyncMock()
+            from orchestrator.app.main import _run_query_job
+            await _run_query_job(job.job_id, {"query": "test"})
+            store.heartbeat.assert_called_with(job.job_id)
+
+    @pytest.mark.asyncio
+    async def test_run_ingest_job_calls_heartbeat(self):
+        from unittest.mock import AsyncMock, patch, MagicMock
+        store = IngestJobStore(ttl_seconds=3600.0)
+        job = await store.create()
+        mock_graph = AsyncMock(return_value={
+            "commit_status": "success", "extracted_nodes": [],
+            "extraction_errors": [],
+        })
+        mock_sem = AsyncMock()
+        mock_sem.acquire = AsyncMock()
+        mock_sem.release = MagicMock()
+        with patch("orchestrator.app.main._INGEST_JOB_STORE", store), \
+             patch("orchestrator.app.main.ingestion_graph") as mg, \
+             patch("orchestrator.app.main.get_ingestion_semaphore", return_value=mock_sem):
+            mg.ainvoke = mock_graph
+            store.heartbeat = AsyncMock()
+            from orchestrator.app.main import _run_ingest_job
+            await _run_ingest_job(job.job_id, [])
+            store.heartbeat.assert_called_with(job.job_id)
