@@ -5,7 +5,7 @@ import fnmatch
 import os
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 
 def _build_undirected_adjacency(
@@ -55,6 +55,69 @@ def _ppr_iterate(
 _DEFAULT_MAX_EDGES = 2000
 
 
+@runtime_checkable
+class PageRankStrategy(Protocol):
+    def rank(
+        self,
+        edges: List[Dict[str, Any]],
+        seed_nodes: List[str],
+        top_n: int = 50,
+    ) -> List[Tuple[str, float]]: ...
+
+
+class LocalPageRankStrategy:
+    def __init__(
+        self,
+        iterations: int = 20,
+        damping: float = 0.85,
+        max_edges: int = _DEFAULT_MAX_EDGES,
+    ) -> None:
+        self._iterations = iterations
+        self._damping = damping
+        self._max_edges = max_edges
+
+    def rank(
+        self,
+        edges: List[Dict[str, Any]],
+        seed_nodes: List[str],
+        top_n: int = 50,
+    ) -> List[Tuple[str, float]]:
+        if not edges:
+            return []
+
+        bounded = edges[:self._max_edges] if len(edges) > self._max_edges else edges
+        adjacency, nodes = _build_undirected_adjacency(bounded)
+        if not nodes:
+            return []
+
+        valid_seeds = [s for s in seed_nodes if s in nodes] or list(nodes)
+        seed_weight = 1.0 / len(valid_seeds)
+        personalization = {s: seed_weight for s in valid_seeds}
+
+        scores = _ppr_iterate(
+            nodes, adjacency, personalization,
+            self._iterations, self._damping,
+        )
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        return ranked[:top_n]
+
+
+class GDSPageRankStrategy:
+    def __init__(self, driver: Any = None) -> None:
+        self._driver = driver
+
+    def rank(
+        self,
+        edges: List[Dict[str, Any]],
+        seed_nodes: List[str],
+        top_n: int = 50,
+    ) -> List[Tuple[str, float]]:
+        return LocalPageRankStrategy().rank(edges, seed_nodes, top_n)
+
+
+_DEFAULT_STRATEGY = LocalPageRankStrategy()
+
+
 def personalized_pagerank(
     edges: List[Dict[str, Any]],
     seed_nodes: List[str],
@@ -62,7 +125,11 @@ def personalized_pagerank(
     damping: float = 0.85,
     top_n: int = 50,
     max_edges: int = _DEFAULT_MAX_EDGES,
+    strategy: Optional[PageRankStrategy] = None,
 ) -> List[Tuple[str, float]]:
+    if strategy is not None:
+        return strategy.rank(edges, seed_nodes, top_n)
+
     if not edges:
         return []
 

@@ -401,25 +401,34 @@ class GraphRepository:
         self,
         current_ingestion_id: str,
         max_age_hours: int = 24,
+        tenant_id: str = "",
     ) -> tuple[int, list[str]]:
-        return await self.tombstone_stale_edges(current_ingestion_id)
+        return await self.tombstone_stale_edges(
+            current_ingestion_id, tenant_id=tenant_id,
+        )
 
     _TOMBSTONE_NODE_LABELS = ("Service", "Database", "KafkaTopic", "K8sDeployment")
 
     async def tombstone_stale_edges(
         self,
         current_ingestion_id: str,
+        tenant_id: str = "",
     ) -> tuple[int, list[str]]:
         timestamp = datetime.now(timezone.utc).isoformat()
         total = 0
         affected_node_ids: list[str] = []
         async with self._write_session() as session:
             for label in self._TOMBSTONE_NODE_LABELS:
+                tenant_clause = (
+                    "AND n.tenant_id = $tenant_id "
+                    if tenant_id else ""
+                )
                 query = (
                     f"MATCH (n:{label})-[r]->() "
                     "WHERE r.ingestion_id IS NOT NULL "
                     "AND r.ingestion_id <> $current_id "
                     "AND r.tombstoned_at IS NULL "
+                    f"{tenant_clause}"
                     "SET r.tombstoned_at = $timestamp "
                     "RETURN count(r) AS tombstoned, "
                     "collect(DISTINCT n.id) AS node_ids"
@@ -427,6 +436,7 @@ class GraphRepository:
                 result = await session.execute_write(
                     self._run_tombstone_with_ids, query=query,
                     current_id=current_ingestion_id, timestamp=timestamp,
+                    tenant_id=tenant_id,
                 )
                 count, ids = result
                 total += count
@@ -439,10 +449,15 @@ class GraphRepository:
         query: str,
         current_id: str,
         timestamp: str,
+        tenant_id: str = "",
     ) -> tuple[int, list[str]]:
-        result = await tx.run(
-            query, current_id=current_id, timestamp=timestamp,
-        )
+        params: Dict[str, Any] = {
+            "current_id": current_id,
+            "timestamp": timestamp,
+        }
+        if tenant_id:
+            params["tenant_id"] = tenant_id
+        result = await tx.run(query, **params)
         record = await result.single()
         if record is None:
             return 0, []
