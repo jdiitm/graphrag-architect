@@ -88,7 +88,7 @@ class TestIngestBase64Decoding:
             "extraction_errors": [],
             "commit_status": "success",
         })
-        response = client.post("/ingest", json={
+        response = client.post("/ingest?sync=true", json={
             "documents": [{
                 "file_path": "main.go",
                 "content": encoded,
@@ -110,7 +110,7 @@ class TestIngestGraphInvocation:
         })
         go_content = _b64("package main")
         yaml_content = _b64("apiVersion: apps/v1\nkind: Deployment")
-        response = client.post("/ingest", json={
+        response = client.post("/ingest?sync=true", json={
             "documents": [
                 {"file_path": "svc/main.go", "content": go_content, "source_type": "source_code"},
                 {"file_path": "k8s/deploy.yaml", "content": yaml_content, "source_type": "k8s_manifest"},
@@ -134,7 +134,7 @@ class TestIngestGraphInvocation:
             "extraction_errors": [],
             "commit_status": "success",
         })
-        response = client.post("/ingest", json={
+        response = client.post("/ingest?sync=true", json={
             "documents": [
                 {"file_path": "app.py", "content": _b64("print('hi')"), "source_type": "source_code"},
             ],
@@ -152,7 +152,7 @@ class TestIngestGraphInvocation:
             "extraction_errors": ["Neo4j connection refused"],
             "commit_status": "failed",
         })
-        response = client.post("/ingest", json={
+        response = client.post("/ingest?sync=true", json={
             "documents": [
                 {"file_path": "app.py", "content": _b64("x=1"), "source_type": "source_code"},
             ],
@@ -165,7 +165,7 @@ class TestIngestGraphInvocation:
     @patch("orchestrator.app.main.ingestion_graph")
     def test_graph_exception_returns_500(self, mock_graph, client):
         mock_graph.ainvoke = AsyncMock(side_effect=RuntimeError("DAG crashed"))
-        response = client.post("/ingest", json={
+        response = client.post("/ingest?sync=true", json={
             "documents": [
                 {"file_path": "app.py", "content": _b64("x=1"), "source_type": "source_code"},
             ],
@@ -182,7 +182,7 @@ class TestIngestOptionalFields:
             "extraction_errors": [],
             "commit_status": "success",
         })
-        response = client.post("/ingest", json={
+        response = client.post("/ingest?sync=true", json={
             "documents": [{
                 "file_path": "main.go",
                 "content": _b64("package main"),
@@ -200,7 +200,7 @@ class TestIngestOptionalFields:
             "extraction_errors": [],
             "commit_status": "success",
         })
-        response = client.post("/ingest", json={
+        response = client.post("/ingest?sync=true", json={
             "documents": [{
                 "file_path": "main.go",
                 "content": _b64("package main"),
@@ -221,7 +221,7 @@ class TestIngestAuth:
         })
         token = sign_token({"team": "ops", "role": "admin"}, "test-secret")
         response = client.post(
-            "/ingest",
+            "/ingest?sync=true",
             json={
                 "documents": [{
                     "file_path": "main.go",
@@ -279,7 +279,7 @@ class TestIngestAuth:
         import os
         os.environ.pop("AUTH_TOKEN_SECRET", None)
         response = client.post(
-            "/ingest",
+            "/ingest?sync=true",
             json={
                 "documents": [{
                     "file_path": "main.go",
@@ -327,7 +327,7 @@ class TestAuthRequireTokensFailClosed:
         })
         token = sign_token({"team": "ops", "role": "admin"}, "prod-secret")
         response = client.post(
-            "/ingest",
+            "/ingest?sync=true",
             json={
                 "documents": [{
                     "file_path": "main.go",

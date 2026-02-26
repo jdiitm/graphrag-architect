@@ -22,7 +22,12 @@ from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.config import AuthConfig, KafkaConsumerConfig, RateLimitConfig
 from orchestrator.app.executor import shutdown_pool
 from orchestrator.app.graph_builder import ingestion_graph, run_streaming_pipeline
-from orchestrator.app.ingest_models import IngestRequest, IngestResponse
+from orchestrator.app.ingest_models import (
+    IngestJobResponse,
+    IngestRequest,
+    IngestResponse,
+    create_ingest_job_store,
+)
 from orchestrator.app.kafka_consumer import AsyncKafkaConsumer
 from orchestrator.app.checkpoint_store import close_checkpointer, init_checkpointer
 from orchestrator.app.neo4j_pool import close_driver, init_driver
@@ -40,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 _STATE: Dict[str, Any] = {"semaphore": None, "kafka_consumer": None, "kafka_task": None}
 _JOB_STORE = create_job_store(ttl_seconds=300.0)
+_INGEST_JOB_STORE = create_ingest_job_store(ttl_seconds=300.0)
 _TENANT_LIMITER = create_rate_limiter(
     capacity=int(os.environ.get("RATE_LIMIT_CAPACITY", "20")),
     refill_rate=float(os.environ.get("RATE_LIMIT_REFILL_RATE", "10.0")),
@@ -196,12 +202,27 @@ def _verify_ingest_auth(authorization: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
-@app.post("/ingest", response_model=IngestResponse)
+@app.post("/ingest")
 async def ingest(
     request: IngestRequest,
     authorization: Optional[str] = Header(default=None),
+    sync: bool = False,
 ) -> JSONResponse:
     _verify_ingest_auth(authorization)
+    raw_files = _decode_documents(request)
+
+    if sync:
+        return await _ingest_sync(raw_files)
+
+    job = await _INGEST_JOB_STORE.create()
+    asyncio.create_task(_run_ingest_job(job.job_id, raw_files))
+    return JSONResponse(
+        status_code=202,
+        content={"job_id": job.job_id, "status": job.status.value},
+    )
+
+
+async def _ingest_sync(raw_files: List[Dict[str, str]]) -> JSONResponse:
     sem = get_ingestion_semaphore()
     if sem.locked():
         raise HTTPException(
@@ -210,15 +231,17 @@ async def ingest(
         )
     await sem.acquire()
     try:
-        result = await _run_ingestion(request)
-        if isinstance(result, JSONResponse):
-            result.headers["Deprecation"] = "true"
-            return result
-        status_code = 200
-        body = result.model_dump()
-        response = JSONResponse(content=body, status_code=status_code)
-        response.headers["Deprecation"] = "true"
-        return response
+        result = await _invoke_ingestion_graph(raw_files)
+        response_model = _build_ingest_response(result)
+        if result.get("commit_status") == "failed":
+            return JSONResponse(
+                status_code=503,
+                content=response_model.model_dump(),
+            )
+        body = response_model.model_dump()
+        resp = JSONResponse(content=body, status_code=200)
+        resp.headers["Deprecation"] = "true"
+        return resp
     except CircuitOpenError:
         return JSONResponse(
             status_code=503,
@@ -246,9 +269,10 @@ async def _run_streaming_ingestion(directory_path: str) -> IngestResponse:
     )
 
 
-async def _run_ingestion(request: IngestRequest) -> IngestResponse:
-    raw_files = _decode_documents(request)
-    initial_state: Dict[str, Any] = {
+def _build_ingestion_initial_state(
+    raw_files: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    return {
         "directory_path": "",
         "raw_files": raw_files,
         "extracted_nodes": [],
@@ -257,23 +281,57 @@ async def _run_ingestion(request: IngestRequest) -> IngestResponse:
         "commit_status": "",
         "tenant_id": "default",
     }
+
+
+async def _invoke_ingestion_graph(
+    raw_files: List[Dict[str, str]],
+) -> Dict[str, Any]:
     try:
-        result = await ingestion_graph.ainvoke(initial_state)
+        return await ingestion_graph.ainvoke(
+            _build_ingestion_initial_state(raw_files)
+        )
+    except CircuitOpenError:
+        raise
     except Exception as exc:
         logger.exception("Ingestion graph failed")
         raise HTTPException(
             status_code=500, detail="Internal ingestion error"
         ) from exc
-    response = IngestResponse(
+
+
+def _build_ingest_response(result: Dict[str, Any]) -> IngestResponse:
+    return IngestResponse(
         status=result.get("commit_status", "unknown"),
         entities_extracted=len(result.get("extracted_nodes", [])),
         errors=result.get("extraction_errors", []),
     )
-    if result.get("commit_status") == "failed":
-        return JSONResponse(
-            status_code=503, content=response.model_dump()
+
+
+async def _run_ingest_job(
+    job_id: str, raw_files: List[Dict[str, str]],
+) -> None:
+    await _INGEST_JOB_STORE.mark_running(job_id)
+    sem = get_ingestion_semaphore()
+    await sem.acquire()
+    try:
+        result = await ingestion_graph.ainvoke(
+            _build_ingestion_initial_state(raw_files)
         )
-    return response
+        response = _build_ingest_response(result)
+        await _INGEST_JOB_STORE.complete(job_id, response)
+    except Exception as exc:
+        logger.exception("Background ingest job %s failed", job_id)
+        await _INGEST_JOB_STORE.fail(job_id, str(exc))
+    finally:
+        sem.release()
+
+
+@app.get("/ingest/{job_id}", response_model=IngestJobResponse)
+async def get_ingest_job(job_id: str) -> JSONResponse:
+    job = await _INGEST_JOB_STORE.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JSONResponse(content=job.model_dump(), status_code=200)
 
 
 def _resolve_tenant_context(authorization: Optional[str]) -> TenantContext:

@@ -24,11 +24,14 @@ class TestIngestCircuitBreakerReturns503:
         client = TestClient(app)
 
         with patch(
-            "orchestrator.app.main._run_ingestion",
-            new_callable=AsyncMock,
-            side_effect=CircuitOpenError("circuit is open; retry after 30s"),
-        ):
-            response = client.post("/ingest", json=_VALID_INGEST_BODY)
+            "orchestrator.app.main.ingestion_graph",
+        ) as mock_graph:
+            mock_graph.ainvoke = AsyncMock(
+                side_effect=CircuitOpenError("circuit is open; retry after 30s"),
+            )
+            response = client.post(
+                "/ingest?sync=true", json=_VALID_INGEST_BODY,
+            )
 
         assert response.status_code == 503
         assert "Retry-After" in response.headers
@@ -47,6 +50,8 @@ class TestIngestCircuitBreakerReturns503:
             "orchestrator.app.main.get_ingestion_semaphore",
             return_value=locked_sem,
         ):
-            response = client.post("/ingest", json=_VALID_INGEST_BODY)
+            response = client.post(
+                "/ingest?sync=true", json=_VALID_INGEST_BODY,
+            )
 
         assert response.status_code == 429
