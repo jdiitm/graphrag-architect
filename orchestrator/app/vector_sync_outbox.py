@@ -9,6 +9,8 @@ from typing import Any, List, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, field_validator
 
+from orchestrator.app.vector_store import VectorRecord
+
 logger = logging.getLogger(__name__)
 
 
@@ -145,7 +147,10 @@ class RedisOutboxStore:
                 collection=data["collection"],
                 operation=data.get("operation", "delete"),
                 pruned_ids=json.loads(data["pruned_ids"]),
-                vectors=json.loads(data.get("vectors", "[]")),
+                vectors=[
+                    VectorRecord(**v)
+                    for v in json.loads(data.get("vectors", "[]"))
+                ],
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", "0")),
             ))
