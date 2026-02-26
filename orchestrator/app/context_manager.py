@@ -113,6 +113,45 @@ def _path_token_cost(path: List[Dict[str, Any]]) -> int:
 
 _PAGERANK_ITERATIONS = 10
 _PAGERANK_DAMPING = 0.85
+_BRIDGE_SCORE_MULTIPLIER = 1.5
+
+
+def _identify_bridge_nodes(
+    adjacency: Dict[str, List[str]],
+) -> Set[str]:
+    if not adjacency:
+        return set()
+
+    disc: Dict[str, int] = {}
+    low: Dict[str, int] = {}
+    parent: Dict[str, str] = {}
+    bridges: Set[str] = set()
+    timer = [0]
+
+    def _dfs(u: str) -> None:
+        disc[u] = low[u] = timer[0]
+        timer[0] += 1
+        child_count = 0
+
+        for v in adjacency.get(u, []):
+            if v not in disc:
+                child_count += 1
+                parent[v] = u
+                _dfs(v)
+                low[u] = min(low[u], low[v])
+                if parent.get(u) is None and child_count > 1:
+                    bridges.add(u)
+                if parent.get(u) is not None and low[v] >= disc[u]:
+                    bridges.add(u)
+            elif v != parent.get(u):
+                low[u] = min(low[u], disc[v])
+
+    for node in adjacency:
+        if node not in disc:
+            parent[node] = None  # type: ignore[assignment]
+            _dfs(node)
+
+    return bridges
 
 
 def _pagerank_scores(
@@ -155,20 +194,33 @@ def _build_component_adjacency(
     return {k: list(v) for k, v in adj.items()}
 
 
+def _score_candidates_with_bridge_boost(
+    component: List[Dict[str, Any]],
+    adjacency: Dict[str, List[str]],
+) -> List[Tuple[float, Dict[str, Any]]]:
+    pr_scores = _pagerank_scores(adjacency)
+    bridge_nodes = _identify_bridge_nodes(adjacency)
+    max_pr = max(pr_scores.values()) if pr_scores else 1.0
+    bridge_boost = max_pr * _BRIDGE_SCORE_MULTIPLIER
+
+    scored: List[Tuple[float, Dict[str, Any]]] = []
+    for candidate in component:
+        ids = _candidate_node_ids(candidate)
+        score = max((pr_scores.get(nid, 0.0) for nid in ids), default=0.0)
+        if any(nid in bridge_nodes for nid in ids):
+            score = max(score, bridge_boost)
+        scored.append((score, candidate))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored
+
+
 def _truncate_component_by_pagerank(
     component: List[Dict[str, Any]],
     token_budget: int,
     max_results: int,
 ) -> List[Dict[str, Any]]:
     adjacency = _build_component_adjacency(component)
-    pr_scores = _pagerank_scores(adjacency)
-
-    scored_candidates = []
-    for c in component:
-        ids = _candidate_node_ids(c)
-        c_score = max((pr_scores.get(nid, 0.0) for nid in ids), default=0.0)
-        scored_candidates.append((c_score, c))
-    scored_candidates.sort(key=lambda x: x[0], reverse=True)
+    scored_candidates = _score_candidates_with_bridge_boost(component, adjacency)
 
     result: List[Dict[str, Any]] = []
     included_nodes: Set[str] = set()
@@ -225,6 +277,31 @@ def _count_cross_community_edges(
     return count
 
 
+def _collect_bridge_edges_for_community(
+    component: List[Dict[str, Any]],
+    community_members: Set[str],
+    node_to_community: Dict[str, str],
+) -> List[Dict[str, str]]:
+    bridge_edges: List[Dict[str, str]] = []
+    for candidate in component:
+        ids = _candidate_node_ids(candidate)
+        if len(ids) != 2:
+            continue
+        src_in = ids[0] in community_members
+        tgt_in = ids[1] in community_members
+        if src_in and not tgt_in:
+            bridge_edges.append({
+                "node": ids[0],
+                "connects_to": node_to_community.get(ids[1], "unknown"),
+            })
+        elif tgt_in and not src_in:
+            bridge_edges.append({
+                "node": ids[1],
+                "connects_to": node_to_community.get(ids[0], "unknown"),
+            })
+    return bridge_edges
+
+
 def compress_component_to_summaries(
     component: List[Dict[str, Any]],
     budget: TokenBudget,
@@ -254,6 +331,10 @@ def compress_component_to_summaries(
     total_tokens = 0
 
     for community in partition_result.communities:
+        bridge_edges = _collect_bridge_edges_for_community(
+            component, community.members,
+            partition_result.node_to_community,
+        )
         summary: Dict[str, Any] = {
             "community_id": community.community_id,
             "member_count": len(community.members),
@@ -265,13 +346,19 @@ def compress_component_to_summaries(
                 default=0.0,
             ),
         }
-        cost = estimate_tokens(_serialize_candidate(summary))
-        if total_tokens + cost > budget.max_context_tokens:
+        base_cost = estimate_tokens(_serialize_candidate(summary))
+        if total_tokens + base_cost > budget.max_context_tokens:
             break
+        if bridge_edges:
+            enriched = {**summary, "bridge_edges": bridge_edges}
+            enriched_cost = estimate_tokens(_serialize_candidate(enriched))
+            if total_tokens + enriched_cost <= budget.max_context_tokens:
+                summary = enriched
+                base_cost = enriched_cost
         if len(summaries) >= budget.max_results:
             break
         summaries.append(summary)
-        total_tokens += cost
+        total_tokens += base_cost
 
     return summaries
 
