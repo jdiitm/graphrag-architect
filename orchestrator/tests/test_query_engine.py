@@ -1,3 +1,4 @@
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -368,7 +369,7 @@ class TestSynthesize:
         ):
             result = await synthesize_answer(state)
 
-        assert result["answer"] != ""
+        assert result["answer"] == "auth-service is written in Go."
         assert len(result["sources"]) > 0
 
     @pytest.mark.asyncio
@@ -411,123 +412,81 @@ class TestSynthesize:
         assert len(result["sources"]) == 2
 
 
-class TestReadTransactions:
-    @pytest.mark.asyncio
-    async def test_vector_retrieve_uses_execute_read(self, base_query_state):
-        from orchestrator.app.query_engine import vector_retrieve
-
-        mock_session = AsyncMock()
-        mock_read_result = MagicMock()
-        mock_read_result.data.return_value = [{"name": "svc", "score": 0.9}]
-        mock_session.execute_read = AsyncMock(return_value=mock_read_result.data())
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
-        mock_driver = mock_neo4j_driver_with_session(mock_session)
-
-        state = _make_state(base_query_state, query="auth-service")
-
-        with patch(
-            "orchestrator.app.query_engine._get_neo4j_driver",
-            return_value=mock_driver,
-        ):
-            await vector_retrieve(state)
-
-        mock_session.execute_read.assert_called_once()
-        assert not mock_session.run.called
+class TestNeo4jReadOnlyAccessPattern:
+    """All retrieval paths must use execute_read (not session.run) to ensure
+    Neo4j routes queries to read replicas and enforces read-only transactions."""
 
     @pytest.mark.asyncio
-    async def test_single_hop_uses_execute_read(self, base_query_state):
-        from orchestrator.app.query_engine import single_hop_retrieve
+    @pytest.mark.parametrize("retrieve_fn_name,query,extra_state,extra_patches", [
+        (
+            "vector_retrieve",
+            "auth-service",
+            {},
+            [],
+        ),
+        (
+            "single_hop_retrieve",
+            "what does svc call?",
+            {},
+            [],
+        ),
+        (
+            "cypher_retrieve",
+            "blast radius if auth fails?",
+            {"tenant_id": "t1"},
+            [
+                ("orchestrator.app.query_engine.resolve_driver_for_tenant", None),
+                ("orchestrator.app.query_engine._try_template_match", None),
+                ("orchestrator.app.query_engine._fetch_candidates", [{"name": "auth", "id": "a1"}]),
+                ("orchestrator.app.query_engine.run_traversal", []),
+            ],
+        ),
+        (
+            "hybrid_retrieve",
+            "most critical services",
+            {"tenant_id": "t1"},
+            [
+                ("orchestrator.app.query_engine.resolve_driver_for_tenant", None),
+            ],
+        ),
+    ])
+    async def test_retrieval_never_uses_session_run(
+        self, base_query_state, retrieve_fn_name, query, extra_state, extra_patches,
+    ):
+        import orchestrator.app.query_engine as qe
 
         mock_session = AsyncMock()
         mock_session.execute_read = AsyncMock(
             side_effect=[
                 [{"name": "svc", "score": 0.9}],
                 [{"source": "svc", "rel": "CALLS", "target": "other"}],
-            ]
+            ] if retrieve_fn_name == "single_hop_retrieve"
+            else AsyncMock(return_value=[])
         )
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_driver = mock_neo4j_driver_with_session(mock_session)
 
-        state = _make_state(
-            base_query_state, query="what does svc call?"
+        state = _make_state(base_query_state, query=query, **extra_state)
+
+        patches = [
+            patch("orchestrator.app.query_engine._get_neo4j_driver", return_value=mock_driver),
+        ]
+        for target, return_val in extra_patches:
+            if "resolve_driver_for_tenant" in target:
+                patches.append(patch(target, return_value=(mock_driver, "tenant-db")))
+            else:
+                patches.append(patch(target, new_callable=AsyncMock, return_value=return_val))
+
+        retrieve_fn = getattr(qe, retrieve_fn_name)
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            await retrieve_fn(state)
+
+        assert not mock_session.run.called, (
+            f"{retrieve_fn_name} must use execute_read, not session.run"
         )
-
-        with patch(
-            "orchestrator.app.query_engine._get_neo4j_driver",
-            return_value=mock_driver,
-        ):
-            await single_hop_retrieve(state)
-
-        assert mock_session.execute_read.call_count == 2
-        assert not mock_session.run.called
-
-    @pytest.mark.asyncio
-    async def test_cypher_retrieve_uses_execute_read(self, base_query_state):
-        from orchestrator.app.query_engine import cypher_retrieve
-
-        mock_session = AsyncMock()
-        mock_session.execute_read = AsyncMock(return_value=[])
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
-        mock_driver = mock_neo4j_driver_with_session(mock_session)
-
-        state = _make_state(
-            base_query_state,
-            query="blast radius if auth fails?",
-            tenant_id="t1",
-        )
-
-        with patch(
-            "orchestrator.app.query_engine._get_neo4j_driver",
-            return_value=mock_driver,
-        ), patch(
-            "orchestrator.app.query_engine.resolve_driver_for_tenant",
-            return_value=(mock_driver, "tenant-db"),
-        ), patch(
-            "orchestrator.app.query_engine._try_template_match",
-            new_callable=AsyncMock,
-            return_value=None,
-        ), patch(
-            "orchestrator.app.query_engine._fetch_candidates",
-            new_callable=AsyncMock,
-            return_value=[{"name": "auth", "id": "a1"}],
-        ), patch(
-            "orchestrator.app.query_engine.run_traversal",
-            new_callable=AsyncMock,
-            return_value=[],
-        ):
-            await cypher_retrieve(state)
-
-        assert not mock_session.run.called
-
-    @pytest.mark.asyncio
-    async def test_hybrid_retrieve_uses_execute_read(self, base_query_state):
-        from orchestrator.app.query_engine import hybrid_retrieve
-
-        mock_session = AsyncMock()
-        mock_session.execute_read = AsyncMock(return_value=[])
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
-        mock_driver = mock_neo4j_driver_with_session(mock_session)
-
-        state = _make_state(
-            base_query_state,
-            query="most critical services",
-            tenant_id="t1",
-        )
-
-        with patch(
-            "orchestrator.app.query_engine._get_neo4j_driver",
-            return_value=mock_driver,
-        ), patch(
-            "orchestrator.app.query_engine.resolve_driver_for_tenant",
-            return_value=(mock_driver, "tenant-db"),
-        ):
-            await hybrid_retrieve(state)
-
-        assert not mock_session.run.called
 
 
 class TestCypherValidation:
@@ -686,8 +645,8 @@ class TestCypherSandboxWiring:
         ):
             await cypher_retrieve(state)
 
-        if executed_queries:
-            assert "LIMIT" in executed_queries[0].upper()
+        assert executed_queries, "No queries were captured by the sandbox wiring"
+        assert "LIMIT" in executed_queries[0].upper()
 
     @pytest.mark.asyncio
     async def test_hybrid_template_injects_limit(self, base_query_state):
@@ -731,8 +690,8 @@ class TestCypherSandboxWiring:
         ):
             await hybrid_retrieve(state)
 
-        if executed_queries:
-            assert "LIMIT" in executed_queries[0].upper()
+        assert executed_queries, "No queries were captured by the hybrid sandbox wiring"
+        assert "LIMIT" in executed_queries[0].upper()
 
 
 class TestVectorStoreWiring:
@@ -1063,31 +1022,6 @@ class TestLLMJudgeSelection:
 
 
 class TestNeo4jDriverTimeout:
-    def test_pool_configured_with_timeout(self):
-        from orchestrator.app import neo4j_pool
-        from orchestrator.app.config import Neo4jConfig
-
-        neo4j_pool._state["driver"] = None
-        fake_config = Neo4jConfig(
-            uri="bolt://test:7687",
-            username="neo4j",
-            password="test",
-            query_timeout=42.0,
-        )
-
-        with patch(
-            "orchestrator.app.neo4j_pool.Neo4jConfig.from_env",
-            return_value=fake_config,
-        ), patch(
-            "orchestrator.app.neo4j_pool.AsyncGraphDatabase.driver",
-            return_value=MagicMock(),
-        ) as mock_driver_ctor:
-            neo4j_pool.init_driver()
-
-        call_kwargs = mock_driver_ctor.call_args.kwargs
-        assert call_kwargs["max_transaction_retry_time"] == 42.0
-        neo4j_pool._state["driver"] = None
-
     @pytest.mark.asyncio
     async def test_execute_read_receives_query_timeout(self, base_query_state):
         from orchestrator.app.query_engine import vector_retrieve

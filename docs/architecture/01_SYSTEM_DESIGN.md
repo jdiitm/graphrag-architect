@@ -190,7 +190,7 @@ orchestrator/
     vector_store.py          # VectorStore protocol + Neo4j/Qdrant backends (FR-13)
     workspace_loader.py      # Filesystem workspace scanner
     # ... plus 30 additional modules (guardrails, caching, audit, etc.)
-  tests/                     # 117 test files, 1542 tests
+  tests/                     # 125 test files, 1632 tests
   requirements.txt
 ```
 

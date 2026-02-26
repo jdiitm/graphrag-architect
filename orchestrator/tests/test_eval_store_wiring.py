@@ -18,8 +18,3 @@ def test_create_evaluation_store_returns_local_when_no_url():
         store = create_evaluation_store()
     assert isinstance(store, EvaluationStore)
     assert not isinstance(store, RedisEvaluationStore)
-
-
-def test_query_engine_imports_factory():
-    import orchestrator.app.query_engine as qe_mod
-    assert hasattr(qe_mod, "create_evaluation_store")

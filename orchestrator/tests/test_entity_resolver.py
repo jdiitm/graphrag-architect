@@ -231,3 +231,11 @@ class TestResolveEntities:
         resolved = resolver.resolve_entities(entities)
         service_nodes = [e for e in resolved if isinstance(e, ServiceNode)]
         assert len(service_nodes) == 2
+
+
+class TestScopedEntityIdFormat:
+
+    def test_service_node_id_uses_scoped_format(self) -> None:
+        scoped = resolve_entity_id("auth-svc", repository="myrepo", namespace="services")
+        assert "::" in scoped
+        assert scoped == "myrepo::services::auth-svc"

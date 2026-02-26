@@ -56,7 +56,7 @@ These are explicit exclusions. They will not be accepted into the backlog withou
 | Cost optimization / FinOps analysis | Different data model and query patterns. |
 | User-facing dashboards or visualization | Phase 1 is API-only. Visualization is a consumer of the API, not a core capability. |
 | Real-time streaming topology updates | Phase 1 is batch ingestion. Streaming CDC from Neo4j is a Phase 2 consideration. |
-| Multi-tenant isolation | Single-tenant in Phase 1. Tenant-scoped graph partitioning requires Neo4j Fabric or Infinigraph sharding. |
+| Multi-tenant isolation | ~~Single-tenant in Phase 1.~~ **Promoted to in-scope**: Physical tenant isolation (FR-9) is implemented via `TenantAwareDriverPool` with separate Neo4j databases per tenant, plus tenant_id enforcement in all Cypher MERGE/MATCH patterns. |
 
 ---
 

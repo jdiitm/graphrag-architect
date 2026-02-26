@@ -220,3 +220,25 @@ class TestGoASTExtractorBatchExtraction:
         result = extractor.extract_all(files)
         services = [s for s in result.services if s.language == "go"]
         assert len(services) >= 1
+
+
+class TestASTExtractionProducesScopedIds:
+
+    def test_ast_extraction_produces_scoped_ids(self) -> None:
+        files = [
+            {"path": "services/auth/main.go", "content": (
+                "package main\n"
+                "import \"net/http\"\n"
+                "func main() {\n"
+                "  http.ListenAndServe(\":8080\", nil)\n"
+                "}\n"
+            )},
+        ]
+        extractor = GoASTExtractor()
+        result = extractor.extract_all(files)
+        if result.services:
+            svc_id = result.services[0].service_id
+            assert "::" in svc_id, (
+                f"Service ID '{svc_id}' is not scoped. Expected "
+                "'repository::namespace::name' format from ScopedEntityId."
+            )

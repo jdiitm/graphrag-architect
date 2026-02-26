@@ -130,6 +130,6 @@ LangGraph-based extraction pipeline.
 
 ## Test Coverage
 
-- **Python**: 1542 tests (unit + integration)
-- **Go**: 152 tests across 13 packages
+- **Python**: 1,632 tests across 125 test files (unit + integration)
+- **Go**: 177 tests across 13 packages
 - **Quality gates**: Pylint 10.00/10, all Python tests, all Go tests

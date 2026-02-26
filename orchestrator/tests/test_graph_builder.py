@@ -265,3 +265,58 @@ class TestYAMLCheckpointMarking:
 
         result = await parse_k8s_and_kafka_manifests(state)
         assert result["extraction_checkpoint"]["deploy.yaml"] == "extracted"
+
+
+_COMMIT_ENV_VARS = {
+    "NEO4J_PASSWORD": "test",
+    "NEO4J_URI": "bolt://localhost:7687",
+    "GOOGLE_API_KEY": "test-key",
+}
+
+
+class TestCompletionTrackerWiredIntoCommit:
+
+    @pytest.mark.asyncio
+    async def test_commit_records_completion(self) -> None:
+        from orchestrator.app.graph_builder import commit_to_neo4j
+        from orchestrator.app.extraction_models import ServiceNode
+
+        topology_calls: list[list] = []
+
+        async def _tracking_commit(self_repo, entities):
+            topology_calls.append(list(entities))
+
+        mock_driver = MagicMock()
+        mock_driver.close = AsyncMock()
+
+        entities = [
+            ServiceNode(
+                id="svc-1", name="auth", language="go",
+                framework="gin", opentelemetry_enabled=False, confidence=1.0,
+                tenant_id="test-tenant",
+            ),
+        ]
+
+        completion_marks: list[str] = []
+
+        async def _mock_mark(content_hash: str) -> None:
+            completion_marks.append(content_hash)
+
+        with (
+            patch.dict("os.environ", _COMMIT_ENV_VARS),
+            patch(
+                "orchestrator.app.graph_builder.get_driver",
+                return_value=mock_driver,
+            ),
+            patch(
+                "orchestrator.app.neo4j_client.GraphRepository.commit_topology",
+                _tracking_commit,
+            ),
+        ):
+            result = await commit_to_neo4j({"extracted_nodes": entities})
+
+        assert result["commit_status"] == "success"
+        assert len(completion_marks) > 0 or result.get("completion_tracked"), (
+            "commit_to_neo4j must call CompletionTracker.mark_committed() "
+            "after successful Neo4j commit."
+        )

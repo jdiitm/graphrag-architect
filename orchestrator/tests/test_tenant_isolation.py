@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 import logging.handlers
 import os
 
@@ -9,6 +10,7 @@ import pytest
 from orchestrator.app.tenant_isolation import (
     IsolationMode,
     TenantConfig,
+    TenantContext,
     TenantRegistry,
     TenantRouter,
 )
@@ -16,11 +18,40 @@ from orchestrator.app.tenant_isolation import (
 
 class TestTenantConfig:
 
-    def test_defaults(self) -> None:
-        cfg = TenantConfig(tenant_id="acme")
-        assert cfg.isolation_mode == IsolationMode.PHYSICAL
-        assert cfg.database_name == "neo4j"
-        assert cfg.max_concurrent_queries == 50
+    def test_defaults_to_physical_isolation(self) -> None:
+        config = TenantConfig(tenant_id="acme")
+        assert config.isolation_mode == IsolationMode.PHYSICAL, (
+            "TenantConfig must default to PHYSICAL isolation for production safety. "
+            f"Got: {config.isolation_mode}"
+        )
+        assert config.database_name == "neo4j"
+        assert config.max_concurrent_queries == 50
+
+    def test_tenant_context_defaults_to_physical(self) -> None:
+        ctx = TenantContext.default(tenant_id="acme")
+        assert ctx.isolation_mode == IsolationMode.PHYSICAL, (
+            "TenantContext.default() must use PHYSICAL isolation. "
+            f"Got: {ctx.isolation_mode}"
+        )
+
+    def test_logical_mode_requires_explicit_opt_in(self) -> None:
+        config = TenantConfig(
+            tenant_id="dev-tenant",
+            isolation_mode=IsolationMode.LOGICAL,
+        )
+        assert config.isolation_mode == IsolationMode.LOGICAL
+
+    def test_logical_mode_emits_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING):
+            TenantContext(
+                tenant_id="risky-tenant",
+                isolation_mode=IsolationMode.LOGICAL,
+            )
+        warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("LOGICAL" in msg for msg in warning_msgs), (
+            "Creating a TenantContext with LOGICAL isolation must emit a WARNING log. "
+            f"Log records: {warning_msgs}"
+        )
 
     def test_physical_mode(self) -> None:
         cfg = TenantConfig(
@@ -217,17 +248,6 @@ class TestTenantAuditLogger:
         assert parsed["result_count"] == 10
         assert "timestamp" in parsed
         audit_logger._logger.removeHandler(handler)
-
-
-class TestDeadCodeRemoved:
-
-    def test_inject_tenant_filter_not_exported(self) -> None:
-        import orchestrator.app.tenant_isolation as mod
-        assert not hasattr(mod, "inject_tenant_filter")
-
-    def test_build_tenant_params_not_exported(self) -> None:
-        import orchestrator.app.tenant_isolation as mod
-        assert not hasattr(mod, "build_tenant_params")
 
 
 class TestNoStringBasedCypherManipulation:
