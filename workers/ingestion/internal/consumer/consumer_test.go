@@ -300,6 +300,94 @@ func TestConsumer_MaxBatchWaitBoundsAckDuration(t *testing.T) {
 	}
 }
 
+func TestConsumer_HealthyAfterSuccessfulBatch(t *testing.T) {
+	src := &stubSource{
+		batches: [][]domain.Job{
+			{sampleJob("a")},
+		},
+	}
+	jobs := make(chan domain.Job, 10)
+	acks := make(chan struct{}, 10)
+
+	c := consumer.New(src, jobs, acks, consumer.WithAckTimeout(5*time.Second))
+
+	go func() {
+		<-jobs
+		acks <- struct{}{}
+	}()
+
+	_ = c.Run(context.Background())
+
+	if !c.Healthy() {
+		t.Fatal("expected consumer to be healthy after successful batch")
+	}
+}
+
+func TestConsumer_UnhealthyAfterConsecutiveTimeouts(t *testing.T) {
+	src := &stubSource{
+		batches: [][]domain.Job{
+			{sampleJob("a")},
+			{sampleJob("b")},
+			{sampleJob("c")},
+			{sampleJob("d")},
+		},
+	}
+	jobs := make(chan domain.Job, 10)
+	acks := make(chan struct{}, 10)
+
+	c := consumer.New(src, jobs, acks,
+		consumer.WithAckTimeout(10*time.Millisecond),
+		consumer.WithHealthThreshold(3),
+	)
+
+	go func() {
+		for range jobs {
+			// never send ack — force timeout on every batch
+		}
+	}()
+
+	_ = c.Run(context.Background())
+
+	if c.Healthy() {
+		t.Fatal("expected consumer to be unhealthy after 3+ consecutive ack timeouts")
+	}
+}
+
+func TestConsumer_HealthResetsOnSuccess(t *testing.T) {
+	src := &commitTrackingSource{
+		batches: [][]domain.Job{
+			{sampleJob("slow")},
+			{sampleJob("fast")},
+		},
+	}
+
+	jobs := make(chan domain.Job, 10)
+	acks := make(chan struct{}, 10)
+
+	c := consumer.New(src, jobs, acks,
+		consumer.WithAckTimeout(10*time.Millisecond),
+		consumer.WithHealthThreshold(5),
+	)
+
+	callCount := 0
+	go func() {
+		for range jobs {
+			callCount++
+			if callCount == 1 {
+				// first batch: no ack (timeout)
+				continue
+			}
+			acks <- struct{}{} // second batch: ack promptly
+		}
+	}()
+
+	_ = c.Run(context.Background())
+
+	if !c.Healthy() {
+		t.Fatal("expected consumer to be healthy after a successful batch resets the counter")
+	}
+}
+
 func TestConsumer_MaxBatchWaitDefaultIsZeroMeansUnbounded(t *testing.T) {
 	src := &stubSource{
 		batches: [][]domain.Job{

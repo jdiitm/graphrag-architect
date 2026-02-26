@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from collections import OrderedDict
@@ -8,6 +9,7 @@ from typing import Any, List, Protocol, runtime_checkable
 from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
+
 
 
 class VectorSyncEvent(BaseModel):
@@ -86,6 +88,60 @@ class OutboxDrainer:
                     event.event_id, exc,
                 )
         return processed
+
+
+class RedisOutboxStore:
+    _KEY_PREFIX = "graphrag:vecoutbox:"
+    _INDEX_KEY = "graphrag:vecoutbox:pending"
+
+    def __init__(self, redis_conn: Any) -> None:
+        self._redis = redis_conn
+
+    def _event_key(self, event_id: str) -> str:
+        return f"{self._KEY_PREFIX}{event_id}"
+
+    async def write_event(self, event: VectorSyncEvent) -> None:
+        mapping = {
+            "event_id": event.event_id,
+            "collection": event.collection,
+            "pruned_ids": json.dumps(event.pruned_ids),
+            "status": event.status,
+            "retry_count": str(event.retry_count),
+        }
+        await self._redis.hset(
+            self._event_key(event.event_id), mapping=mapping,
+        )
+        await self._redis.sadd(self._INDEX_KEY, event.event_id)
+
+    async def load_pending(self) -> List[VectorSyncEvent]:
+        event_ids = await self._redis.smembers(self._INDEX_KEY)
+        events: List[VectorSyncEvent] = []
+        for eid in event_ids:
+            data = await self._redis.hgetall(self._event_key(eid))
+            if not data:
+                await self._redis.srem(self._INDEX_KEY, eid)
+                continue
+            events.append(VectorSyncEvent(
+                event_id=data["event_id"],
+                collection=data["collection"],
+                pruned_ids=json.loads(data["pruned_ids"]),
+                status=data.get("status", "pending"),
+                retry_count=int(data.get("retry_count", "0")),
+            ))
+        return events
+
+    async def delete_event(self, event_id: str) -> None:
+        await self._redis.delete(self._event_key(event_id))
+        await self._redis.srem(self._INDEX_KEY, event_id)
+
+    async def update_retry_count(
+        self, event_id: str, retry_count: int,
+    ) -> None:
+        await self._redis.hset(
+            self._event_key(event_id),
+            key="retry_count",
+            value=str(retry_count),
+        )
 
 
 DEFAULT_MAX_RETRIES = 5

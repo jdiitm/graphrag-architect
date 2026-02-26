@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from orchestrator.app.context_manager import (
+    ContextBlock,
     TokenBudget,
     estimate_tokens,
     format_context_for_prompt,
@@ -99,37 +100,59 @@ class TestSemanticTruncation:
 
 class TestFormatContextForPrompt:
 
-    def test_returns_string(self) -> None:
+    def test_returns_context_block(self) -> None:
         context = [{"name": "auth-service", "type": "Service"}]
-        result = format_context_for_prompt(context)
-        assert isinstance(result, str)
+        block = format_context_for_prompt(context)
+        assert isinstance(block, ContextBlock)
+        assert isinstance(block.content, str)
+        assert isinstance(block.delimiter, str)
+        assert len(block.delimiter) > 0
 
     def test_includes_field_labels(self) -> None:
         context = [{"name": "auth-service", "language": "go"}]
-        result = format_context_for_prompt(context)
-        assert "name" in result.lower()
-        assert "auth-service" in result
+        block = format_context_for_prompt(context)
+        assert "name" in block.content.lower()
+        assert "auth-service" in block.content
 
     def test_no_raw_dict_repr(self) -> None:
         context = [{"name": "svc-a"}, {"name": "svc-b"}]
-        result = format_context_for_prompt(context)
-        assert "{'name'" not in result, (
+        block = format_context_for_prompt(context)
+        assert "{'name'" not in block.content, (
             "Context must be formatted as structured text, not raw dict repr"
         )
 
     def test_empty_context_returns_empty(self) -> None:
-        result = format_context_for_prompt([])
-        assert result == ""
+        block = format_context_for_prompt([])
+        assert block.content == ""
+        assert block.delimiter == ""
 
     def test_truncates_large_values(self) -> None:
         context = [{"data": "x" * 5000}]
-        result = format_context_for_prompt(context, max_chars_per_value=200)
-        assert len(result) < 5000
+        block = format_context_for_prompt(context, max_chars_per_value=200)
+        assert len(block.content) < 5000
 
     def test_integrates_with_token_budget(self) -> None:
         budget = TokenBudget(max_context_tokens=100, max_results=2)
         context = [{"name": f"svc-{i}"} for i in range(10)]
         truncated = truncate_context(context, budget)
-        result = format_context_for_prompt(truncated)
-        assert isinstance(result, str)
-        assert len(result) > 0
+        block = format_context_for_prompt(truncated)
+        assert isinstance(block.content, str)
+        assert len(block.content) > 0
+
+    def test_delimiter_is_random_per_call(self) -> None:
+        context = [{"name": "svc"}]
+        block_a = format_context_for_prompt(context)
+        block_b = format_context_for_prompt(context)
+        assert block_a.delimiter != block_b.delimiter
+
+    def test_content_wrapped_in_delimiter_tags(self) -> None:
+        context = [{"name": "auth-service"}]
+        block = format_context_for_prompt(context)
+        assert block.content.startswith(f"<{block.delimiter}>")
+        assert block.content.endswith(f"</{block.delimiter}>")
+
+    def test_static_graph_context_tag_not_used(self) -> None:
+        context = [{"name": "svc"}]
+        block = format_context_for_prompt(context)
+        assert "<graph_context>" not in block.content
+        assert "</graph_context>" not in block.content

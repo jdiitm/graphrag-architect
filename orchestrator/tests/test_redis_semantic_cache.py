@@ -66,13 +66,14 @@ def test_tenant_isolation(redis_cache):
     assert result is None
 
 
-def test_invalidate_tenant(redis_cache):
+@pytest.mark.asyncio
+async def test_invalidate_tenant(redis_cache):
     emb = _make_embedding(3.0)
     redis_cache.store(
         query="q", query_embedding=emb,
         result={"answer": "a"}, tenant_id="acme",
     )
-    count = redis_cache.invalidate_tenant("acme")
+    count = await redis_cache.invalidate_tenant("acme")
     assert count == 1
     assert redis_cache.lookup(emb, tenant_id="acme") is None
 

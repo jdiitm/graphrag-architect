@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from orchestrator.app.semantic_cache import (
     CacheConfig,
     CacheEntry,
+    RedisSemanticQueryCache,
     SemanticQueryCache,
     _cosine_similarity,
     _embedding_hash,
@@ -242,3 +244,87 @@ class TestSingleflightCoalescing:
         assert r2 is None
         assert owner2 is True
         cache.notify_complete(embedding)
+
+
+class TestRedisSemanticQueryCacheInvalidateTenant:
+
+    @pytest.mark.asyncio
+    async def test_invalidate_tenant_purges_l1_and_redis(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.scan = AsyncMock(return_value=(0, [
+            b"graphrag:semcache:abc123",
+            b"graphrag:semcache:def456",
+        ]))
+        mock_redis.get = AsyncMock(side_effect=[
+            json.dumps({"tenant_id": "t1", "result": {}, "embedding": [0.1], "query": "q1"}),
+            json.dumps({"tenant_id": "t2", "result": {}, "embedding": [0.2], "query": "q2"}),
+        ])
+        mock_redis.delete = AsyncMock()
+
+        with patch(
+            "orchestrator.app.semantic_cache.create_async_redis",
+            return_value=mock_redis,
+        ), patch(
+            "orchestrator.app.semantic_cache.require_redis",
+        ):
+            cache = RedisSemanticQueryCache(
+                redis_url="redis://fake:6379", config=CacheConfig(similarity_threshold=0.9),
+            )
+            cache._l1.store("q1", [0.1] * 32, {"a": 1}, tenant_id="t1")
+            cache._l1.store("q2", [0.2] * 32, {"a": 2}, tenant_id="t2")
+
+            removed = await cache.invalidate_tenant("t1")
+
+        assert removed >= 1
+        assert cache._l1.stats().size == 1
+        mock_redis.delete.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_invalidate_tenant_only_deletes_matching_tenant_keys(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.scan = AsyncMock(return_value=(0, [
+            b"graphrag:semcache:key1",
+            b"graphrag:semcache:key2",
+        ]))
+        mock_redis.get = AsyncMock(side_effect=[
+            json.dumps({"tenant_id": "target", "result": {}, "embedding": [0.1], "query": "q"}),
+            json.dumps({"tenant_id": "other", "result": {}, "embedding": [0.2], "query": "q"}),
+        ])
+        mock_redis.delete = AsyncMock()
+
+        with patch(
+            "orchestrator.app.semantic_cache.create_async_redis",
+            return_value=mock_redis,
+        ), patch(
+            "orchestrator.app.semantic_cache.require_redis",
+        ):
+            cache = RedisSemanticQueryCache(
+                redis_url="redis://fake:6379", config=CacheConfig(similarity_threshold=0.9),
+            )
+            await cache.invalidate_tenant("target")
+
+        delete_calls = mock_redis.delete.call_args_list
+        deleted_keys = []
+        for call in delete_calls:
+            deleted_keys.extend(call[0])
+        assert b"graphrag:semcache:key1" in deleted_keys
+        assert b"graphrag:semcache:key2" not in deleted_keys
+
+    @pytest.mark.asyncio
+    async def test_invalidate_tenant_tolerates_redis_failure(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.scan = AsyncMock(side_effect=ConnectionError("redis down"))
+
+        with patch(
+            "orchestrator.app.semantic_cache.create_async_redis",
+            return_value=mock_redis,
+        ), patch(
+            "orchestrator.app.semantic_cache.require_redis",
+        ):
+            cache = RedisSemanticQueryCache(
+                redis_url="redis://fake:6379", config=CacheConfig(similarity_threshold=0.9),
+            )
+            cache._l1.store("q1", [0.1] * 32, {"a": 1}, tenant_id="t1")
+            removed = await cache.invalidate_tenant("t1")
+
+        assert removed >= 1
