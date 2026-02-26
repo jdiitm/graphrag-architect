@@ -63,7 +63,9 @@ class TestCountTokensAccuracyVsNaive:
             '    fmt.Println("Hello, world!")\n}\n'
         )
         tiktoken_result = count_tokens(go_code)
+        naive_result = len(go_code) // 4
         assert tiktoken_result == 20
+        assert tiktoken_result != naive_result
 
     def test_never_returns_negative(self) -> None:
         assert count_tokens("") >= 0
