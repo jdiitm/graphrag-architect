@@ -18,7 +18,7 @@ def _get_encoding(encoding_name: str = _DEFAULT_ENCODING_NAME) -> Optional[objec
         enc = tiktoken.get_encoding(encoding_name)
         _encoding_cache[encoding_name] = enc
         return enc
-    except (ImportError, Exception):
+    except Exception:
         logger.debug("tiktoken unavailable, falling back to heuristic")
         return None
 

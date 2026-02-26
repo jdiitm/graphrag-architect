@@ -507,7 +507,7 @@ class GraphRepository:
 
     async def ensure_tombstone_index(self) -> None:
         cypher = (
-            "CREATE RANGE INDEX tombstone_reap_idx IF NOT EXISTS "
+            "CREATE RANGE INDEX tombstone_calls_idx IF NOT EXISTS "
             "FOR ()-[r:CALLS]-() ON (r.tombstoned_at)"
         )
         async with self._session() as session:
