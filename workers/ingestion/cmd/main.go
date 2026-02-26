@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -37,6 +38,28 @@ func envIntOrDefault(key string, fallback int) int {
 	return fallback
 }
 
+func validateBlobStoreForProduction(deploymentMode, blobStoreType string) error {
+	if deploymentMode == "production" && blobStoreType != "s3" {
+		return fmt.Errorf(
+			"BLOB_STORE_TYPE=%q is unsafe for DEPLOYMENT_MODE=production; "+
+				"pod restarts will lose all >256KB documents; set BLOB_STORE_TYPE=s3",
+			blobStoreType,
+		)
+	}
+	return nil
+}
+
+func validateDedupStoreForProduction(deploymentMode, dedupStoreType string) error {
+	if deploymentMode == "production" && dedupStoreType == "noop" {
+		return fmt.Errorf(
+			"DEDUP_STORE_TYPE=%q is unsafe for DEPLOYMENT_MODE=production; "+
+				"deduplication is completely inactive; set DEDUP_STORE_TYPE to redis or memory",
+			dedupStoreType,
+		)
+	}
+	return nil
+}
+
 func main() {
 	orchestratorURL := envOrDefault("ORCHESTRATOR_URL", "http://localhost:8000")
 	kafkaBrokers := envOrDefault("KAFKA_BROKERS", "localhost:9092")
@@ -64,6 +87,11 @@ func main() {
 	}()
 
 	processorMode := envOrDefault("PROCESSOR_MODE", "kafka")
+	deploymentMode := envOrDefault("DEPLOYMENT_MODE", "")
+	dedupStoreType := envOrDefault("DEDUP_STORE_TYPE", "noop")
+	if err := validateDedupStoreForProduction(deploymentMode, dedupStoreType); err != nil {
+		log.Fatalf("production safety check failed: %v", err)
+	}
 
 	var fp processor.DocumentProcessor
 	if processorMode == "kafka" {
@@ -71,6 +99,9 @@ func main() {
 		blobBucket := envOrDefault("BLOB_BUCKET", "graphrag-ingestion")
 		blobThreshold := envIntOrDefault("BLOB_THRESHOLD", processor.DefaultBlobThreshold)
 		blobStoreType := envOrDefault("BLOB_STORE_TYPE", "memory")
+		if err := validateBlobStoreForProduction(deploymentMode, blobStoreType); err != nil {
+			log.Fatalf("production safety check failed: %v", err)
+		}
 		blobRegion := envOrDefault("AWS_REGION", "us-east-1")
 		store, blobErr := blobstore.NewBlobStoreFromEnv(blobStoreType, blobBucket, blobRegion)
 		if blobErr != nil {
@@ -94,7 +125,6 @@ func main() {
 		log.Println("processor mode: http")
 	}
 
-	dedupStoreType := envOrDefault("DEDUP_STORE_TYPE", "noop")
 	dedupRedisURL := os.Getenv("DEDUP_REDIS_URL")
 	dedupCapacity := envIntOrDefault("DEDUP_LRU_CAPACITY", 10000)
 	dedupTTLHours := envIntOrDefault("DEDUP_TTL_HOURS", 168)

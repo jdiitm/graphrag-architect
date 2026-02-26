@@ -98,11 +98,12 @@ async def invalidate_caches_after_ingest(tenant_id: str = "") -> None:
                 "Tenant-scoped cache invalidation complete: %s", tenant_id,
             )
         else:
+            logger.warning(
+                "Empty tenant_id received; advancing cache generation globally",
+            )
             _SUBGRAPH_CACHE.advance_generation()
-            _SUBGRAPH_CACHE.invalidate_stale()
             if _SEMANTIC_CACHE is not None:
                 _SEMANTIC_CACHE.advance_generation()
-                await _SEMANTIC_CACHE.invalidate_stale()
             logger.info("Global generational cache invalidation complete")
     except Exception as exc:
         logger.warning("Cache invalidation failed (non-fatal): %s", exc)

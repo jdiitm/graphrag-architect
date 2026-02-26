@@ -161,6 +161,21 @@ def cypher_op_for_entity(entity: Any) -> CypherOp:
     return generator(entity)
 
 
+def _entity_sort_key(entity: Any) -> Tuple[str, str]:
+    type_name = type(entity).__name__
+    identity = (
+        getattr(entity, "id", "")
+        or getattr(entity, "name", "")
+        or getattr(entity, "source_service_id", "")
+        or getattr(entity, "service_id", "")
+    )
+    return (type_name, str(identity))
+
+
+def _sort_entities_for_write(entities: List[Any]) -> List[Any]:
+    return sorted(entities, key=_entity_sort_key)
+
+
 def _partition_entities(
     entities: List[Any],
 ) -> Tuple[List[Any], List[Any]]:
@@ -325,6 +340,7 @@ class GraphRepository:
         if not entities:
             return
 
+        entities = _sort_entities_for_write(entities)
         entities = compute_hashes(entities)
         nodes, edges = _partition_entities(entities)
         await self._cb.call(self._execute_batched_commit, nodes, edges)

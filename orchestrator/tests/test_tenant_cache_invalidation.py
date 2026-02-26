@@ -127,8 +127,9 @@ class TestGranularCacheInvalidation:
             await invalidate_caches_after_ingest(tenant_id="")
 
         subgraph_cache.advance_generation.assert_called_once()
-        subgraph_cache.invalidate_stale.assert_called_once()
+        subgraph_cache.invalidate_stale.assert_not_called()
         semantic_cache.advance_generation.assert_called_once()
+        semantic_cache.invalidate_stale.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_sandboxed_read_cache_key_uses_tenant_prefix(self) -> None:

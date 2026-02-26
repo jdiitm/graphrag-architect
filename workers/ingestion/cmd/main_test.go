@@ -169,3 +169,59 @@ func TestEndToEnd_FailedJobRoutesToDLQ(t *testing.T) {
 		t.Error("DLQ result should have error")
 	}
 }
+
+func TestValidateBlobStoreForProduction_MemoryInProdReturnsError(t *testing.T) {
+	err := validateBlobStoreForProduction("production", "memory")
+	if err == nil {
+		t.Fatal("expected error when blob store is memory in production mode")
+	}
+}
+
+func TestValidateBlobStoreForProduction_S3InProdSucceeds(t *testing.T) {
+	err := validateBlobStoreForProduction("production", "s3")
+	if err != nil {
+		t.Fatalf("unexpected error for s3 in production: %v", err)
+	}
+}
+
+func TestValidateBlobStoreForProduction_MemoryInDevSucceeds(t *testing.T) {
+	err := validateBlobStoreForProduction("development", "memory")
+	if err != nil {
+		t.Fatalf("unexpected error for memory in development: %v", err)
+	}
+}
+
+func TestValidateBlobStoreForProduction_EmptyModeSucceeds(t *testing.T) {
+	err := validateBlobStoreForProduction("", "memory")
+	if err != nil {
+		t.Fatalf("unexpected error for memory with empty deployment mode: %v", err)
+	}
+}
+
+func TestValidateDedupStoreForProduction_NoopInProdReturnsError(t *testing.T) {
+	err := validateDedupStoreForProduction("production", "noop")
+	if err == nil {
+		t.Fatal("expected error when dedup store is noop in production mode")
+	}
+}
+
+func TestValidateDedupStoreForProduction_RedisInProdSucceeds(t *testing.T) {
+	err := validateDedupStoreForProduction("production", "redis")
+	if err != nil {
+		t.Fatalf("unexpected error for redis in production: %v", err)
+	}
+}
+
+func TestValidateDedupStoreForProduction_MemoryInProdSucceeds(t *testing.T) {
+	err := validateDedupStoreForProduction("production", "memory")
+	if err != nil {
+		t.Fatalf("unexpected error for memory dedup in production: %v", err)
+	}
+}
+
+func TestValidateDedupStoreForProduction_NoopInDevSucceeds(t *testing.T) {
+	err := validateDedupStoreForProduction("development", "noop")
+	if err != nil {
+		t.Fatalf("unexpected error for noop in development: %v", err)
+	}
+}
