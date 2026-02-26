@@ -40,6 +40,11 @@ _SECRET_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
      '"[REDACTED_SECRET]"'),
 ]
 
+_XML_BOUNDARY_PATTERN = re.compile(
+    r"<\s*/?\s*(?:graph_context|user_query|system|assistant)\s*>",
+    re.IGNORECASE,
+)
+
 _CONTROL_CHAR_PATTERN = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
 )
@@ -47,6 +52,10 @@ _CONTROL_CHAR_PATTERN = re.compile(
 
 def _strip_control_chars(text: str) -> str:
     return _CONTROL_CHAR_PATTERN.sub("", text)
+
+
+def _strip_xml_boundaries(text: str) -> str:
+    return _XML_BOUNDARY_PATTERN.sub("", text)
 
 
 def _apply_injection_filters(text: str) -> str:
@@ -67,6 +76,7 @@ def sanitize_query_input(
 ) -> str:
     cleaned = _strip_control_chars(raw)
     cleaned = cleaned[:max_chars]
+    cleaned = _strip_xml_boundaries(cleaned)
     cleaned = _apply_injection_filters(cleaned)
     return f"<user_query>{cleaned}</user_query>"
 
@@ -80,6 +90,7 @@ def sanitize_source_content(
         return content
     cleaned = _strip_control_chars(content)
     cleaned = cleaned[:max_chars]
+    cleaned = _strip_xml_boundaries(cleaned)
     cleaned = _apply_secret_filters(cleaned)
     cleaned = _apply_injection_filters(cleaned)
     return cleaned
