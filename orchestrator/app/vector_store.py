@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import math
 import warnings
-from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -147,8 +145,7 @@ class Neo4jVectorStore:
         warnings.warn(
             "Neo4jVectorStore is deprecated. Storing embeddings as Neo4j node "
             "properties pollutes the PageCache and prevents independent scaling. "
-            "Migrate to QdrantVectorStore or PooledQdrantVectorStore by setting "
-            "VECTOR_STORE_BACKEND=qdrant.",
+            "Migrate to QdrantVectorStore by setting VECTOR_STORE_BACKEND=qdrant.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -282,18 +279,21 @@ class QdrantVectorStore:
         self,
         url: str = "http://localhost:6333",
         api_key: str = "",
+        prefer_grpc: bool = True,
     ) -> None:
         self._url = url
         self._api_key = api_key
+        self._prefer_grpc = prefer_grpc
         self._client: Optional[Any] = None
 
     def _get_client(self) -> Any:
         if self._client is None:
             try:
-                from qdrant_client import AsyncQdrantClient
-                self._client = AsyncQdrantClient(
+                from qdrant_client import AsyncQdrantClient as _AQC
+                self._client = _AQC(
                     url=self._url,
                     api_key=self._api_key or None,
+                    prefer_grpc=self._prefer_grpc,
                 )
             except ImportError as exc:
                 raise RuntimeError(
@@ -400,245 +400,6 @@ class QdrantVectorStore:
         ]
 
 
-class QdrantClientPool:
-    def __init__(
-        self,
-        max_size: int = 4,
-        url: str = "http://localhost:6333",
-        api_key: str = "",
-    ) -> None:
-        if max_size < 1:
-            raise ValueError(
-                f"max_size must be >= 1, got {max_size}"
-            )
-        self._max_size = max_size
-        self._url = url
-        self._api_key = api_key
-        self._semaphore = asyncio.Semaphore(max_size)
-        self._idle: deque[Any] = deque()
-        self._active_count = 0
-        self._factory: Callable[[], Any] = self._default_factory
-        self._sweep_task: Optional[asyncio.Task[None]] = None
-
-    def _default_factory(self) -> Any:
-        try:
-            from qdrant_client import AsyncQdrantClient
-            return AsyncQdrantClient(
-                url=self._url,
-                api_key=self._api_key or None,
-            )
-        except ImportError as exc:
-            raise RuntimeError(
-                "qdrant-client is required for QdrantClientPool"
-            ) from exc
-
-    @property
-    def max_size(self) -> int:
-        return self._max_size
-
-    async def _health_check(self, client: Any) -> bool:
-        try:
-            await client.get_collections()
-            return True
-        except Exception:
-            return False
-
-    async def acquire(self) -> Any:
-        await self._semaphore.acquire()
-        if self._idle:
-            client = self._idle.popleft()
-            self._active_count += 1
-            return client
-        client = self._factory()
-        self._active_count += 1
-        return client
-
-    async def release(self, client: Any) -> None:
-        self._active_count -= 1
-        self._idle.append(client)
-        self._semaphore.release()
-
-    async def discard(self, client: Any) -> None:
-        _ = client
-        self._active_count -= 1
-        self._semaphore.release()
-
-    async def sweep_idle(self) -> int:
-        healthy: deque[Any] = deque()
-        removed = 0
-        while self._idle:
-            client = self._idle.popleft()
-            if await self._health_check(client):
-                healthy.append(client)
-            else:
-                removed += 1
-                logger.debug("Background sweep: discarded stale Qdrant connection")
-        self._idle = healthy
-        return removed
-
-    def start_health_sweep(self, interval: float = 30.0) -> None:
-        if self._sweep_task is not None:
-            return
-
-        async def _loop() -> None:
-            while True:
-                await asyncio.sleep(interval)
-                try:
-                    await self.sweep_idle()
-                except Exception:
-                    logger.debug("Health sweep iteration failed", exc_info=True)
-
-        self._sweep_task = asyncio.get_running_loop().create_task(_loop())
-
-    def stop_health_sweep(self) -> None:
-        if self._sweep_task is not None:
-            self._sweep_task.cancel()
-            self._sweep_task = None
-
-    def stats(self) -> Dict[str, int]:
-        return {
-            "active": self._active_count,
-            "idle": len(self._idle),
-            "max_size": self._max_size,
-        }
-
-
-class PooledQdrantVectorStore:
-    is_read_replica: bool = True
-
-    def __init__(
-        self,
-        url: str = "http://localhost:6333",
-        api_key: str = "",
-        pool_size: int = 4,
-    ) -> None:
-        self._pool = QdrantClientPool(
-            max_size=pool_size, url=url, api_key=api_key,
-        )
-
-    async def upsert(
-        self, collection: str, vectors: List[VectorRecord],
-    ) -> int:
-        client = await self._pool.acquire()
-        try:
-            from qdrant_client.models import PointStruct
-            points = [
-                PointStruct(
-                    id=record.id,
-                    vector=record.vector,
-                    payload=record.metadata,
-                )
-                for record in vectors
-            ]
-            await client.upsert(collection_name=collection, points=points)
-            result = len(vectors)
-        except Exception:
-            await self._pool.discard(client)
-            raise
-        await self._pool.release(client)
-        return result
-
-    async def search(
-        self,
-        collection: str,
-        query_vector: List[float],
-        limit: int = 10,
-    ) -> List[SearchResult]:
-        client = await self._pool.acquire()
-        try:
-            results = await client.search(
-                collection_name=collection,
-                query_vector=query_vector,
-                limit=limit,
-            )
-            output = [
-                SearchResult(
-                    id=str(hit.id),
-                    score=hit.score,
-                    metadata=hit.payload or {},
-                )
-                for hit in results
-            ]
-        except Exception:
-            await self._pool.discard(client)
-            raise
-        await self._pool.release(client)
-        return output
-
-    async def delete(self, collection: str, ids: List[str], tenant_id: str = "") -> int:
-        client = await self._pool.acquire()
-        try:
-            from qdrant_client.models import PointIdsList
-            if tenant_id:
-                from qdrant_client.models import (
-                    FieldCondition, Filter, HasIdCondition, MatchValue,
-                )
-                compound = Filter(
-                    must=[
-                        HasIdCondition(has_id=ids),
-                        FieldCondition(
-                            key="tenant_id", match=MatchValue(value=tenant_id),
-                        ),
-                    ],
-                )
-                count_result = await client.count(
-                    collection_name=collection, count_filter=compound, exact=True,
-                )
-                await client.delete(
-                    collection_name=collection, points_selector=compound,
-                )
-                result = count_result.count
-            else:
-                await client.delete(
-                    collection_name=collection,
-                    points_selector=PointIdsList(points=ids),
-                )
-                result = len(ids)
-        except Exception:
-            await self._pool.discard(client)
-            raise
-        await self._pool.release(client)
-        return result
-
-    async def search_with_tenant(
-        self,
-        collection: str,
-        query_vector: List[float],
-        tenant_id: str,
-        limit: int = 10,
-    ) -> List[SearchResult]:
-        client = await self._pool.acquire()
-        try:
-            from qdrant_client.models import FieldCondition, Filter, MatchValue
-            query_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="tenant_id",
-                        match=MatchValue(value=tenant_id),
-                    ),
-                ],
-            )
-            results = await client.search(
-                collection_name=collection,
-                query_vector=query_vector,
-                query_filter=query_filter,
-                limit=limit,
-            )
-            output = [
-                SearchResult(
-                    id=str(hit.id),
-                    score=hit.score,
-                    metadata=hit.payload or {},
-                )
-                for hit in results
-            ]
-        except Exception:
-            await self._pool.discard(client)
-            raise
-        await self._pool.release(client)
-        return output
-
-
 def create_vector_store(
     backend: str = "memory",
     url: str = "",
@@ -647,6 +408,7 @@ def create_vector_store(
     pool_size: int = 4,
     deployment_mode: str = "dev",
 ) -> Any:
+    _ = pool_size
     if deployment_mode == "production" and backend not in ("qdrant", "neo4j"):
         raise ValueError(
             f"VECTOR_STORE_BACKEND={backend!r} is not durable. "
@@ -656,7 +418,5 @@ def create_vector_store(
     if backend == "neo4j":
         return Neo4jVectorStore(driver=driver)
     if backend == "qdrant":
-        return PooledQdrantVectorStore(
-            url=url, api_key=api_key, pool_size=pool_size,
-        )
+        return QdrantVectorStore(url=url, api_key=api_key, prefer_grpc=True)
     return InMemoryVectorStore()
