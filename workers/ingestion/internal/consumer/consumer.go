@@ -124,8 +124,8 @@ func (c *Consumer) Run(ctx context.Context) error {
 		if err := c.awaitAcks(pollCtx, len(batch)); err != nil {
 			batchCancel()
 			if errors.Is(err, ErrAckTimeout) || errors.Is(err, context.DeadlineExceeded) {
-			c.consecutiveTimeouts.Add(1)
-			c.observer.RecordBatchDuration(time.Since(batchStart).Seconds())
+				c.consecutiveTimeouts.Add(1)
+				c.observer.RecordBatchDuration(time.Since(batchStart).Seconds())
 				pollSpan.End()
 				continue
 			}

@@ -63,6 +63,8 @@ def resolve_vector_collection(tenant_id: Optional[str] = None) -> str:
 
 _VECTOR_OUTBOX = VectorSyncOutbox()
 
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
 
 def create_outbox_drainer(
     redis_conn: Any,
@@ -131,6 +133,7 @@ def _get_redis_conn() -> Any:
 
 
 _INGESTION_LOCKS: Dict[str, asyncio.Lock] = {}
+_LOCK_REFCOUNTS: Dict[str, int] = {}
 _LOCKS_GUARD = asyncio.Lock()
 
 
@@ -142,9 +145,18 @@ async def acquire_ingestion_lock(
     async with _LOCKS_GUARD:
         if key not in _INGESTION_LOCKS:
             _INGESTION_LOCKS[key] = asyncio.Lock()
+            _LOCK_REFCOUNTS[key] = 0
+        _LOCK_REFCOUNTS[key] += 1
         lock = _INGESTION_LOCKS[key]
-    async with lock:
-        yield
+    try:
+        async with lock:
+            yield
+    finally:
+        async with _LOCKS_GUARD:
+            _LOCK_REFCOUNTS[key] -= 1
+            if _LOCK_REFCOUNTS[key] <= 0:
+                del _INGESTION_LOCKS[key]
+                del _LOCK_REFCOUNTS[key]
 
 
 async def invalidate_caches_after_ingest(tenant_id: str = "") -> None:
@@ -489,7 +501,9 @@ async def _post_commit_side_effects(
         pruned_count, pruned_ids = await repo.prune_stale_edges(ingestion_id)
         span.set_attribute("edges_pruned", pruned_count)
         _enqueue_vector_cleanup(pruned_ids, span, tenant_id=tenant_id)
-        asyncio.create_task(_safe_drain_vector_outbox())
+        task = asyncio.create_task(_safe_drain_vector_outbox())
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
     except Exception as prune_exc:
         logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
     try:

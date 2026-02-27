@@ -130,7 +130,9 @@ class TestVectorStoreCleanupOnPrune:
             ),
         ):
             result = await commit_to_neo4j({"extracted_nodes": entities})
-            await asyncio.sleep(0.05)
+            from orchestrator.app.graph_builder import _BACKGROUND_TASKS
+            if _BACKGROUND_TASKS:
+                await asyncio.gather(*_BACKGROUND_TASKS)
 
         assert result["commit_status"] == "success"
         assert len(vector_delete_calls) >= 1, (
