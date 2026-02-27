@@ -1,15 +1,11 @@
 package processor
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"strings"
-
-	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
 )
 
 type ASTResult struct {
@@ -30,64 +26,6 @@ type FunctionInfo struct {
 type HTTPCallInfo struct {
 	Method string `json:"method"`
 	Path   string `json:"path_hint"`
-}
-
-type ASTProcessor struct {
-	downstream DocumentProcessor
-}
-
-func NewASTProcessor(downstream DocumentProcessor) *ASTProcessor {
-	return &ASTProcessor{downstream: downstream}
-}
-
-func (p *ASTProcessor) Process(ctx context.Context, job domain.Job) error {
-	payload := make(map[string]string)
-	if err := json.Unmarshal(job.Value, &payload); err != nil {
-		return p.downstream.Process(ctx, job)
-	}
-
-	filePath, ok := payload["file_path"]
-	if !ok || !strings.HasSuffix(filePath, ".go") {
-		return p.downstream.Process(ctx, job)
-	}
-
-	content, ok := payload["content"]
-	if !ok {
-		return p.downstream.Process(ctx, job)
-	}
-
-	result, err := ExtractGoAST(filePath, content)
-	if err != nil {
-		return p.downstream.Process(ctx, job)
-	}
-
-	astJSON, err := json.Marshal(result)
-	if err != nil {
-		return p.downstream.Process(ctx, job)
-	}
-
-	enrichedPayload := make(map[string]interface{})
-	for k, v := range payload {
-		enrichedPayload[k] = v
-	}
-	enrichedPayload["ast_result"] = json.RawMessage(astJSON)
-
-	enrichedValue, err := json.Marshal(enrichedPayload)
-	if err != nil {
-		return p.downstream.Process(ctx, job)
-	}
-
-	enrichedJob := domain.Job{
-		Key:       job.Key,
-		Value:     enrichedValue,
-		Topic:     job.Topic,
-		Partition: job.Partition,
-		Offset:    job.Offset,
-		Headers:   job.Headers,
-		Timestamp: job.Timestamp,
-	}
-
-	return p.downstream.Process(ctx, enrichedJob)
 }
 
 func ExtractGoAST(filePath, content string) (*ASTResult, error) {

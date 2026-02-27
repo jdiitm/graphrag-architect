@@ -463,6 +463,7 @@ def _build_single_hop_cypher() -> str:
         "AND m.degree < $degree_cap "
         "RETURN n.name AS source, type(r) AS rel, "
         "m.name AS target "
+        "ORDER BY m.degree DESC, m.name "
         "LIMIT $hop_limit"
     )
 

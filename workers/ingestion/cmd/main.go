@@ -42,7 +42,7 @@ func validateBlobStoreForProduction(deploymentMode, blobStoreType string) error 
 	if deploymentMode == "production" && blobStoreType != "s3" {
 		return fmt.Errorf(
 			"BLOB_STORE_TYPE=%q is unsafe for DEPLOYMENT_MODE=production; "+
-				"pod restarts will lose all >256KB documents; set BLOB_STORE_TYPE=s3",
+				"pod restarts will lose all >64KB documents; set BLOB_STORE_TYPE=s3",
 			blobStoreType,
 		)
 	}
