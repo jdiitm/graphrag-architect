@@ -221,17 +221,20 @@ class TestGraphBuilderPassesNodeIds:
 
 class TestRedisSubgraphCacheInvalidateByNodes:
 
-    def test_redis_cache_delegates_invalidate_by_nodes_to_l1(self) -> None:
+    @pytest.mark.asyncio
+    async def test_redis_cache_delegates_invalidate_by_nodes_to_l1(self) -> None:
         from orchestrator.app.subgraph_cache import RedisSubgraphCache
 
         mock_redis = AsyncMock()
+        mock_redis.smembers = AsyncMock(return_value=set())
+        mock_redis.delete = AsyncMock()
         with patch("redis.asyncio.from_url", return_value=mock_redis):
             cache = RedisSubgraphCache(redis_url="redis://localhost:6379")
 
         cache._l1.put("q1", [{"svc": "auth"}], node_ids={"node-A"})
         cache._l1.put("q2", [{"svc": "billing"}], node_ids={"node-B"})
 
-        evicted = cache.invalidate_by_nodes({"node-A"})
+        evicted = await cache.invalidate_by_nodes({"node-A"})
 
         assert evicted == 1
         assert cache._l1.get("q1") is None
@@ -324,13 +327,15 @@ class TestRedisSubgraphCachePutForwardsNodeIds:
         from orchestrator.app.subgraph_cache import RedisSubgraphCache
 
         mock_redis = AsyncMock()
+        mock_redis.smembers = AsyncMock(return_value=set())
+        mock_redis.delete = AsyncMock()
         with patch("redis.asyncio.from_url", return_value=mock_redis):
             cache = RedisSubgraphCache(redis_url="redis://localhost:6379")
 
         await cache.put("q1", [{"svc": "auth"}], node_ids={"node-A"})
 
         assert cache._l1.get("q1") == [{"svc": "auth"}]
-        evicted = cache.invalidate_by_nodes({"node-A"})
+        evicted = await cache.invalidate_by_nodes({"node-A"})
         assert evicted == 1
         assert cache._l1.get("q1") is None
 

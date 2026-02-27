@@ -45,8 +45,8 @@ from orchestrator.app.query_templates import (
     match_template,
 )
 from orchestrator.app.subgraph_cache import (
+    cache_key,
     create_subgraph_cache,
-    normalize_cypher,
 )
 from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.vector_store import SearchResult, create_vector_store
@@ -542,9 +542,9 @@ async def _execute_sandboxed_read(
         )
 
     tenant_prefix = str(acl_params.get("tenant_id", ""))
-    raw_key = normalize_cypher(cypher) + "|" + str(sorted(acl_params.items()))
-    cache_key = f"{tenant_prefix}:{raw_key}" if tenant_prefix else raw_key
-    cached = await _cache_get(cache_key)
+    hashed_key = cache_key(cypher, acl_params)
+    full_cache_key = f"{tenant_prefix}:{hashed_key}" if tenant_prefix else hashed_key
+    cached = await _cache_get(full_cache_key)
     if cached is not None:
         return cached
 
@@ -564,7 +564,7 @@ async def _execute_sandboxed_read(
 
     if records:
         await _cache_put(
-            cache_key, records,
+            full_cache_key, records,
             node_ids={r.get("id") or r.get("target_id", "") for r in records} - {""} or None,
         )
     return records

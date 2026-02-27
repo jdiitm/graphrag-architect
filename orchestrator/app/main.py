@@ -126,6 +126,10 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        from orchestrator.app.graph_builder import _BACKGROUND_TASKS
+        drained = await _BACKGROUND_TASKS.drain_all(timeout=10.0)
+        if drained:
+            logger.info("Drained %d background tasks during shutdown", drained)
         if _STATE.get("kafka_consumer") is not None:
             await _STATE["kafka_consumer"].stop()
             if _STATE.get("kafka_task") is not None:
