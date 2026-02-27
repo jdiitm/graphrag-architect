@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from orchestrator.app.circuit_breaker import CircuitOpenError
 from orchestrator.app.cypher_validator import CypherValidationError
 from orchestrator.app.query_models import QueryComplexity
 from orchestrator.tests.conftest import mock_neo4j_driver_with_session
@@ -1075,25 +1076,9 @@ class TestCircuitBreakerWiring:
     @pytest.mark.asyncio
     async def test_llm_synthesize_uses_circuit_breaker(self, base_query_state):
         from orchestrator.app.query_engine import _do_synthesize
-        from orchestrator.app.circuit_breaker import (
-            CircuitBreakerConfig,
-            CircuitBreaker,
-            InMemoryStateStore,
-            TenantCircuitBreakerRegistry,
-        )
 
-        test_cb = CircuitBreaker(
-            CircuitBreakerConfig(failure_threshold=1, recovery_timeout=60.0),
-            store=InMemoryStateStore(),
-            name="test-llm-synth",
-        )
-
-        failing = AsyncMock(side_effect=ConnectionError("llm down"))
-        with pytest.raises(ConnectionError):
-            await test_cb.call(failing)
-
-        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
-        mock_registry.for_tenant = AsyncMock(return_value=test_cb)
+        mock_global = AsyncMock()
+        mock_global.call = AsyncMock(side_effect=CircuitOpenError("open"))
 
         state = _make_state(
             base_query_state,
@@ -1101,7 +1086,7 @@ class TestCircuitBreakerWiring:
         )
 
         with patch(
-            "orchestrator.app.query_engine._CB_LLM_REGISTRY", mock_registry,
+            "orchestrator.app.query_engine._CB_LLM_GLOBAL", mock_global,
         ):
             result = await _do_synthesize(state)
 
@@ -1111,40 +1096,24 @@ class TestCircuitBreakerWiring:
         )
 
     @pytest.mark.asyncio
-    async def test_embedding_cb_registry_exists_at_module_level(self):
-        from orchestrator.app.query_engine import _CB_EMBEDDING_REGISTRY
+    async def test_embedding_global_breaker_exists_at_module_level(self):
+        from orchestrator.app.query_engine import _CB_EMBEDDING_GLOBAL
 
-        from orchestrator.app.circuit_breaker import TenantCircuitBreakerRegistry
+        from orchestrator.app.circuit_breaker import GlobalProviderBreaker
 
-        assert isinstance(_CB_EMBEDDING_REGISTRY, TenantCircuitBreakerRegistry), (
-            "_CB_EMBEDDING_REGISTRY must be a TenantCircuitBreakerRegistry"
+        assert isinstance(_CB_EMBEDDING_GLOBAL, GlobalProviderBreaker), (
+            "_CB_EMBEDDING_GLOBAL must be a GlobalProviderBreaker"
         )
 
     @pytest.mark.asyncio
     async def test_embed_query_returns_none_on_open_circuit(self):
         from orchestrator.app.query_engine import _embed_query
-        from orchestrator.app.circuit_breaker import (
-            CircuitBreakerConfig,
-            CircuitBreaker,
-            InMemoryStateStore,
-            TenantCircuitBreakerRegistry,
-        )
 
-        test_cb = CircuitBreaker(
-            CircuitBreakerConfig(failure_threshold=1, recovery_timeout=60.0),
-            store=InMemoryStateStore(),
-            name="test-embedding",
-        )
-
-        failing = AsyncMock(side_effect=ConnectionError("embedding down"))
-        with pytest.raises(ConnectionError):
-            await test_cb.call(failing)
-
-        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
-        mock_registry.for_tenant = AsyncMock(return_value=test_cb)
+        mock_global = AsyncMock()
+        mock_global.call = AsyncMock(side_effect=CircuitOpenError("open"))
 
         with patch(
-            "orchestrator.app.query_engine._CB_EMBEDDING_REGISTRY", mock_registry,
+            "orchestrator.app.query_engine._CB_EMBEDDING_GLOBAL", mock_global,
         ):
             result = await _embed_query("test query")
 
@@ -1153,13 +1122,13 @@ class TestCircuitBreakerWiring:
         )
 
     @pytest.mark.asyncio
-    async def test_llm_cb_registry_exists_at_module_level(self):
-        from orchestrator.app.query_engine import _CB_LLM_REGISTRY
+    async def test_llm_global_breaker_exists_at_module_level(self):
+        from orchestrator.app.query_engine import _CB_LLM_GLOBAL
 
-        from orchestrator.app.circuit_breaker import TenantCircuitBreakerRegistry
+        from orchestrator.app.circuit_breaker import GlobalProviderBreaker
 
-        assert isinstance(_CB_LLM_REGISTRY, TenantCircuitBreakerRegistry), (
-            "_CB_LLM_REGISTRY must be a TenantCircuitBreakerRegistry at module level"
+        assert isinstance(_CB_LLM_GLOBAL, GlobalProviderBreaker), (
+            "_CB_LLM_GLOBAL must be a GlobalProviderBreaker at module level"
         )
 
     @pytest.mark.asyncio
@@ -1167,25 +1136,9 @@ class TestCircuitBreakerWiring:
         self, base_query_state,
     ):
         from orchestrator.app.query_engine import _do_synthesize
-        from orchestrator.app.circuit_breaker import (
-            CircuitBreakerConfig,
-            CircuitBreaker,
-            InMemoryStateStore,
-            TenantCircuitBreakerRegistry,
-        )
 
-        test_cb = CircuitBreaker(
-            CircuitBreakerConfig(failure_threshold=1, recovery_timeout=60.0),
-            store=InMemoryStateStore(),
-            name="test-llm",
-        )
-
-        failing = AsyncMock(side_effect=ConnectionError("llm down"))
-        with pytest.raises(ConnectionError):
-            await test_cb.call(failing)
-
-        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
-        mock_registry.for_tenant = AsyncMock(return_value=test_cb)
+        mock_global = AsyncMock()
+        mock_global.call = AsyncMock(side_effect=CircuitOpenError("open"))
 
         state = _make_state(
             base_query_state,
@@ -1193,7 +1146,7 @@ class TestCircuitBreakerWiring:
         )
 
         with patch(
-            "orchestrator.app.query_engine._CB_LLM_REGISTRY", mock_registry,
+            "orchestrator.app.query_engine._CB_LLM_GLOBAL", mock_global,
         ):
             result = await _do_synthesize(state)
 

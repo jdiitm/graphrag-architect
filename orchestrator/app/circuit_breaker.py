@@ -14,6 +14,17 @@ except ImportError:  # pragma: no cover
 
 T = TypeVar("T")
 
+_PROVIDER_RATE_LIMIT_PATTERNS = ("429", "rate limit", "resource_exhausted", "quota")
+
+
+def _always_trip(_exc: Exception) -> bool:
+    return True
+
+
+def is_provider_rate_limit(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(p in text for p in _PROVIDER_RATE_LIMIT_PATTERNS)
+
 
 class CircuitState(enum.Enum):
     CLOSED = "closed"
@@ -112,11 +123,13 @@ class CircuitBreaker:
         config: CircuitBreakerConfig,
         store: StateStore | None = None,
         name: str = "default",
+        should_trip: Callable[[Exception], bool] | None = None,
     ) -> None:
         self._config = config
         self._store: StateStore = store or InMemoryStateStore()
         self._name = name
         self._lock: asyncio.Lock | None = None
+        self._should_trip = should_trip or _always_trip
 
     def _get_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -177,12 +190,13 @@ class CircuitBreaker:
 
         try:
             result = await func(*args, **kwargs)
-        except Exception:
-            async with lock:
-                snap = await self._load_snapshot()
-                self._record_failure(snap)
-                await self._store.save(self._name, snap)
-                self._sync_snapshot(snap)
+        except Exception as exc:
+            if self._should_trip(exc):
+                async with lock:
+                    snap = await self._load_snapshot()
+                    self._record_failure(snap)
+                    await self._store.save(self._name, snap)
+                    self._sync_snapshot(snap)
             raise
 
         async with lock:
@@ -250,3 +264,39 @@ class TenantCircuitBreakerRegistry:
             )
             self._breakers[tenant_id] = breaker
             return breaker
+
+
+class GlobalProviderBreaker:
+    def __init__(
+        self,
+        registry: TenantCircuitBreakerRegistry,
+        global_config: CircuitBreakerConfig | None = None,
+    ) -> None:
+        self._registry = registry
+        cfg = global_config or CircuitBreakerConfig(
+            failure_threshold=5,
+            recovery_timeout=60.0,
+            half_open_max_calls=1,
+        )
+        self._global = CircuitBreaker(
+            config=cfg,
+            name="global-provider",
+            should_trip=is_provider_rate_limit,
+        )
+
+    @property
+    def global_state(self) -> CircuitState:
+        return self._global.state
+
+    async def call(
+        self,
+        tenant_id: str,
+        func: Callable[..., Awaitable[T]],
+        *args: Any,
+        **kwargs: Any,
+    ) -> T:
+        async def _guarded() -> T:
+            tenant_breaker = await self._registry.for_tenant(tenant_id)
+            return await tenant_breaker.call(func, *args, **kwargs)
+
+        return await self._global.call(_guarded)
