@@ -384,6 +384,44 @@ class FakeRedis:
     async def delete(self, name: str) -> None:
         self._hashes.pop(name, None)
 
+    async def eval(
+        self,
+        script: str,
+        numkeys: int,
+        *args: Any,
+    ) -> list:
+        index_key = args[0]
+        worker_id = args[1]
+        limit = int(args[2])
+        lease_seconds = float(args[3])
+        now = float(args[4])
+        prefix = args[5]
+        event_ids = list(self._sets.get(index_key, set()))
+        claimed: List[str] = []
+        for eid in event_ids:
+            if len(claimed) >= limit:
+                break
+            key = prefix + eid
+            data = self._hashes.get(key)
+            if data is None:
+                if index_key in self._sets:
+                    self._sets[index_key].discard(eid)
+                continue
+            status = data.get("status", "pending")
+            if status == "pending":
+                data["status"] = "claimed"
+                data["claimed_by"] = worker_id
+                data["lease_expires_at"] = str(now + lease_seconds)
+                claimed.append(eid)
+            elif status == "claimed":
+                expires = float(data.get("lease_expires_at", "0"))
+                if expires <= now:
+                    data["status"] = "claimed"
+                    data["claimed_by"] = worker_id
+                    data["lease_expires_at"] = str(now + lease_seconds)
+                    claimed.append(eid)
+        return claimed
+
 
 class TestRedisOutboxStoreUpsertRoundTrip:
 
@@ -578,6 +616,45 @@ class ClaimableFakeRedis(FakeRedis):
             self._hashes[name].update(mapping)
         if key is not None and value is not None:
             self._hashes[name][key] = str(value)
+
+    async def eval(
+        self,
+        script: str,
+        numkeys: int,
+        *args: Any,
+    ) -> list:
+        import time as _time
+        index_key = args[0]
+        worker_id = args[1]
+        limit = int(args[2])
+        lease_seconds = float(args[3])
+        now = float(args[4])
+        prefix = args[5]
+        event_ids = list(self._sets.get(index_key, set()))
+        claimed: List[str] = []
+        for eid in event_ids:
+            if len(claimed) >= limit:
+                break
+            key = prefix + eid
+            data = self._hashes.get(key)
+            if data is None:
+                if index_key in self._sets:
+                    self._sets[index_key].discard(eid)
+                continue
+            status = data.get("status", "pending")
+            if status == "pending":
+                data["status"] = "claimed"
+                data["claimed_by"] = worker_id
+                data["lease_expires_at"] = str(now + lease_seconds)
+                claimed.append(eid)
+            elif status == "claimed":
+                expires = float(data.get("lease_expires_at", "0"))
+                if expires <= now:
+                    data["status"] = "claimed"
+                    data["claimed_by"] = worker_id
+                    data["lease_expires_at"] = str(now + lease_seconds)
+                    claimed.append(eid)
+        return claimed
 
 
 class TestRedisOutboxStoreClaimPending:

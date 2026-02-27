@@ -413,40 +413,26 @@ class RedisSemanticQueryCache:
         acl_key: str = "",
     ) -> Optional[Dict[str, Any]]:
         try:
-            cursor = None
-            pattern = f"{self._prefix}*"
-            threshold = self._l1.similarity_threshold
-            best_result: Optional[Dict[str, Any]] = None
-            best_sim = 0.0
-
-            while cursor != 0:
-                cursor, keys = await self._redis.scan(
-                    cursor=cursor or 0, match=pattern, count=100,
-                )
-                for key in keys:
-                    raw = await self._redis.get(key)
-                    if raw is None:
-                        continue
-                    entry = json.loads(raw)
-                    if tenant_id and entry.get("tenant_id") and entry["tenant_id"] != tenant_id:
-                        continue
-                    if entry.get("acl_key", "") != acl_key:
-                        continue
-                    stored_emb = entry.get("embedding", [])
-                    sim = _vectorized_cosine_similarity(query_embedding[:32], stored_emb)
-                    if sim >= threshold and sim > best_sim:
-                        best_sim = sim
-                        best_result = entry.get("result")
-
-            if best_result is not None:
+            key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+            redis_key = f"{self._prefix}{key_hash}"
+            raw = await self._redis.get(redis_key)
+            if raw is None:
+                return None
+            entry = json.loads(raw)
+            if tenant_id and entry.get("tenant_id") and entry["tenant_id"] != tenant_id:
+                return None
+            if entry.get("acl_key", "") != acl_key:
+                return None
+            result = entry.get("result")
+            if result is not None:
                 self._l1.store(
-                    query=best_result.get("query", ""),
+                    query=entry.get("query", ""),
                     query_embedding=query_embedding,
-                    result=best_result,
+                    result=result,
                     tenant_id=tenant_id,
                     acl_key=acl_key,
                 )
-            return best_result
+            return result
         except Exception:
             logger.warning("Redis semantic cache L2 lookup failed (non-fatal)")
             return None

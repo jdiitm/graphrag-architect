@@ -115,19 +115,53 @@ class OutboxDrainer:
 
 
 class RedisOutboxStore:
-    """Redis-backed outbox store with lease-based claiming.
+    """Redis-backed outbox store with atomic lease-based claiming.
 
-    Limitation: ``claim_pending`` uses non-atomic read-check-set across
-    multiple Redis round-trips.  In a concurrent async context, two
-    coroutines can interleave at ``await`` boundaries and both claim the
-    same event.  For single-worker deployments this is acceptable.
-    Production multi-worker deployments should replace the claim logic
-    with a Redis Lua script (``EVALSHA``) or ``WATCH``/``MULTI``
-    transaction to make the read-check-claim atomic per event.
+    ``claim_pending`` uses a Lua script executed via ``EVAL`` to
+    atomically read, check status, and claim events in a single
+    Redis round-trip.  This prevents duplicate claims across
+    concurrent workers.
     """
 
     _KEY_PREFIX = "graphrag:vecoutbox:"
     _INDEX_KEY = "graphrag:vecoutbox:pending"
+
+    _CLAIM_LUA_SCRIPT = """
+local index_key = KEYS[1]
+local worker_id = ARGV[1]
+local limit = tonumber(ARGV[2])
+local lease_seconds = tonumber(ARGV[3])
+local now = tonumber(ARGV[4])
+local prefix = ARGV[5]
+
+local event_ids = redis.call('SMEMBERS', index_key)
+local claimed = {}
+
+for _, eid in ipairs(event_ids) do
+    if #claimed >= limit then break end
+    local key = prefix .. eid
+    local status = redis.call('HGET', key, 'status')
+    if status == false then
+        redis.call('SREM', index_key, eid)
+    elseif status == 'pending' then
+        redis.call('HSET', key, 'status', 'claimed')
+        redis.call('HSET', key, 'claimed_by', worker_id)
+        redis.call('HSET', key, 'lease_expires_at', tostring(now + lease_seconds))
+        table.insert(claimed, eid)
+    elseif status == 'claimed' then
+        local raw_expires = redis.call('HGET', key, 'lease_expires_at')
+        local expires = tonumber(raw_expires or '0')
+        if expires <= now then
+            redis.call('HSET', key, 'status', 'claimed')
+            redis.call('HSET', key, 'claimed_by', worker_id)
+            redis.call('HSET', key, 'lease_expires_at', tostring(now + lease_seconds))
+            table.insert(claimed, eid)
+        end
+    end
+end
+
+return claimed
+"""
 
     def __init__(self, redis_conn: Any) -> None:
         self._redis = redis_conn
@@ -197,35 +231,25 @@ class RedisOutboxStore:
     async def claim_pending(
         self, worker_id: str, limit: int, lease_seconds: float,
     ) -> List[VectorSyncEvent]:
-        event_ids = await self._redis.smembers(self._INDEX_KEY)
-        claimed: List[VectorSyncEvent] = []
         now = time.time()
-        for eid in event_ids:
-            if len(claimed) >= limit:
-                break
-            data = await self._redis.hgetall(self._event_key(eid))
+        claimed_ids = await self._redis.eval(
+            self._CLAIM_LUA_SCRIPT,
+            1,
+            self._INDEX_KEY,
+            worker_id,
+            str(limit),
+            str(lease_seconds),
+            str(now),
+            self._KEY_PREFIX,
+        )
+        if not claimed_ids:
+            return []
+        claimed: List[VectorSyncEvent] = []
+        for eid in claimed_ids:
+            eid_str = eid.decode() if isinstance(eid, bytes) else str(eid)
+            data = await self._redis.hgetall(self._event_key(eid_str))
             if not data:
-                await self._redis.srem(self._INDEX_KEY, eid)
                 continue
-            status = data.get("status", "pending")
-            if status in ("completed", "claimed"):
-                if status == "claimed":
-                    expires = float(data.get("lease_expires_at", "0"))
-                    if expires > now:
-                        continue
-                else:
-                    continue
-            await self._redis.hset(
-                self._event_key(eid), key="status", value="claimed",
-            )
-            await self._redis.hset(
-                self._event_key(eid), key="claimed_by", value=worker_id,
-            )
-            await self._redis.hset(
-                self._event_key(eid),
-                key="lease_expires_at",
-                value=str(now + lease_seconds),
-            )
             claimed.append(VectorSyncEvent(
                 event_id=data["event_id"],
                 collection=data["collection"],

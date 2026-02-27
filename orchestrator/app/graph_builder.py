@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import logging
 import os
 import time
@@ -57,6 +58,18 @@ from orchestrator.app.distributed_lock import (
 )
 
 _VECTOR_COLLECTION = "services"
+
+_PROCESS_POOL: Optional[concurrent.futures.ProcessPoolExecutor] = None
+_PROCESS_POOL_MAX_WORKERS = int(os.environ.get("AST_POOL_WORKERS", "4"))
+
+
+def _get_process_pool() -> concurrent.futures.ProcessPoolExecutor:
+    global _PROCESS_POOL
+    if _PROCESS_POOL is None:
+        _PROCESS_POOL = concurrent.futures.ProcessPoolExecutor(
+            max_workers=_PROCESS_POOL_MAX_WORKERS,
+        )
+    return _PROCESS_POOL
 
 
 class IngestRejectionError(RuntimeError):
@@ -289,8 +302,9 @@ async def parse_source_ast(state: IngestionState) -> dict:
         raw_files = state.get("raw_files", [])
         checkpoint = _load_or_create_checkpoint(state, raw_files)
         pending = checkpoint.filter_files(raw_files, FileStatus.PENDING)
-        go_result, py_result = await asyncio.to_thread(
-            _run_ast_extraction, pending,
+        loop = asyncio.get_running_loop()
+        go_result, py_result = await loop.run_in_executor(
+            _get_process_pool(), _run_ast_extraction, pending,
         )
         extracted_paths = (
             [f["path"] for f in pending if f["path"].endswith(".go")]

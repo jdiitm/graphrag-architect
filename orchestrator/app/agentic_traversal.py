@@ -93,7 +93,7 @@ _SAMPLED_NEIGHBOR_TEMPLATE = (
     "RETURN target.id AS target_id, target.name AS target_name, "
     "type(r) AS rel_type, labels(target)[0] AS target_label "
     "ORDER BY coalesce(target.pagerank, 0) DESC, "
-    "coalesce(target.degree, 0) DESC, rand() "
+    "coalesce(target.degree, 0) DESC, target.id "
     "LIMIT $sample_size"
 )
 
@@ -109,6 +109,27 @@ _BATCHED_NEIGHBOR_TEMPLATE = (
     "target.name AS target_name, type(r) AS rel_type, "
     "labels(target)[0] AS target_label "
     "LIMIT $limit"
+)
+
+_NEIGHBOR_DISCOVERY_NO_ACL = (
+    "MATCH (source {id: $source_id, tenant_id: $tenant_id})"
+    "-[r]->(target) "
+    "WHERE target.tenant_id = $tenant_id "
+    "AND r.tombstoned_at IS NULL "
+    "RETURN target.id AS target_id, target.name AS target_name, "
+    "type(r) AS rel_type, labels(target)[0] AS target_label "
+    "LIMIT $limit"
+)
+
+_SAMPLED_NEIGHBOR_NO_ACL = (
+    "MATCH (source {id: $source_id, tenant_id: $tenant_id})"
+    "-[r]->(target) "
+    "WHERE target.tenant_id = $tenant_id AND r.tombstoned_at IS NULL "
+    "RETURN target.id AS target_id, target.name AS target_name, "
+    "type(r) AS rel_type, labels(target)[0] AS target_label "
+    "ORDER BY coalesce(target.pagerank, 0) DESC, "
+    "coalesce(target.degree, 0) DESC, target.id "
+    "LIMIT $sample_size"
 )
 
 _BOUNDED_PATH_TEMPLATE = (
@@ -249,7 +270,9 @@ async def _run_sampled_query(
     acl_params: Dict[str, Any],
     sample_size: int,
     timeout: float,
+    template: str = "",
 ) -> List[Dict[str, Any]]:
+    effective_template = template or _SAMPLED_NEIGHBOR_TEMPLATE
     params = {
         "source_id": source_id,
         "tenant_id": tenant_id,
@@ -258,7 +281,7 @@ async def _run_sampled_query(
     }
 
     async def _sample_tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
-        result = await tx.run(_SAMPLED_NEIGHBOR_TEMPLATE, **params)
+        result = await tx.run(effective_template, **params)
         return await result.data()
 
     return await session.execute_read(_sample_tx, timeout=timeout)
@@ -273,12 +296,22 @@ async def execute_hop(
     limit: int = 50,
     max_degree: int = MAX_NODE_DEGREE,
     sample_size: int = 50,
+    skip_acl: bool = False,
 ) -> List[Dict[str, Any]]:
     degree_params = {"source_id": source_id, "tenant_id": tenant_id}
 
     async def _degree_tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
         result = await tx.run(_DEGREE_CHECK_QUERY, **degree_params)
         return await result.data()
+
+    neighbor_template = (
+        _NEIGHBOR_DISCOVERY_NO_ACL if skip_acl
+        else _NEIGHBOR_DISCOVERY_TEMPLATE
+    )
+    sampled_template = (
+        _SAMPLED_NEIGHBOR_NO_ACL if skip_acl
+        else _SAMPLED_NEIGHBOR_TEMPLATE
+    )
 
     async with driver.session() as session:
         degree_result = await session.execute_read(_degree_tx, timeout=timeout)
@@ -290,7 +323,8 @@ async def execute_hop(
                     source_id, degree, max_degree, sample_size,
                 )
                 return await _run_sampled_query(
-                    session, source_id, tenant_id, acl_params, sample_size, timeout,
+                    session, source_id, tenant_id, acl_params,
+                    sample_size, timeout, template=sampled_template,
                 )
 
         params = {
@@ -301,7 +335,7 @@ async def execute_hop(
         }
 
         async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
-            result = await tx.run(_NEIGHBOR_DISCOVERY_TEMPLATE, **params)
+            result = await tx.run(neighbor_template, **params)
             return await result.data()
 
         return await session.execute_read(_tx, timeout=timeout)

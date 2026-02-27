@@ -85,8 +85,9 @@ class TestNormalNodeUnchanged:
 
 
 class TestSampledNeighborTemplateExists:
-    def test_template_includes_rand_ordering(self) -> None:
-        assert "rand()" in _SAMPLED_NEIGHBOR_TEMPLATE
+    def test_template_includes_deterministic_ordering(self) -> None:
+        assert "target.id" in _SAMPLED_NEIGHBOR_TEMPLATE
+        assert "rand()" not in _SAMPLED_NEIGHBOR_TEMPLATE
         assert "$sample_size" in _SAMPLED_NEIGHBOR_TEMPLATE
 
     def test_template_includes_acl_filtering(self) -> None:
