@@ -15,6 +15,7 @@ from orchestrator.app.semantic_cache import (
     _cosine_similarity,
     _embedding_hash,
     _vectorized_cosine_similarity,
+    compute_adaptive_threshold,
 )
 
 
@@ -521,3 +522,189 @@ class TestRedisSemanticCacheNodetagTTL:
         assert f"{prefix}nodetag:n1" in expired_keys
         assert f"{prefix}nodetag:n2" in expired_keys
         assert expired_ttls == {ttl}
+
+
+def _unit_vector(dim: int, index: int) -> list[float]:
+    v = [0.0] * dim
+    v[index] = 1.0
+    return v
+
+
+def _perturbed_vector(base: list[float], noise: float) -> list[float]:
+    import math
+    result = [b + noise * (0.01 * i) for i, b in enumerate(base)]
+    norm = math.sqrt(sum(x * x for x in result))
+    return [x / norm for x in result] if norm > 0 else result
+
+
+class TestComputeAdaptiveThreshold:
+
+    def test_no_second_neighbor_returns_base_threshold(self) -> None:
+        result = compute_adaptive_threshold(
+            best_sim=0.95,
+            second_sim=None,
+            base_threshold=0.92,
+            min_threshold=0.85,
+            max_threshold=0.98,
+            density_sensitivity=0.15,
+        )
+        assert result == pytest.approx(0.92)
+
+    def test_wide_margin_lowers_toward_min(self) -> None:
+        result = compute_adaptive_threshold(
+            best_sim=0.96,
+            second_sim=0.30,
+            base_threshold=0.92,
+            min_threshold=0.85,
+            max_threshold=0.98,
+            density_sensitivity=0.15,
+        )
+        assert result < 0.92
+        assert result >= 0.85
+
+    def test_tight_margin_raises_toward_max(self) -> None:
+        result = compute_adaptive_threshold(
+            best_sim=0.95,
+            second_sim=0.94,
+            base_threshold=0.92,
+            min_threshold=0.85,
+            max_threshold=0.98,
+            density_sensitivity=0.15,
+        )
+        assert result > 0.92
+        assert result <= 0.98
+
+    def test_never_exceeds_max_threshold(self) -> None:
+        result = compute_adaptive_threshold(
+            best_sim=0.99,
+            second_sim=0.99,
+            base_threshold=0.92,
+            min_threshold=0.85,
+            max_threshold=0.98,
+            density_sensitivity=1.0,
+        )
+        assert result <= 0.98
+
+    def test_never_drops_below_min_threshold(self) -> None:
+        result = compute_adaptive_threshold(
+            best_sim=0.99,
+            second_sim=0.01,
+            base_threshold=0.92,
+            min_threshold=0.85,
+            max_threshold=0.98,
+            density_sensitivity=1.0,
+        )
+        assert result >= 0.85
+
+
+class TestAdaptiveSemanticCacheLookup:
+
+    def test_backward_compat_static_mode(self) -> None:
+        config = CacheConfig(similarity_threshold=0.9)
+        cache = SemanticQueryCache(config=config)
+        embedding = [1.0, 0.0, 0.0]
+        cache.store("q", embedding, {"answer": "static"})
+        result = cache.lookup(embedding)
+        assert result == {"answer": "static"}
+
+    def test_adaptive_enabled_still_hits_identical(self) -> None:
+        config = CacheConfig(
+            similarity_threshold=0.92,
+            adaptive_threshold=True,
+            min_threshold=0.85,
+            max_threshold=0.98,
+            density_sensitivity=0.15,
+        )
+        cache = SemanticQueryCache(config=config)
+        embedding = [1.0, 0.0, 0.0]
+        cache.store("q", embedding, {"answer": "adaptive"})
+        result = cache.lookup(embedding)
+        assert result == {"answer": "adaptive"}
+
+    def test_adaptive_dense_region_rejects_marginal_hit(self) -> None:
+        import math
+
+        config = CacheConfig(
+            similarity_threshold=0.90,
+            adaptive_threshold=True,
+            min_threshold=0.85,
+            max_threshold=0.98,
+            density_sensitivity=0.20,
+        )
+        cache = SemanticQueryCache(config=config)
+
+        def _normalize(v: list[float]) -> list[float]:
+            n = math.sqrt(sum(x * x for x in v))
+            return [x / n for x in v] if n > 0 else v
+
+        entry_a = _normalize([0.90, 0.44, 0.0])
+        entry_b = _normalize([0.90, 0.0, 0.44])
+        entry_c = _normalize([0.85, 0.37, 0.37])
+
+        cache.store("qa", entry_a, {"a": "A"})
+        cache.store("qb", entry_b, {"a": "B"})
+        cache.store("qc", entry_c, {"a": "C"})
+
+        query = _normalize([0.95, 0.25, 0.19])
+
+        sims = sorted([
+            _cosine_similarity(query, entry_a),
+            _cosine_similarity(query, entry_b),
+            _cosine_similarity(query, entry_c),
+        ], reverse=True)
+        margin = sims[0] - sims[1]
+        assert margin < 0.10
+
+        static_cache = SemanticQueryCache(
+            config=CacheConfig(similarity_threshold=0.90),
+        )
+        for key in cache._entries:
+            entry = cache._entries[key]
+            static_cache.store(entry.query, entry.embedding, entry.result)
+
+        static_result = static_cache.lookup(query)
+        adaptive_result = cache.lookup(query)
+        assert static_result is not None
+        assert adaptive_result is None
+
+    def test_adaptive_sparse_region_accepts_looser_match(self) -> None:
+        config = CacheConfig(
+            similarity_threshold=0.95,
+            adaptive_threshold=True,
+            min_threshold=0.85,
+            max_threshold=0.98,
+            density_sensitivity=0.15,
+        )
+        cache = SemanticQueryCache(config=config)
+        cache.store("q1", _unit_vector(8, 0), {"a": 1})
+        cache.store("q2", _unit_vector(8, 7), {"a": 2})
+
+        query = [0.93, 0.37, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        import math
+        norm = math.sqrt(sum(x * x for x in query))
+        query = [x / norm for x in query]
+
+        sim_to_stored = _cosine_similarity(query, _unit_vector(8, 0))
+        assert sim_to_stored < 0.95
+        assert sim_to_stored >= 0.85
+
+        result = cache.lookup(query)
+        assert result == {"a": 1}
+
+    def test_adaptive_single_entry_uses_base_threshold(self) -> None:
+        config = CacheConfig(
+            similarity_threshold=0.92,
+            adaptive_threshold=True,
+            min_threshold=0.85,
+            max_threshold=0.98,
+            density_sensitivity=0.15,
+        )
+        cache = SemanticQueryCache(config=config)
+        cache.store("q1", [1.0, 0.0, 0.0], {"a": 1})
+
+        result = cache.lookup([0.999, 0.01, 0.0])
+        assert result == {"a": 1}
+
+        dissimilar = [0.7, 0.7, 0.1]
+        result_miss = cache.lookup(dissimilar)
+        assert result_miss is None

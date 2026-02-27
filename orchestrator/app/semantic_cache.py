@@ -28,6 +28,29 @@ class CacheConfig:
     default_ttl_seconds: float = 300.0
     max_entries: int = 1024
     ttl_by_complexity: Optional[Dict[str, float]] = None
+    adaptive_threshold: bool = False
+    min_threshold: float = 0.85
+    max_threshold: float = 0.98
+    density_sensitivity: float = 0.15
+
+
+_NEUTRAL_MARGIN = 0.5
+
+
+def compute_adaptive_threshold(
+    best_sim: float,
+    second_sim: Optional[float],
+    base_threshold: float,
+    min_threshold: float,
+    max_threshold: float,
+    density_sensitivity: float,
+) -> float:
+    if second_sim is None:
+        return base_threshold
+    margin = best_sim - second_sim
+    adjustment = density_sensitivity * (_NEUTRAL_MARGIN - margin)
+    effective = base_threshold + adjustment
+    return max(min_threshold, min(max_threshold, effective))
 
 
 @dataclass
@@ -176,22 +199,46 @@ class SemanticQueryCache:
         tenant_id: str = "",
     ) -> Optional[Dict[str, Any]]:
         self._evict_expired()
+        best_sim = -1.0
+        second_sim = -1.0
         best_entry: Optional[CacheEntry] = None
-        best_sim = 0.0
+        tenant_entry_count = 0
 
         for entry in self._entries.values():
             if entry.tenant_id != tenant_id:
                 continue
+            tenant_entry_count += 1
             sim = _vectorized_cosine_similarity(query_embedding, entry.embedding)
-            if sim >= self._config.similarity_threshold and sim > best_sim:
+            if sim > best_sim:
+                second_sim = best_sim
                 best_sim = sim
                 best_entry = entry
+            elif sim > second_sim:
+                second_sim = sim
 
-        if best_entry is not None:
+        if best_entry is None:
+            self._misses += 1
+            return None
+
+        if self._config.adaptive_threshold:
+            has_second = tenant_entry_count >= 2
+            effective_threshold = compute_adaptive_threshold(
+                best_sim=best_sim,
+                second_sim=second_sim if has_second else None,
+                base_threshold=self._config.similarity_threshold,
+                min_threshold=self._config.min_threshold,
+                max_threshold=self._config.max_threshold,
+                density_sensitivity=self._config.density_sensitivity,
+            )
+        else:
+            effective_threshold = self._config.similarity_threshold
+
+        if best_sim >= effective_threshold:
             best_entry.access_count += 1
             self._hits += 1
             logger.debug(
-                "Cache hit: query=%r similarity=%.4f", best_entry.query, best_sim,
+                "Cache hit: query=%r similarity=%.4f threshold=%.4f",
+                best_entry.query, best_sim, effective_threshold,
             )
             return best_entry.result
 
