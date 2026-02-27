@@ -374,7 +374,7 @@ class TestQdrantDeleteTenantCompoundFilter:
         removed = await store.delete("coll", ["id1", "id2", "id3"], tenant_id="t-a")
         assert removed == 1, "Should return actual count (1), not len(ids) (3)"
 
-    async def test_qdrant_delete_with_tenant_uses_compound_filter(self) -> None:
+    async def test_qdrant_delete_compound_filter_structure(self) -> None:
         store = QdrantVectorStore(url="http://localhost:6333")
         mock_client = AsyncMock()
         mock_count_result = MagicMock()
@@ -391,8 +391,9 @@ class TestQdrantDeleteTenantCompoundFilter:
         field_conds = [c for c in selector.must if hasattr(c, "key")]
         assert len(has_id_conds) == 1
         assert len(field_conds) == 1
+        assert set(has_id_conds[0].has_id) == {"id1", "id2"}
 
-    async def test_qdrant_delete_with_tenant_returns_actual_count(self) -> None:
+    async def test_qdrant_delete_count_matches_server(self) -> None:
         store = QdrantVectorStore(url="http://localhost:6333")
         mock_client = AsyncMock()
         mock_count_result = MagicMock()
