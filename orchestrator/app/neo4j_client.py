@@ -280,6 +280,21 @@ def _chunk_list(
 
 DEFAULT_WRITE_CONCURRENCY = 4
 
+_IDENTITY_ATTRS = (
+    "id", "name", "source_service_id", "target_service_id",
+    "service_id", "deployment_id", "topic_name",
+)
+
+
+def _collect_affected_node_ids(entities: List[Any]) -> List[str]:
+    ids: set[str] = set()
+    for entity in entities:
+        for attr in _IDENTITY_ATTRS:
+            val = getattr(entity, attr, None)
+            if val:
+                ids.add(val)
+    return sorted(ids)
+
 
 class GraphRepository:
     def __init__(
@@ -335,7 +350,19 @@ class GraphRepository:
         entities = _sort_entities_for_write(entities)
         entities = compute_hashes(entities)
         nodes, edges = _partition_entities(entities)
-        await self._cb.call(self._execute_batched_commit, nodes, edges)
+        affected_ids = _collect_affected_node_ids(entities)
+        await self._cb.call(
+            self._commit_and_refresh, nodes, edges, affected_ids,
+        )
+
+    async def _commit_and_refresh(
+        self,
+        nodes: List[Any],
+        edges: List[Any],
+        affected_ids: List[str],
+    ) -> None:
+        await self._execute_batched_commit(nodes, edges)
+        await self._refresh_degree_property(affected_ids)
 
     async def _execute_batched_commit(
         self, nodes: List[Any], edges: List[Any],
@@ -361,6 +388,24 @@ class GraphRepository:
                 _guarded_write(et, recs)
                 for et, recs in edge_groups.items()
             ))
+
+    async def _refresh_degree_property(
+        self, affected_ids: List[str],
+    ) -> None:
+        if not affected_ids:
+            return
+        degree_cypher = (
+            "MATCH (n) WHERE (n:Service OR n:Database "
+            "OR n:KafkaTopic OR n:K8sDeployment) "
+            "AND (n.id IN $ids OR n.name IN $ids) "
+            "SET n.degree = size((n)--())"
+        )
+
+        async def _tx(tx: AsyncManagedTransaction) -> None:
+            await tx.run(degree_cypher, ids=affected_ids)
+
+        async with self._write_session() as session:
+            await session.execute_write(_tx)
 
     async def _write_batches(
         self,

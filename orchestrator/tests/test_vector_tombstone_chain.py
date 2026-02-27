@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -129,6 +130,9 @@ class TestVectorStoreCleanupOnPrune:
             ),
         ):
             result = await commit_to_neo4j({"extracted_nodes": entities})
+            from orchestrator.app.graph_builder import _BACKGROUND_TASKS
+            if _BACKGROUND_TASKS:
+                await asyncio.gather(*_BACKGROUND_TASKS)
 
         assert result["commit_status"] == "success"
         assert len(vector_delete_calls) >= 1, (

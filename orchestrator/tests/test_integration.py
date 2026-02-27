@@ -31,7 +31,7 @@ class TestGraphRepositoryWithCircuitBreaker:
             ),
         ]
         await repo.commit_topology(entities)
-        mock_session.execute_write.assert_awaited_once()
+        assert mock_session.execute_write.await_count == 2
 
     @pytest.mark.asyncio
     async def test_circuit_opens_after_repeated_failures(self):

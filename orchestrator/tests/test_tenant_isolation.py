@@ -140,7 +140,10 @@ class TestTenantAwarePoolIntegration:
         assert cfg.database_name == "neo4j"
 
     def test_pool_resolves_database_for_tenant(self) -> None:
-        from orchestrator.app.neo4j_pool import resolve_database_for_tenant
+        from orchestrator.app.neo4j_pool import (
+            UnknownTenantError,
+            resolve_database_for_tenant,
+        )
 
         registry = TenantRegistry()
         registry.register(TenantConfig(
@@ -149,7 +152,8 @@ class TestTenantAwarePoolIntegration:
             database_name="acme_db",
         ))
         assert resolve_database_for_tenant(registry, "acme") == "acme_db"
-        assert resolve_database_for_tenant(registry, "unknown") == "neo4j"
+        with pytest.raises(UnknownTenantError):
+            resolve_database_for_tenant(registry, "unknown")
 
     def test_pool_resolves_default_to_default_db(self) -> None:
         from orchestrator.app.neo4j_pool import resolve_database_for_tenant
