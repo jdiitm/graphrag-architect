@@ -111,6 +111,24 @@ def get_vector_store() -> Any:
     return _VectorStoreHolder.value
 
 
+class _RedisHolder:
+    value: Any = None
+
+
+def _get_redis_conn() -> Any:
+    if _RedisHolder.value is not None:
+        return _RedisHolder.value
+    from orchestrator.app.config import RedisConfig
+    redis_cfg = RedisConfig.from_env()
+    if not redis_cfg.url:
+        return None
+    from orchestrator.app.redis_client import create_async_redis
+    _RedisHolder.value = create_async_redis(
+        redis_cfg.url, password=redis_cfg.password, db=redis_cfg.db,
+    )
+    return _RedisHolder.value
+
+
 async def invalidate_caches_after_ingest(tenant_id: str = "") -> None:
     if not tenant_id:
         raise IngestRejectionError(
@@ -433,21 +451,35 @@ def _enqueue_vector_cleanup(
 
 
 async def drain_vector_outbox() -> int:
-    from orchestrator.app.config import RedisConfig
     vs = get_vector_store()
-    redis_cfg = RedisConfig.from_env()
-    redis_conn: Any = None
-    if redis_cfg.url:
-        from orchestrator.app.redis_client import create_async_redis
-        redis_conn = create_async_redis(
-            redis_cfg.url, password=redis_cfg.password, db=redis_cfg.db,
-        )
+    redis_conn = _get_redis_conn()
     drainer = create_outbox_drainer(redis_conn=redis_conn, vector_store=vs)
     return await drainer.process_once()
 
 
 def _get_sink_batch_size() -> int:
     return IngestionConfig.from_env().sink_batch_size
+
+
+async def _post_commit_side_effects(
+    repo: GraphRepository,
+    ingestion_id: str,
+    tenant_id: str,
+    span: Any,
+) -> None:
+    try:
+        pruned_count, pruned_ids = await repo.prune_stale_edges(ingestion_id)
+        span.set_attribute("edges_pruned", pruned_count)
+        _enqueue_vector_cleanup(pruned_ids, span, tenant_id=tenant_id)
+        await drain_vector_outbox()
+    except Exception as prune_exc:
+        logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
+    try:
+        await invalidate_caches_after_ingest(tenant_id=tenant_id)
+    except IngestRejectionError as rej_exc:
+        logger.warning(
+            "Cache invalidation rejected (non-fatal): %s", rej_exc,
+        )
 
 
 async def commit_to_neo4j(state: IngestionState) -> dict:
@@ -473,21 +505,9 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
             span.set_attribute("flush_count", sink.flush_count)
             span.set_attribute("ingestion_id", ingestion_id)
             tenant_id = state.get("tenant_id", "")
-            try:
-                pruned_count, pruned_ids = await repo.prune_stale_edges(
-                    ingestion_id,
-                )
-                span.set_attribute("edges_pruned", pruned_count)
-                _enqueue_vector_cleanup(pruned_ids, span, tenant_id=tenant_id)
-                await drain_vector_outbox()
-            except Exception as prune_exc:
-                logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
-            try:
-                await invalidate_caches_after_ingest(tenant_id=tenant_id)
-            except IngestRejectionError as rej_exc:
-                logger.warning(
-                    "Cache invalidation rejected (non-fatal): %s", rej_exc,
-                )
+            await _post_commit_side_effects(
+                repo, ingestion_id, tenant_id, span,
+            )
             return {"commit_status": "success", "completion_tracked": True}
         except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:
             span.set_status(StatusCode.ERROR, str(exc))
