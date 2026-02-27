@@ -19,6 +19,7 @@ from orchestrator.app.access_control import (
 from orchestrator.app.circuit_breaker import (
     CircuitBreakerConfig,
     CircuitOpenError,
+    GlobalProviderBreaker,
     TenantCircuitBreakerRegistry,
 )
 from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfig, RAGEvalConfig
@@ -89,13 +90,22 @@ _VECTOR_STORE = create_vector_store(
 
 _VECTOR_COLLECTION = "service_embeddings"
 
-_CB_LLM_REGISTRY = TenantCircuitBreakerRegistry(
-    config=CircuitBreakerConfig(failure_threshold=3, recovery_timeout=30.0),
-    name_prefix="llm-synthesize",
+_GLOBAL_CB_CFG = CircuitBreakerConfig(
+    failure_threshold=5, recovery_timeout=60.0, half_open_max_calls=1,
 )
-_CB_EMBEDDING_REGISTRY = TenantCircuitBreakerRegistry(
-    config=CircuitBreakerConfig(failure_threshold=5, recovery_timeout=20.0),
-    name_prefix="embedding",
+_CB_LLM_GLOBAL = GlobalProviderBreaker(
+    registry=TenantCircuitBreakerRegistry(
+        config=CircuitBreakerConfig(failure_threshold=3, recovery_timeout=30.0),
+        name_prefix="llm-synthesize",
+    ),
+    global_config=_GLOBAL_CB_CFG,
+)
+_CB_EMBEDDING_GLOBAL = GlobalProviderBreaker(
+    registry=TenantCircuitBreakerRegistry(
+        config=CircuitBreakerConfig(failure_threshold=5, recovery_timeout=20.0),
+        name_prefix="embedding",
+    ),
+    global_config=_GLOBAL_CB_CFG,
 )
 
 
@@ -150,9 +160,8 @@ async def _raw_embed_query(text: str) -> Optional[List[float]]:
 
 
 async def _embed_query(text: str, tenant_id: str = "") -> Optional[List[float]]:
-    breaker = await _CB_EMBEDDING_REGISTRY.for_tenant(tenant_id)
     try:
-        return await breaker.call(_raw_embed_query, text)
+        return await _CB_EMBEDDING_GLOBAL.call(tenant_id, _raw_embed_query, text)
     except CircuitOpenError:
         _query_logger.warning("Embedding circuit open, falling back to fulltext")
         EMBEDDING_FALLBACK_TOTAL.add(1, {"reason": "circuit_open"})
@@ -332,9 +341,10 @@ async def _llm_synthesize(
     context: List[Dict[str, Any]],
     tenant_id: str = "",
 ) -> str:
-    breaker = await _CB_LLM_REGISTRY.for_tenant(tenant_id)
     try:
-        return await breaker.call(_raw_llm_synthesize, query, context)
+        return await _CB_LLM_GLOBAL.call(
+            tenant_id, _raw_llm_synthesize, query, context,
+        )
     except CircuitOpenError:
         _query_logger.warning("LLM circuit open, returning degraded response")
         return (

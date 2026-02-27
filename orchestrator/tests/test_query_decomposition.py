@@ -57,7 +57,7 @@ class TestBackwardCompatImports:
             _execute_sandboxed_read,
             _SUBGRAPH_CACHE,
             _SEMANTIC_CACHE,
-            _CB_EMBEDDING_REGISTRY,
+            _CB_EMBEDDING_GLOBAL,
         )
         assert callable(vector_retrieve)
         assert callable(single_hop_retrieve)
@@ -69,20 +69,20 @@ class TestBackwardCompatImports:
         assert callable(_execute_sandboxed_read)
         assert _SUBGRAPH_CACHE is not None
         assert _SEMANTIC_CACHE is not None
-        assert _CB_EMBEDDING_REGISTRY is not None
+        assert _CB_EMBEDDING_GLOBAL is not None
 
     def test_synthesizer_symbols_from_engine(self) -> None:
         from orchestrator.app.query_engine import (
             synthesize_answer,
             _llm_synthesize,
             _raw_llm_synthesize,
-            _CB_LLM_REGISTRY,
+            _CB_LLM_GLOBAL,
             _do_synthesize,
         )
         assert callable(synthesize_answer)
         assert callable(_llm_synthesize)
         assert callable(_raw_llm_synthesize)
-        assert _CB_LLM_REGISTRY is not None
+        assert _CB_LLM_GLOBAL is not None
         assert callable(_do_synthesize)
 
     def test_engine_own_symbols(self) -> None:

@@ -1,5 +1,5 @@
 from orchestrator.app.query_engine import (
-    _CB_LLM_REGISTRY,
+    _CB_LLM_GLOBAL,
     _DEFAULT_RERANKER,
     _DEFAULT_TOKEN_BUDGET,
     _DEGRADATION_NOTICE,
@@ -16,7 +16,7 @@ from orchestrator.app.query_engine import (
 )
 
 __all__ = [
-    "_CB_LLM_REGISTRY",
+    "_CB_LLM_GLOBAL",
     "_DEFAULT_RERANKER",
     "_DEFAULT_TOKEN_BUDGET",
     "_DEGRADATION_NOTICE",

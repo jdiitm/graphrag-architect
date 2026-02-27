@@ -6,11 +6,7 @@ import yaml
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from orchestrator.app.circuit_breaker import (
-    CircuitBreaker,
-    CircuitBreakerConfig,
     CircuitOpenError,
-    InMemoryStateStore,
-    TenantCircuitBreakerRegistry,
 )
 
 
@@ -31,20 +27,11 @@ class TestEmbedQueryFallbackMetric:
     async def test_increments_on_circuit_open(self):
         from orchestrator.app.query_engine import _embed_query
 
-        test_cb = CircuitBreaker(
-            CircuitBreakerConfig(failure_threshold=1, recovery_timeout=60.0),
-            store=InMemoryStateStore(),
-            name="test-emb-obs",
-        )
-        failing = AsyncMock(side_effect=ConnectionError("down"))
-        with pytest.raises(ConnectionError):
-            await test_cb.call(failing)
-
-        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
-        mock_registry.for_tenant = AsyncMock(return_value=test_cb)
+        mock_global = AsyncMock()
+        mock_global.call = AsyncMock(side_effect=CircuitOpenError("open"))
 
         with patch(
-            "orchestrator.app.query_engine._CB_EMBEDDING_REGISTRY", mock_registry,
+            "orchestrator.app.query_engine._CB_EMBEDDING_GLOBAL", mock_global,
         ), patch(
             "orchestrator.app.query_engine.EMBEDDING_FALLBACK_TOTAL",
         ) as mock_counter:
@@ -57,14 +44,11 @@ class TestEmbedQueryFallbackMetric:
     async def test_increments_on_generic_exception(self):
         from orchestrator.app.query_engine import _embed_query
 
-        mock_breaker = AsyncMock()
-        mock_breaker.call = AsyncMock(side_effect=RuntimeError("API error"))
-
-        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
-        mock_registry.for_tenant = AsyncMock(return_value=mock_breaker)
+        mock_global = AsyncMock()
+        mock_global.call = AsyncMock(side_effect=RuntimeError("API error"))
 
         with patch(
-            "orchestrator.app.query_engine._CB_EMBEDDING_REGISTRY", mock_registry,
+            "orchestrator.app.query_engine._CB_EMBEDDING_GLOBAL", mock_global,
         ), patch(
             "orchestrator.app.query_engine.EMBEDDING_FALLBACK_TOTAL",
         ) as mock_counter:
@@ -78,15 +62,11 @@ class TestEmbedQueryFallbackMetric:
         from orchestrator.app.query_engine import _embed_query
 
         fake_embedding = [0.1] * 10
-
-        mock_breaker = AsyncMock()
-        mock_breaker.call = AsyncMock(return_value=fake_embedding)
-
-        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
-        mock_registry.for_tenant = AsyncMock(return_value=mock_breaker)
+        mock_global = AsyncMock()
+        mock_global.call = AsyncMock(return_value=fake_embedding)
 
         with patch(
-            "orchestrator.app.query_engine._CB_EMBEDDING_REGISTRY", mock_registry,
+            "orchestrator.app.query_engine._CB_EMBEDDING_GLOBAL", mock_global,
         ), patch(
             "orchestrator.app.query_engine.EMBEDDING_FALLBACK_TOTAL",
         ) as mock_counter:
