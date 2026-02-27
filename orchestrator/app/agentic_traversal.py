@@ -292,10 +292,12 @@ async def execute_batched_hop(
 
 def _drain_frontier(state: TraversalState) -> List[str]:
     batch: List[str] = []
+    seen: Set[str] = set()
     while state.frontier:
         candidate = state.frontier.pop(0)
-        if candidate not in state.visited_nodes:
+        if candidate not in state.visited_nodes and candidate not in seen:
             batch.append(candidate)
+            seen.add(candidate)
     return batch
 
 

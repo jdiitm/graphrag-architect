@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.app.agentic_traversal import (
+    TraversalState,
     _BATCHED_NEIGHBOR_TEMPLATE,
     _batched_bfs,
+    _drain_frontier,
     execute_batched_hop,
     run_traversal,
 )
@@ -191,3 +193,24 @@ class TestRunTraversalFallback:
             )
 
         assert len(results) >= 1
+
+
+class TestDrainFrontierDedup:
+    def test_deduplicates_within_batch(self) -> None:
+        state = TraversalState()
+        state.frontier = ["A", "B", "A", "C", "B"]
+
+        batch = _drain_frontier(state)
+
+        assert batch == ["A", "B", "C"]
+        assert state.frontier == []
+
+    def test_excludes_visited_and_deduplicates(self) -> None:
+        state = TraversalState()
+        state.frontier = ["A", "B", "A", "C", "B"]
+        state.visited_nodes = {"B"}
+
+        batch = _drain_frontier(state)
+
+        assert batch == ["A", "C"]
+        assert state.frontier == []
