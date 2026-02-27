@@ -237,18 +237,20 @@ class TestRunTraversalBounded:
 
     @pytest.mark.asyncio
     async def test_run_traversal_falls_back_on_timeout(self) -> None:
-        hop_results = [
-            {"target_id": "svc-fallback", "target_name": "fb", "target_label": "Service"},
+        batched_results = [
+            {"source_id": "root", "target_id": "svc-fallback",
+             "target_name": "fb", "target_label": "Service",
+             "rel_type": "CALLS"},
         ]
         with patch(
             "orchestrator.app.agentic_traversal.bounded_path_expansion",
             new_callable=AsyncMock,
             side_effect=asyncio.TimeoutError("query timeout"),
         ), patch(
-            "orchestrator.app.agentic_traversal.execute_hop",
+            "orchestrator.app.agentic_traversal.execute_batched_hop",
             new_callable=AsyncMock,
-            return_value=hop_results,
-        ) as mock_hop:
+            return_value=batched_results,
+        ) as mock_batched:
             driver = MagicMock()
 
             context = await run_traversal(
@@ -259,7 +261,7 @@ class TestRunTraversalBounded:
                 max_hops=2,
             )
 
-            mock_hop.assert_called()
+            mock_batched.assert_called()
             assert any(r.get("target_id") == "svc-fallback" for r in context)
 
     @pytest.mark.asyncio
