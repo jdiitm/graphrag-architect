@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple
+import asyncio
+from typing import Any, Dict, Optional, Tuple
 
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
@@ -129,3 +130,64 @@ def resolve_driver_for_tenant(
         return get_driver(), get_database()
     database = resolve_database_for_tenant(registry, tenant_id)
     return get_driver(), database
+
+
+class TenantQuotaExceededError(RuntimeError):
+    pass
+
+
+class TenantConnectionTracker:
+    def __init__(
+        self,
+        pool_size: int,
+        max_tenant_fraction: float = 0.2,
+    ) -> None:
+        self._pool_size = pool_size
+        self._max_per_tenant = max(1, int(pool_size * max_tenant_fraction))
+        self._active: Dict[str, int] = {}
+        self._lock = asyncio.Lock()
+
+    @property
+    def max_per_tenant(self) -> int:
+        return self._max_per_tenant
+
+    def active_count(self, tenant_id: str) -> int:
+        return self._active.get(tenant_id, 0)
+
+    async def acquire(self, tenant_id: str) -> None:
+        async with self._lock:
+            current = self._active.get(tenant_id, 0)
+            if current >= self._max_per_tenant:
+                raise TenantQuotaExceededError(
+                    f"Tenant {tenant_id!r} exceeds connection quota "
+                    f"({current}/{self._max_per_tenant})"
+                )
+            self._active[tenant_id] = current + 1
+
+    async def release(self, tenant_id: str) -> None:
+        async with self._lock:
+            current = self._active.get(tenant_id, 0)
+            if current <= 1:
+                self._active.pop(tenant_id, None)
+            else:
+                self._active[tenant_id] = current - 1
+
+
+_TRACKER_STATE: Dict[str, Optional[TenantConnectionTracker]] = {
+    "tracker": None,
+}
+
+
+def init_tenant_tracker(
+    pool_size: int = 100,
+    max_tenant_fraction: float = 0.2,
+) -> TenantConnectionTracker:
+    tracker = TenantConnectionTracker(
+        pool_size=pool_size, max_tenant_fraction=max_tenant_fraction,
+    )
+    _TRACKER_STATE["tracker"] = tracker
+    return tracker
+
+
+def get_tenant_tracker() -> Optional[TenantConnectionTracker]:
+    return _TRACKER_STATE.get("tracker")
