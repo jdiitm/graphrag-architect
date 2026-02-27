@@ -37,6 +37,7 @@ from orchestrator.app.prompt_sanitizer import sanitize_query_input
 from orchestrator.app.graph_embeddings import compute_centroid, rerank_with_structural
 from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.agentic_traversal import run_traversal
+from orchestrator.app.tombstone_filter import filter_tombstoned_results
 from orchestrator.app.lazy_traversal import personalized_pagerank
 from orchestrator.app.query_templates import (
     TemplateCatalog,
@@ -108,9 +109,7 @@ _CB_EMBEDDING_GLOBAL = GlobalProviderBreaker(
     global_config=_GLOBAL_CB_CFG,
 )
 
-
 _DEFAULT_MAX_QUERY_COST = 20
-
 
 def _get_max_query_cost() -> int:
     raw = os.environ.get("MAX_QUERY_COST", str(_DEFAULT_MAX_QUERY_COST))
@@ -428,7 +427,8 @@ async def _fetch_candidates_with_embedding(
             results = await _VECTOR_STORE.search(
                 _VECTOR_COLLECTION, query_embedding, limit=limit,
             )
-        return _search_results_to_dicts(results)
+        candidates = _search_results_to_dicts(results)
+        return await filter_tombstoned_results(driver, candidates, tenant_id)
 
     base_cypher = _FULLTEXT_FALLBACK_CYPHER
     if tenant_id:
