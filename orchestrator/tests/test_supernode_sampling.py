@@ -84,6 +84,105 @@ class TestNormalNodeUnchanged:
         assert results[0]["target_id"] == "a"
 
 
+class TestSemanticPruningSupernodes:
+    @pytest.mark.asyncio
+    async def test_supernode_with_query_embedding_uses_semantic_template(self) -> None:
+        from orchestrator.app.agentic_traversal import (
+            _SEMANTIC_PRUNED_NEIGHBOR_TEMPLATE,
+            execute_hop,
+        )
+
+        degree_data = [{"degree": MAX_NODE_DEGREE + 100}]
+        semantic_results = [
+            {"target_id": "sem1", "target_name": "svc-semantic",
+             "rel_type": "CALLS", "target_label": "Service"},
+        ]
+
+        call_templates: list = []
+
+        driver = AsyncMock()
+        session = AsyncMock()
+        call_count = {"n": 0}
+
+        async def _execute_read(tx_fn, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return degree_data
+            call_templates.append("sampled_called")
+            return semantic_results
+
+        session.execute_read = _execute_read
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        driver.session = MagicMock(return_value=session)
+
+        results = await execute_hop(
+            driver=driver,
+            source_id="hub-node",
+            tenant_id="t1",
+            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+            query_embedding=[0.1, 0.2, 0.3],
+            similarity_threshold=0.5,
+        )
+        assert len(results) == 1
+        assert results[0]["target_id"] == "sem1"
+
+    @pytest.mark.asyncio
+    async def test_supernode_without_query_embedding_uses_deterministic(self) -> None:
+        degree_data = [{"degree": MAX_NODE_DEGREE + 100}]
+        sampled = [
+            {"target_id": "det1", "target_name": "svc-det",
+             "rel_type": "CALLS", "target_label": "Service"},
+        ]
+        driver = _mock_driver_with_sampling(degree_data, sample_results=sampled)
+        results = await execute_hop(
+            driver=driver,
+            source_id="hub-node",
+            tenant_id="t1",
+            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+        )
+        assert len(results) == 1
+        assert results[0]["target_id"] == "det1"
+
+    @pytest.mark.asyncio
+    async def test_similarity_threshold_passed_to_template(self) -> None:
+        from orchestrator.app.agentic_traversal import execute_hop
+
+        degree_data = [{"degree": MAX_NODE_DEGREE + 100}]
+
+        captured_params: dict = {}
+        driver = AsyncMock()
+        session = AsyncMock()
+        call_count = {"n": 0}
+
+        async def _execute_read(tx_fn, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return degree_data
+            return []
+
+        session.execute_read = _execute_read
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        driver.session = MagicMock(return_value=session)
+
+        await execute_hop(
+            driver=driver,
+            source_id="hub",
+            tenant_id="t1",
+            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+            query_embedding=[0.1, 0.2],
+            similarity_threshold=0.7,
+        )
+
+    def test_semantic_template_exists(self) -> None:
+        from orchestrator.app.agentic_traversal import _SEMANTIC_PRUNED_NEIGHBOR_TEMPLATE
+
+        assert "vector.similarity.cosine" in _SEMANTIC_PRUNED_NEIGHBOR_TEMPLATE
+        assert "$query_embedding" in _SEMANTIC_PRUNED_NEIGHBOR_TEMPLATE
+        assert "$sim_threshold" in _SEMANTIC_PRUNED_NEIGHBOR_TEMPLATE
+
+
 class TestSampledNeighborTemplateExists:
     def test_template_includes_deterministic_ordering(self) -> None:
         assert "target.id" in _SAMPLED_NEIGHBOR_TEMPLATE

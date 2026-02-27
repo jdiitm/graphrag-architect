@@ -218,6 +218,91 @@ class TestGDSPageRankStrategyAsync:
         assert "drop" in call_sequence, "Graph should be dropped even on projection error"
 
 
+class TestPrecomputedPageRankStrategy:
+    def test_returns_nodes_sorted_by_pagerank_property(self) -> None:
+        from orchestrator.app.lazy_traversal import PrecomputedPageRankStrategy
+
+        strategy = PrecomputedPageRankStrategy()
+        edges = [
+            {"source": "a", "target": "b", "source_pagerank": 0.1, "target_pagerank": 0.9},
+            {"source": "b", "target": "c", "source_pagerank": 0.9, "target_pagerank": 0.5},
+            {"source": "c", "target": "d", "source_pagerank": 0.5, "target_pagerank": 0.2},
+        ]
+        result = strategy.rank(edges, seed_nodes=["a"], top_n=5)
+        assert len(result) > 0
+        scores = [score for _, score in result]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_handles_missing_pagerank_defaults_to_zero(self) -> None:
+        from orchestrator.app.lazy_traversal import PrecomputedPageRankStrategy
+
+        strategy = PrecomputedPageRankStrategy()
+        edges = [
+            {"source": "a", "target": "b"},
+            {"source": "b", "target": "c", "source_pagerank": 0.8, "target_pagerank": 0.6},
+        ]
+        result = strategy.rank(edges, seed_nodes=["a"], top_n=10)
+        names = [name for name, _ in result]
+        assert "b" in names
+        for _, score in result:
+            assert isinstance(score, float)
+
+    def test_empty_edges_returns_empty(self) -> None:
+        from orchestrator.app.lazy_traversal import PrecomputedPageRankStrategy
+
+        strategy = PrecomputedPageRankStrategy()
+        result = strategy.rank([], seed_nodes=["a"], top_n=10)
+        assert result == []
+
+    def test_respects_top_n_limit(self) -> None:
+        from orchestrator.app.lazy_traversal import PrecomputedPageRankStrategy
+
+        strategy = PrecomputedPageRankStrategy()
+        edges = [
+            {"source": f"n{i}", "target": f"n{i+1}",
+             "source_pagerank": float(i) / 10, "target_pagerank": float(i + 1) / 10}
+            for i in range(20)
+        ]
+        result = strategy.rank(edges, seed_nodes=["n0"], top_n=3)
+        assert len(result) <= 3
+
+
+class TestDefaultStrategyIsPrecomputed:
+    def test_default_strategy_is_precomputed(self) -> None:
+        from orchestrator.app.lazy_traversal import (
+            PrecomputedPageRankStrategy,
+            _DEFAULT_STRATEGY,
+        )
+
+        assert isinstance(_DEFAULT_STRATEGY, PrecomputedPageRankStrategy)
+
+
+class TestLocalPageRankSafetyCap:
+    def test_logs_deprecation_when_edges_exceed_cap(self, caplog) -> None:
+        import logging
+        from orchestrator.app.lazy_traversal import LocalPageRankStrategy, _LOCAL_SAFETY_CAP
+
+        strategy = LocalPageRankStrategy()
+        edges = [
+            {"source": f"n{i}", "target": f"n{i+1}"}
+            for i in range(_LOCAL_SAFETY_CAP + 1)
+        ]
+        with caplog.at_level(logging.WARNING):
+            strategy.rank(edges, seed_nodes=["n0"], top_n=10)
+        assert any("deprecat" in msg.lower() for msg in caplog.messages)
+
+    def test_truncates_edges_at_safety_cap(self) -> None:
+        from orchestrator.app.lazy_traversal import LocalPageRankStrategy, _LOCAL_SAFETY_CAP
+
+        strategy = LocalPageRankStrategy(max_edges=_LOCAL_SAFETY_CAP + 5000)
+        edges = [
+            {"source": f"n{i}", "target": f"n{i+1}"}
+            for i in range(_LOCAL_SAFETY_CAP + 100)
+        ]
+        result = strategy.rank(edges, seed_nodes=["n0"], top_n=10)
+        assert isinstance(result, list)
+
+
 class TestGDSPageRankFilter:
     @pytest.mark.asyncio
     async def test_uses_local_below_threshold(self) -> None:

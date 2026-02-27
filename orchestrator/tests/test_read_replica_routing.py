@@ -214,3 +214,51 @@ class TestModuleLevelGetReadDriver:
 
         result = neo4j_pool.get_read_driver()
         assert result is replica
+
+
+class TestQueryEngineReadReplicaRouting:
+    def test_get_neo4j_driver_calls_get_read_driver(self):
+        from orchestrator.app.query_engine import _get_neo4j_driver
+
+        sentinel = MagicMock(name="read_replica_sentinel")
+        with patch(
+            "orchestrator.app.query_engine.get_read_driver",
+            return_value=sentinel,
+        ) as mock_get_read:
+            result = _get_neo4j_driver()
+        mock_get_read.assert_called_once()
+        assert result is sentinel
+
+    def test_get_neo4j_driver_does_not_call_get_driver(self):
+        from orchestrator.app.query_engine import _get_neo4j_driver
+
+        with (
+            patch("orchestrator.app.query_engine.get_read_driver", return_value=MagicMock()),
+            patch("orchestrator.app.query_engine.get_driver") as mock_write,
+        ):
+            _get_neo4j_driver()
+        mock_write.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_neo4j_session_yields_read_driver_when_no_tenant(self):
+        from orchestrator.app.query_engine import _neo4j_session
+
+        sentinel = MagicMock(name="read_driver")
+        with patch(
+            "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=sentinel,
+        ):
+            async with _neo4j_session() as driver:
+                assert driver is sentinel
+
+    def test_get_neo4j_write_driver_calls_get_driver(self):
+        from orchestrator.app.query_engine import _get_neo4j_write_driver
+
+        sentinel = MagicMock(name="primary_sentinel")
+        with patch(
+            "orchestrator.app.query_engine.get_driver",
+            return_value=sentinel,
+        ) as mock_get:
+            result = _get_neo4j_write_driver()
+        mock_get.assert_called_once()
+        assert result is sentinel
