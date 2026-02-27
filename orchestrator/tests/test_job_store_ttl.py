@@ -103,8 +103,8 @@ class TestHeartbeatWiredInProduction:
             "extraction_errors": [],
         })
         mock_sem = AsyncMock()
-        mock_sem.acquire = AsyncMock()
-        mock_sem.release = MagicMock()
+        mock_sem.try_acquire = AsyncMock(return_value=(True, "tok"))
+        mock_sem.release = AsyncMock()
         with patch("orchestrator.app.main._INGEST_JOB_STORE", store), \
              patch("orchestrator.app.main.ingestion_graph") as mg, \
              patch("orchestrator.app.main.get_ingestion_semaphore", return_value=mock_sem):

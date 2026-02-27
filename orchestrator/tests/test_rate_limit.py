@@ -1,10 +1,10 @@
-import asyncio
 import base64
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from starlette.testclient import TestClient
 
+from orchestrator.app.distributed_lock import LocalFallbackSemaphore
 from orchestrator.app.main import app, set_ingestion_semaphore
 
 
@@ -30,7 +30,7 @@ def fixture_client():
 class TestRateLimitWithinLimit:
     @patch("orchestrator.app.main.ingestion_graph")
     def test_requests_within_limit_succeed(self, mock_graph, client):
-        set_ingestion_semaphore(asyncio.Semaphore(2))
+        set_ingestion_semaphore(LocalFallbackSemaphore(max_concurrent=2))
         mock_graph.ainvoke = AsyncMock(return_value={
             "extracted_nodes": [],
             "extraction_errors": [],
@@ -44,25 +44,20 @@ class TestRateLimitWithinLimit:
 class TestRateLimitExceeded:
     @patch("orchestrator.app.main.ingestion_graph")
     def test_requests_exceeding_limit_get_429(self, mock_graph, client):
-        sem = asyncio.Semaphore(1)
+        sem = LocalFallbackSemaphore(max_concurrent=0)
         set_ingestion_semaphore(sem)
-
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(sem.acquire())
 
         response = client.post("/ingest?sync=true", json=_ingest_payload())
         assert response.status_code == 429
         assert "Too many concurrent" in response.json()["detail"]
 
-        sem.release()
-        loop.close()
         set_ingestion_semaphore(None)
 
 
 class TestRateLimitResets:
     @patch("orchestrator.app.main.ingestion_graph")
     def test_counter_resets_after_request_completes(self, mock_graph, client):
-        set_ingestion_semaphore(asyncio.Semaphore(1))
+        set_ingestion_semaphore(LocalFallbackSemaphore(max_concurrent=1))
         mock_graph.ainvoke = AsyncMock(return_value={
             "extracted_nodes": [],
             "extraction_errors": [],

@@ -40,6 +40,7 @@ from orchestrator.app.query_models import (
     create_job_store,
 )
 from orchestrator.app.token_bucket import create_rate_limiter
+from orchestrator.app.distributed_lock import create_ingestion_semaphore
 
 logger = logging.getLogger(__name__)
 
@@ -66,14 +67,16 @@ def _get_sync_ingest_timeout() -> float:
     return _DEFAULT_SYNC_INGEST_TIMEOUT
 
 
-def get_ingestion_semaphore() -> asyncio.Semaphore:
+def get_ingestion_semaphore() -> Any:
     if _STATE["semaphore"] is None:
         cfg = RateLimitConfig.from_env()
-        _STATE["semaphore"] = asyncio.Semaphore(cfg.max_concurrent_ingestions)
+        _STATE["semaphore"] = create_ingestion_semaphore(
+            max_concurrent=cfg.max_concurrent_ingestions,
+        )
     return _STATE["semaphore"]
 
 
-def set_ingestion_semaphore(sem: Optional[asyncio.Semaphore]) -> None:
+def set_ingestion_semaphore(sem: Any) -> None:
     _STATE["semaphore"] = sem
 
 
@@ -106,7 +109,9 @@ async def lifespan(_app: FastAPI):
     await init_checkpointer()
     init_driver()
     set_ingestion_semaphore(
-        asyncio.Semaphore(RateLimitConfig.from_env().max_concurrent_ingestions)
+        create_ingestion_semaphore(
+            max_concurrent=RateLimitConfig.from_env().max_concurrent_ingestions,
+        )
     )
     _warn_insecure_auth(auth)
     if _kafka_consumer_enabled():
@@ -238,12 +243,12 @@ async def ingest(
 
 async def _ingest_sync(raw_files: List[Dict[str, str]]) -> JSONResponse:
     sem = get_ingestion_semaphore()
-    if sem.locked():
+    acquired, token = await sem.try_acquire()
+    if not acquired:
         raise HTTPException(
             status_code=429,
             detail="Too many concurrent ingestion requests",
         )
-    await sem.acquire()
     try:
         timeout = _get_sync_ingest_timeout()
         result = await asyncio.wait_for(
@@ -271,7 +276,7 @@ async def _ingest_sync(raw_files: List[Dict[str, str]]) -> JSONResponse:
             headers={"Retry-After": "30"},
         )
     finally:
-        sem.release()
+        await sem.release(token)
 
 
 async def _run_streaming_ingestion(directory_path: str) -> IngestResponse:
@@ -335,7 +340,10 @@ async def _run_ingest_job(
     await _INGEST_JOB_STORE.mark_running(job_id)
     await _INGEST_JOB_STORE.heartbeat(job_id)
     sem = get_ingestion_semaphore()
-    await sem.acquire()
+    acquired, token = await sem.try_acquire()
+    if not acquired:
+        await _INGEST_JOB_STORE.fail(job_id, "Too many concurrent ingestion requests")
+        return
     try:
         result = await ingestion_graph.ainvoke(
             _build_ingestion_initial_state(raw_files)
@@ -346,7 +354,7 @@ async def _run_ingest_job(
         logger.exception("Background ingest job %s failed", job_id)
         await _INGEST_JOB_STORE.fail(job_id, str(exc))
     finally:
-        sem.release()
+        await sem.release(token)
 
 
 @app.get("/ingest/{job_id}", response_model=IngestJobResponse)
