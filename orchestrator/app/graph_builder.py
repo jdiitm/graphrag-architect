@@ -5,7 +5,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, TypedDict
+from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from neo4j.exceptions import Neo4jError
@@ -159,7 +159,10 @@ async def acquire_ingestion_lock(
                 del _LOCK_REFCOUNTS[key]
 
 
-async def invalidate_caches_after_ingest(tenant_id: str = "") -> None:
+async def invalidate_caches_after_ingest(
+    tenant_id: str = "",
+    node_ids: Optional[Set[str]] = None,
+) -> None:
     if not tenant_id:
         raise IngestRejectionError(
             "Refusing global cache invalidation: tenant_id is required. "
@@ -171,13 +174,18 @@ async def invalidate_caches_after_ingest(tenant_id: str = "") -> None:
             _SUBGRAPH_CACHE,
             _SEMANTIC_CACHE,
         )
-        _SUBGRAPH_CACHE.invalidate_tenant(tenant_id)
+        if node_ids:
+            _SUBGRAPH_CACHE.invalidate_by_nodes(node_ids)
+        else:
+            _SUBGRAPH_CACHE.invalidate_tenant(tenant_id)
         if _SEMANTIC_CACHE is not None:
             result = _SEMANTIC_CACHE.invalidate_tenant(tenant_id)
             if hasattr(result, "__await__"):
                 await result
         logger.info(
-            "Tenant-scoped cache invalidation complete: %s", tenant_id,
+            "Cache invalidation complete: tenant=%s, node_ids=%d",
+            tenant_id,
+            len(node_ids) if node_ids else 0,
         )
     except IngestRejectionError:
         raise
@@ -496,6 +504,7 @@ async def _post_commit_side_effects(
     ingestion_id: str,
     tenant_id: str,
     span: Any,
+    committed_node_ids: Optional[Set[str]] = None,
 ) -> None:
     try:
         pruned_count, pruned_ids = await repo.prune_stale_edges(ingestion_id)
@@ -507,7 +516,9 @@ async def _post_commit_side_effects(
     except Exception as prune_exc:
         logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
     try:
-        await invalidate_caches_after_ingest(tenant_id=tenant_id)
+        await invalidate_caches_after_ingest(
+            tenant_id=tenant_id, node_ids=committed_node_ids,
+        )
     except IngestRejectionError as rej_exc:
         logger.warning(
             "Cache invalidation rejected (non-fatal): %s", rej_exc,
@@ -544,8 +555,12 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
             span.set_attribute("flush_count", sink.flush_count)
             span.set_attribute("ingestion_id", ingestion_id)
             tenant_id = state.get("tenant_id", "")
+            committed_node_ids = {
+                e.id for e in entities if hasattr(e, "id")
+            }
             await _post_commit_side_effects(
                 repo, ingestion_id, tenant_id, span,
+                committed_node_ids=committed_node_ids or None,
             )
             return {"commit_status": "success", "completion_tracked": True}
         except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:

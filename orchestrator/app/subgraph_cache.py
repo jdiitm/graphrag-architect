@@ -7,7 +7,7 @@ import os
 import sys
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from orchestrator.app.redis_client import (
     create_async_redis,
@@ -140,6 +140,8 @@ class SubgraphCache:
         self._generation = 0
         self._hits = 0
         self._misses = 0
+        self._node_tags: Dict[str, Set[str]] = {}
+        self._key_nodes: Dict[str, Set[str]] = {}
 
     @property
     def generation(self) -> int:
@@ -157,23 +159,48 @@ class SubgraphCache:
         self._cache.move_to_end(key)
         return self._cache[key]
 
-    def put(self, key: str, value: List[Dict[str, Any]]) -> None:
+    def put(
+        self,
+        key: str,
+        value: List[Dict[str, Any]],
+        node_ids: Optional[Set[str]] = None,
+    ) -> None:
         if self._max_value_bytes > 0:
             if _estimate_bytes(value) > self._max_value_bytes:
                 return
         if key in self._cache:
+            self._remove_node_tags_for_key(key)
             self._cache.move_to_end(key)
         else:
             while len(self._cache) >= self._maxsize and self._cache:
                 evicted_key, _ = self._cache.popitem(last=False)
                 self._generations.pop(evicted_key, None)
+                self._remove_node_tags_for_key(evicted_key)
         self._cache[key] = value
         self._generations[key] = self._generation
+        if node_ids:
+            self._key_nodes[key] = set(node_ids)
+            for nid in node_ids:
+                if nid not in self._node_tags:
+                    self._node_tags[nid] = set()
+                self._node_tags[nid].add(key)
+
+    def _remove_node_tags_for_key(self, key: str) -> None:
+        node_ids = self._key_nodes.pop(key, None)
+        if not node_ids:
+            return
+        for nid in node_ids:
+            tag_set = self._node_tags.get(nid)
+            if tag_set is not None:
+                tag_set.discard(key)
+                if not tag_set:
+                    del self._node_tags[nid]
 
     def invalidate(self, key: str) -> None:
         if key in self._cache:
             del self._cache[key]
             self._generations.pop(key, None)
+            self._remove_node_tags_for_key(key)
 
     def invalidate_stale(self) -> int:
         stale = [
@@ -183,6 +210,7 @@ class SubgraphCache:
         for k in stale:
             self._cache.pop(k, None)
             self._generations.pop(k, None)
+            self._remove_node_tags_for_key(k)
         return len(stale)
 
     def invalidate_tenant(self, tenant_id: str) -> int:
@@ -193,11 +221,28 @@ class SubgraphCache:
         for k in to_remove:
             del self._cache[k]
             self._generations.pop(k, None)
+            self._remove_node_tags_for_key(k)
         return len(to_remove)
+
+    def invalidate_by_nodes(self, node_ids: Set[str]) -> int:
+        if not node_ids:
+            return 0
+        keys_to_remove: Set[str] = set()
+        for nid in node_ids:
+            tag_set = self._node_tags.get(nid)
+            if tag_set:
+                keys_to_remove.update(tag_set)
+        for k in keys_to_remove:
+            self._cache.pop(k, None)
+            self._generations.pop(k, None)
+            self._remove_node_tags_for_key(k)
+        return len(keys_to_remove)
 
     def invalidate_all(self) -> None:
         self._cache.clear()
         self._generations.clear()
+        self._node_tags.clear()
+        self._key_nodes.clear()
 
     def stats(self) -> CacheStats:
         return CacheStats(
@@ -284,6 +329,9 @@ class RedisSubgraphCache:
 
     def invalidate_tenant(self, tenant_id: str) -> int:
         return self._l1.invalidate_tenant(tenant_id)
+
+    def invalidate_by_nodes(self, node_ids: Set[str]) -> int:
+        return self._l1.invalidate_by_nodes(node_ids)
 
     async def invalidate_all(self) -> None:
         self._l1.invalidate_all()
