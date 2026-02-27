@@ -216,3 +216,22 @@ class JobStoreConfig:
         if raw:
             return cls(ttl_seconds=float(raw))
         return cls()
+
+
+_SINK_BATCH_MIN = 100
+_SINK_BATCH_MAX = 5000
+_SINK_BATCH_DEFAULT = 500
+
+
+@dataclass(frozen=True)
+class IngestionConfig:
+    sink_batch_size: int = _SINK_BATCH_DEFAULT
+
+    @classmethod
+    def from_env(cls) -> IngestionConfig:
+        raw = os.environ.get("SINK_BATCH_SIZE", "")
+        if raw:
+            value = max(_SINK_BATCH_MIN, min(_SINK_BATCH_MAX, int(raw)))
+        else:
+            value = _SINK_BATCH_DEFAULT
+        return cls(sink_batch_size=value)

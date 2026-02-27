@@ -588,7 +588,8 @@ func TestDLQAckTimeoutZeroUsesDefault(t *testing.T) {
 	}()
 
 	go func() {
-		for range d.DLQ() {
+		for result := range d.DLQ() {
+			close(result.Done)
 		}
 	}()
 
@@ -596,8 +597,8 @@ func TestDLQAckTimeoutZeroUsesDefault(t *testing.T) {
 
 	select {
 	case <-d.Acks():
-	case <-time.After(dispatcher.DefaultDLQAckTimeout + 5*time.Second):
-		t.Fatal("worker blocked beyond DefaultDLQAckTimeout — zero DLQAckTimeout should use default, not infinite")
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker blocked — zero DLQAckTimeout should use default, not infinite")
 	}
 
 	cancel()

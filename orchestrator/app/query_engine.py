@@ -370,9 +370,16 @@ async def vector_retrieve(state: QueryState) -> dict:
     with tracer.start_as_current_span("query.vector_retrieve"):
         start = time.monotonic()
         try:
+            embedding = await _embed_query(state["query"])
+            degraded = embedding is None
             async with _neo4j_session(tenant_id=state.get("tenant_id", "")) as driver:
-                candidates = await _fetch_candidates(driver, state)
-                return {"candidates": candidates}
+                candidates = await _fetch_candidates_with_embedding(
+                    driver, state, embedding,
+                )
+                result: dict = {"candidates": candidates}
+                if degraded:
+                    result["retrieval_degraded"] = True
+                return result
         finally:
             QUERY_DURATION.record(
                 (time.monotonic() - start) * 1000, {"node": "vector_retrieve"}
@@ -383,6 +390,16 @@ async def _fetch_candidates(
     driver: AsyncDriver, state: QueryState,
 ) -> list:
     query_embedding = await _embed_query(state["query"])
+    return await _fetch_candidates_with_embedding(
+        driver, state, query_embedding,
+    )
+
+
+async def _fetch_candidates_with_embedding(
+    driver: AsyncDriver,
+    state: QueryState,
+    query_embedding: Optional[List[float]],
+) -> list:
     limit = state.get("max_results", 10)
     tenant_id = state.get("tenant_id", "")
 
@@ -767,6 +784,12 @@ def _apply_structural_rerank(
     return [r.metadata for r in reranked]
 
 
+_DEGRADATION_NOTICE = (
+    "Semantic vector search was unavailable due to embedding service failure. "
+    "Results are from keyword-only fulltext search and may be less precise."
+)
+
+
 async def _do_synthesize(state: QueryState) -> dict:
     context: List[Dict[str, Any]] = []
     if state.get("candidates"):
@@ -779,6 +802,9 @@ async def _do_synthesize(state: QueryState) -> dict:
             "answer": "No relevant information found in the knowledge graph.",
             "sources": [],
         }
+
+    if state.get("retrieval_degraded"):
+        context.insert(0, {"_degradation_notice": _DEGRADATION_NOTICE})
 
     reranked = _DEFAULT_RERANKER.rerank(state["query"], context)
     ranked_context = [sc.data for sc in reranked]

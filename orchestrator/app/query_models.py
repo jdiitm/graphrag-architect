@@ -50,7 +50,7 @@ class QueryJobResponse(BaseModel):
     completed_at: Optional[float] = None
 
 
-class QueryState(TypedDict):
+class QueryState(TypedDict, total=False):
     query: str
     max_results: int
     complexity: QueryComplexity
@@ -65,6 +65,7 @@ class QueryState(TypedDict):
     evaluation_score: Optional[float]
     retrieval_quality: str
     query_id: str
+    retrieval_degraded: bool
 
 
 class QueryJobStore:

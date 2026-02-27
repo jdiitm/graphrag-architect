@@ -48,7 +48,7 @@ A production-grade GraphRAG system that analyzes distributed systems by building
 ```
 graphrag-architect/
 ├── orchestrator/                        # Python LLM extraction pipeline
-│   ├── app/                             # 62 Python modules
+│   ├── app/                             # 64 Python modules
 │   │   ├── access_control.py            # SecurityPrincipal, CypherPermissionFilter (FR-7)
 │   │   ├── agentic_traversal.py         # Incremental 1-hop LLM-guided traversal (FR-15)
 │   │   ├── ast_extraction.py            # Go/Python AST parsing for code extraction
@@ -82,7 +82,7 @@ graphrag-architect/
 │   │   ├── workspace_loader.py          # Filesystem workspace scanner
 │   │   └── schema_init.cypher           # Neo4j constraints and indexes
 │   │   # ... plus 30 additional modules (guardrails, caching, audit, etc.)
-│   ├── tests/                           # 125 test files, 1632 tests
+│   ├── tests/                           # 137 test files, 1800+ tests
 │   │   ├── conftest.py                  # Shared fixtures (query state, mock helpers)
 │   │   ├── test_access_control.py
 │   │   ├── test_agentic_traversal.py
@@ -147,7 +147,7 @@ graphrag-architect/
 │       ├── network-policies.yaml
 │       ├── alerting.yaml
 │       └── neo4j-schema-job.yaml
-├── architecture_state.md                # System design document
+├── docs/SPEC.md                         # Consolidated system specification
 └── CLAUDE.md                            # AI agent invariants
 ```
 
