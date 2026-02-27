@@ -10,10 +10,12 @@ def _reset_pool():
     neo4j_pool._state["driver"] = None
     neo4j_pool._state["query_timeout"] = None
     neo4j_pool._state["database"] = None
+    neo4j_pool._REPLICA_STATE["pool"] = None
     yield
     neo4j_pool._state["driver"] = None
     neo4j_pool._state["query_timeout"] = None
     neo4j_pool._state["database"] = None
+    neo4j_pool._REPLICA_STATE["pool"] = None
 
 
 class TestGetDriverBeforeInit:
