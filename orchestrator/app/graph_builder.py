@@ -44,6 +44,7 @@ from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.workspace_loader import load_directory_chunked
 from orchestrator.app.vector_sync_outbox import (
     DurableOutboxDrainer,
+    Neo4jOutboxStore,
     OutboxDrainer,
     RedisOutboxStore,
     VectorSyncEvent,
@@ -73,7 +74,11 @@ _BACKGROUND_TASKS = BoundedTaskSet(max_tasks=50)
 def create_outbox_drainer(
     redis_conn: Any,
     vector_store: Any,
+    neo4j_driver: Any = None,
 ) -> OutboxDrainer | DurableOutboxDrainer:
+    if neo4j_driver is not None:
+        store = Neo4jOutboxStore(driver=neo4j_driver)
+        return DurableOutboxDrainer(store=store, vector_store=vector_store)
     if redis_conn is not None:
         store = RedisOutboxStore(redis_conn=redis_conn)
         return DurableOutboxDrainer(store=store, vector_store=vector_store)
@@ -180,7 +185,10 @@ async def invalidate_caches_after_ingest(
         else:
             _SUBGRAPH_CACHE.invalidate_tenant(tenant_id)
         if _SEMANTIC_CACHE is not None:
-            result = _SEMANTIC_CACHE.invalidate_tenant(tenant_id)
+            if node_ids and hasattr(_SEMANTIC_CACHE, "invalidate_by_nodes"):
+                result = _SEMANTIC_CACHE.invalidate_by_nodes(node_ids)
+            else:
+                result = _SEMANTIC_CACHE.invalidate_tenant(tenant_id)
             if hasattr(result, "__await__"):
                 await result
         logger.info(
@@ -475,8 +483,9 @@ def _stamp_ingestion_metadata(
     return entities
 
 
-def _enqueue_vector_cleanup(
+async def _enqueue_vector_cleanup(
     pruned_ids: list, span: Any, tenant_id: str = "",
+    neo4j_driver: Any = None,
 ) -> None:
     if not pruned_ids:
         return
@@ -484,15 +493,28 @@ def _enqueue_vector_cleanup(
     event = VectorSyncEvent(
         collection=collection, pruned_ids=pruned_ids,
     )
-    _VECTOR_OUTBOX.enqueue(event)
+    if neo4j_driver is not None:
+        store = Neo4jOutboxStore(driver=neo4j_driver)
+        await store.write_event(event)
+    else:
+        _VECTOR_OUTBOX.enqueue(event)
     span.set_attribute("vector_sync_events_queued", 1)
     span.set_attribute("vectors_queued_for_delete", len(pruned_ids))
 
 
 async def drain_vector_outbox() -> int:
     vs = get_vector_store()
+    if _VECTOR_OUTBOX.pending_count > 0:
+        drainer = OutboxDrainer(outbox=_VECTOR_OUTBOX, vector_store=vs)
+        return await drainer.process_once()
     redis_conn = _get_redis_conn()
-    drainer = create_outbox_drainer(redis_conn=redis_conn, vector_store=vs)
+    try:
+        driver = get_driver()
+    except RuntimeError:
+        driver = None
+    drainer = create_outbox_drainer(
+        redis_conn=redis_conn, vector_store=vs, neo4j_driver=driver,
+    )
     return await drainer.process_once()
 
 
@@ -506,11 +528,15 @@ async def _post_commit_side_effects(
     tenant_id: str,
     span: Any,
     committed_node_ids: Optional[Set[str]] = None,
+    neo4j_driver: Any = None,
 ) -> None:
     try:
         pruned_count, pruned_ids = await repo.prune_stale_edges(ingestion_id)
         span.set_attribute("edges_pruned", pruned_count)
-        _enqueue_vector_cleanup(pruned_ids, span, tenant_id=tenant_id)
+        await _enqueue_vector_cleanup(
+            pruned_ids, span, tenant_id=tenant_id,
+            neo4j_driver=neo4j_driver,
+        )
         task = asyncio.create_task(_safe_drain_vector_outbox())
         if not _BACKGROUND_TASKS.try_add(task):
             logger.warning("Background task limit reached; vector drain skipped")
@@ -562,6 +588,7 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
             await _post_commit_side_effects(
                 repo, ingestion_id, tenant_id, span,
                 committed_node_ids=committed_node_ids or None,
+                neo4j_driver=driver,
             )
             return {"commit_status": "success", "completion_tracked": True}
         except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:
