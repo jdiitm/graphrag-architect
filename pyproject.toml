@@ -15,6 +15,7 @@ disable = [
     "C0415",  # import-outside-toplevel: lazy imports for optional deps (qdrant-client)
     "R0801",  # duplicate-code: IngestJobStore and QueryJobStore share structure by design
     "C0302",  # too-many-lines: query_engine.py is a LangGraph DAG orchestrator with many nodes
+    "R0914",  # too-many-locals: graph traversal functions inherently need many intermediate vars
 ]
 
 [tool.pylint.imports]
