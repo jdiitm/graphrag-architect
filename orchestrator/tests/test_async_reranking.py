@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
@@ -171,12 +170,8 @@ class TestAsyncRerankOffload:
         event_loop_thread = threading.current_thread()
         structural_thread = None
 
-        original_fn = None
-        try:
-            from orchestrator.app.query_engine import _apply_structural_rerank
-            original_fn = _apply_structural_rerank
-        except ImportError:
-            pytest.skip("_apply_structural_rerank not available")
+        from orchestrator.app.query_engine import _apply_structural_rerank
+        original_fn = _apply_structural_rerank
 
         def capturing_structural(
             candidates: List[Dict[str, Any]],

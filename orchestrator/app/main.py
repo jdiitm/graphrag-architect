@@ -20,7 +20,7 @@ from orchestrator.app.access_control import (
 from orchestrator.app.circuit_breaker import CircuitOpenError
 from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.config import AuthConfig, JobStoreConfig, KafkaConsumerConfig, RateLimitConfig
-from orchestrator.app.executor import shutdown_pool
+from orchestrator.app.executor import shutdown_pool, shutdown_thread_pool
 from orchestrator.app.graph_builder import ingestion_graph, run_streaming_pipeline
 from orchestrator.app.ingest_models import (
     IngestJobResponse,
@@ -137,6 +137,7 @@ async def lifespan(_app: FastAPI):
             _STATE["kafka_consumer"] = None
             _STATE["kafka_task"] = None
         shutdown_pool()
+        shutdown_thread_pool()
         await close_driver()
         await close_checkpointer()
 
