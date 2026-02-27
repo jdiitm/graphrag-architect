@@ -171,6 +171,8 @@ class RedisOutboxStore:
 
 
 class Neo4jOutboxStore:
+    _LOAD_BATCH_LIMIT = 100
+
     _CREATE_QUERY = (
         "CREATE (e:OutboxEvent {"
         "  event_id: $event_id,"
@@ -187,7 +189,8 @@ class Neo4jOutboxStore:
         "RETURN e.event_id AS event_id, e.collection AS collection, "
         "e.operation AS operation, e.pruned_ids AS pruned_ids, "
         "e.vectors AS vectors, e.status AS status, "
-        "e.retry_count AS retry_count"
+        "e.retry_count AS retry_count "
+        f"ORDER BY e.retry_count ASC LIMIT {_LOAD_BATCH_LIMIT}"
     )
     _DELETE_QUERY = (
         "MATCH (e:OutboxEvent {event_id: $event_id}) "

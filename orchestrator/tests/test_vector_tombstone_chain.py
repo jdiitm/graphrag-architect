@@ -216,6 +216,114 @@ class TestVectorStoreCleanupOnPrune:
         )
 
 
+class TestDurableOutboxBranch:
+
+    @pytest.mark.asyncio
+    async def test_post_commit_uses_durable_outbox_when_driver_present(self) -> None:
+        from orchestrator.app.graph_builder import _post_commit_side_effects
+        from orchestrator.app.neo4j_client import GraphRepository
+
+        mock_session = AsyncMock()
+
+        async def _fake_write(fn, **kwargs):
+            return 2, ["svc-1", "svc-2"]
+
+        mock_session.execute_write = _fake_write
+
+        mock_driver = MagicMock()
+
+        @asynccontextmanager
+        async def session_ctx(**kwargs):
+            yield mock_session
+
+        mock_driver.session = session_ctx
+
+        repo = GraphRepository(mock_driver)
+        span = MagicMock()
+
+        write_event_calls: List[Any] = []
+        original_write_event = AsyncMock(
+            side_effect=lambda event: write_event_calls.append(event),
+        )
+
+        with (
+            patch.dict("os.environ", _ENV_VARS),
+            patch(
+                "orchestrator.app.graph_builder.Neo4jOutboxStore.write_event",
+                original_write_event,
+            ),
+            patch(
+                "orchestrator.app.graph_builder.get_vector_store",
+                return_value=AsyncMock(),
+            ),
+            patch(
+                "orchestrator.app.graph_builder._safe_drain_vector_outbox",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await _post_commit_side_effects(
+                repo=repo,
+                ingestion_id="run-123",
+                tenant_id="test-tenant",
+                span=span,
+                neo4j_driver=mock_driver,
+            )
+
+        original_write_event.assert_called_once()
+        event = original_write_event.call_args[0][0]
+        assert "svc-1" in event.pruned_ids
+        assert "svc-2" in event.pruned_ids
+
+    @pytest.mark.asyncio
+    async def test_post_commit_falls_back_to_inmemory_without_driver(self) -> None:
+        from orchestrator.app.graph_builder import (
+            _VECTOR_OUTBOX,
+            _post_commit_side_effects,
+        )
+        from orchestrator.app.neo4j_client import GraphRepository
+
+        mock_session = AsyncMock()
+
+        async def _fake_write(fn, **kwargs):
+            return 1, ["svc-orphan"]
+
+        mock_session.execute_write = _fake_write
+
+        mock_driver = MagicMock()
+
+        @asynccontextmanager
+        async def session_ctx(**kwargs):
+            yield mock_session
+
+        mock_driver.session = session_ctx
+
+        repo = GraphRepository(mock_driver)
+        span = MagicMock()
+
+        before_count = _VECTOR_OUTBOX.pending_count
+
+        with (
+            patch.dict("os.environ", _ENV_VARS),
+            patch(
+                "orchestrator.app.graph_builder.get_vector_store",
+                return_value=AsyncMock(),
+            ),
+            patch(
+                "orchestrator.app.graph_builder._safe_drain_vector_outbox",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await _post_commit_side_effects(
+                repo=repo,
+                ingestion_id="run-456",
+                tenant_id="test-tenant",
+                span=span,
+                neo4j_driver=None,
+            )
+
+        assert _VECTOR_OUTBOX.pending_count > before_count
+
+
 class TestDrainVectorOutboxRedisReuse:
 
     @pytest.mark.asyncio

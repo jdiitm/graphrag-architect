@@ -484,3 +484,40 @@ class TestRedisSemanticCacheNodeLevelInvalidation:
             removed = await cache.invalidate_by_nodes({"n1"})
 
         assert removed >= 1
+
+
+class TestRedisSemanticCacheNodetagTTL:
+
+    @pytest.mark.asyncio
+    async def test_store_with_node_ids_sets_expire_on_tag_keys(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.setex = AsyncMock()
+        mock_redis.sadd = AsyncMock()
+        mock_redis.expire = AsyncMock()
+
+        with patch(
+            "orchestrator.app.semantic_cache.create_async_redis",
+            return_value=mock_redis,
+        ), patch(
+            "orchestrator.app.semantic_cache.require_redis",
+        ):
+            ttl = 600
+            cache = RedisSemanticQueryCache(
+                redis_url="redis://fake:6379",
+                config=CacheConfig(similarity_threshold=0.9),
+                ttl_seconds=ttl,
+            )
+            cache.store(
+                "q1", [0.1] * 32, {"a": 1},
+                tenant_id="t1", node_ids={"n1", "n2"},
+            )
+            await asyncio.sleep(0)
+
+        expire_calls = mock_redis.expire.call_args_list
+        expired_keys = {call.args[0] for call in expire_calls}
+        expired_ttls = {call.args[1] for call in expire_calls}
+
+        prefix = cache._prefix
+        assert f"{prefix}nodetag:n1" in expired_keys
+        assert f"{prefix}nodetag:n2" in expired_keys
+        assert expired_ttls == {ttl}

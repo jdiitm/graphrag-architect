@@ -461,9 +461,12 @@ class RedisSemanticQueryCache:
             if node_ids:
                 for nid in node_ids:
                     tag_key = f"{self._prefix}nodetag:{nid}"
-                    loop.create_task(
-                        self._redis.sadd(tag_key, f"{self._prefix}{key_hash}"),
-                    )
+                    loop.create_task(self._redis.sadd(
+                        tag_key, f"{self._prefix}{key_hash}",
+                    ))
+                    loop.create_task(self._redis.expire(
+                        tag_key, self._ttl,
+                    ))
         except RuntimeError:
             pass
         except Exception:
