@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
+from neo4j.exceptions import Neo4jError
 
 from orchestrator.app.context_manager import TokenBudget, estimate_tokens, truncate_context
 from orchestrator.app.query_templates import ALLOWED_RELATIONSHIP_TYPES
@@ -52,6 +54,19 @@ _SAMPLED_NEIGHBOR_TEMPLATE = (
     "RETURN target.id AS target_id, target.name AS target_name, "
     "type(r) AS rel_type, labels(target)[0] AS target_label "
     "ORDER BY rand() LIMIT $sample_size"
+)
+
+_BOUNDED_PATH_TEMPLATE = (
+    "MATCH path = (source {{id: $start_id, tenant_id: $tenant_id}})"
+    "-[*1..{max_hops}]->(target) "
+    "WHERE all(n IN nodes(path) WHERE n.tenant_id = $tenant_id) "
+    "AND all(r IN relationships(path) WHERE r.tombstoned_at IS NULL) "
+    "AND all(n IN nodes(path) WHERE $is_admin OR n.team_owner = $acl_team "
+    "OR ANY(ns IN n.namespace_acl WHERE ns IN $acl_namespaces)) "
+    "WITH DISTINCT target "
+    "RETURN target.id AS target_id, target.name AS target_name, "
+    "labels(target)[0] AS target_label "
+    "LIMIT $max_nodes"
 )
 
 
@@ -140,6 +155,36 @@ class TraversalAgent:
         )
 
 
+async def bounded_path_expansion(
+    driver: AsyncDriver,
+    start_id: str,
+    tenant_id: str,
+    acl_params: Dict[str, Any],
+    max_hops: int = MAX_HOPS,
+    max_nodes: int = MAX_VISITED,
+    timeout: float = 30.0,
+) -> List[Dict[str, Any]]:
+    if not 1 <= max_hops <= MAX_HOPS:
+        raise ValueError(
+            f"max_hops must be between 1 and {MAX_HOPS}, got {max_hops}"
+        )
+
+    cypher = _BOUNDED_PATH_TEMPLATE.format(max_hops=max_hops)
+    params = {
+        "start_id": start_id,
+        "tenant_id": tenant_id,
+        "max_nodes": max_nodes,
+        **acl_params,
+    }
+
+    async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
+        result = await tx.run(cypher, **params)
+        return await result.data()
+
+    async with driver.session() as session:
+        return await session.execute_read(_tx, timeout=timeout)
+
+
 async def _run_sampled_query(
     session: Any,
     source_id: str,
@@ -205,14 +250,14 @@ async def execute_hop(
         return await session.execute_read(_tx, timeout=timeout)
 
 
-async def run_traversal(
+async def _sequential_bfs(
     driver: AsyncDriver,
     start_node_id: str,
     tenant_id: str,
     acl_params: Dict[str, Any],
-    max_hops: int = MAX_HOPS,
-    timeout: float = 30.0,
-    token_budget: Optional[TokenBudget] = None,
+    max_hops: int,
+    timeout: float,
+    token_budget: TokenBudget,
 ) -> List[Dict[str, Any]]:
     agent = TraversalAgent(
         max_hops=max_hops,
@@ -248,3 +293,42 @@ async def run_traversal(
         agent.record_step(state, step)
 
     return agent.get_context(state)
+
+
+async def run_traversal(
+    driver: AsyncDriver,
+    start_node_id: str,
+    tenant_id: str,
+    acl_params: Dict[str, Any],
+    max_hops: int = MAX_HOPS,
+    timeout: float = 30.0,
+    token_budget: Optional[TokenBudget] = None,
+) -> List[Dict[str, Any]]:
+    effective_budget = token_budget or TokenBudget()
+
+    try:
+        raw_results = await bounded_path_expansion(
+            driver=driver,
+            start_id=start_node_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            max_hops=max_hops,
+            timeout=timeout,
+        )
+        return truncate_context(raw_results, effective_budget)
+    except (Neo4jError, asyncio.TimeoutError, OSError):
+        logger.warning(
+            "Bounded path expansion failed for node %s, falling back to sequential BFS",
+            start_node_id,
+            exc_info=True,
+        )
+
+    return await _sequential_bfs(
+        driver=driver,
+        start_node_id=start_node_id,
+        tenant_id=tenant_id,
+        acl_params=acl_params,
+        max_hops=max_hops,
+        timeout=timeout,
+        token_budget=effective_budget,
+    )
