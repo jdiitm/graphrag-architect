@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from orchestrator.app.agentic_traversal import (
     MAX_HOPS,
     MAX_VISITED,
     TraversalAgent,
+    TraversalConfig,
     TraversalState,
     TraversalStep,
+    TraversalStrategy,
+    _probe_start_degree,
     build_one_hop_cypher,
+    run_traversal,
 )
 from orchestrator.app.context_manager import TokenBudget
 from orchestrator.app.query_templates import ALLOWED_RELATIONSHIP_TYPES
@@ -138,3 +144,270 @@ class TestTraversalAgent:
         ]
         ctx = agent.get_context(state)
         assert len(ctx) <= 10
+
+
+class TestTraversalStrategyEnum:
+    def test_traversal_strategy_enum_values(self) -> None:
+        assert TraversalStrategy.BOUNDED_CYPHER.value == "bounded_cypher"
+        assert TraversalStrategy.BATCHED_BFS.value == "batched_bfs"
+        assert TraversalStrategy.ADAPTIVE.value == "adaptive"
+
+
+class TestTraversalConfig:
+    def test_traversal_config_defaults(self) -> None:
+        config = TraversalConfig()
+        assert config.strategy == TraversalStrategy.ADAPTIVE
+        assert config.degree_threshold == 200
+        assert config.max_hops == MAX_HOPS
+        assert config.max_visited == MAX_VISITED
+        assert config.timeout == 30.0
+
+    def test_traversal_config_from_env(self) -> None:
+        env = {
+            "TRAVERSAL_STRATEGY": "batched_bfs",
+            "TRAVERSAL_DEGREE_THRESHOLD": "500",
+            "TRAVERSAL_MAX_HOPS": "3",
+            "TRAVERSAL_MAX_VISITED": "25",
+            "TRAVERSAL_TIMEOUT": "10.0",
+        }
+        with patch.dict("os.environ", env):
+            config = TraversalConfig.from_env()
+        assert config.strategy == TraversalStrategy.BATCHED_BFS
+        assert config.degree_threshold == 500
+        assert config.max_hops == 3
+        assert config.max_visited == 25
+        assert config.timeout == 10.0
+
+
+class TestProbeStartDegree:
+    @pytest.mark.asyncio
+    async def test_probe_start_degree_returns_degree(self) -> None:
+        mock_record = [{"degree": 150}]
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=mock_record)
+        mock_tx = AsyncMock()
+        mock_tx.run = AsyncMock(return_value=mock_result)
+
+        mock_session = AsyncMock()
+
+        async def fake_execute_read(fn: object, **kwargs: object) -> list:
+            return await fn(mock_tx)
+
+        mock_session.execute_read = AsyncMock(side_effect=fake_execute_read)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session = MagicMock(return_value=mock_session)
+
+        degree = await _probe_start_degree(mock_driver, "node-1", "tenant-a")
+        assert degree == 150
+
+    @pytest.mark.asyncio
+    async def test_probe_start_degree_returns_zero_on_error(self) -> None:
+        from neo4j.exceptions import Neo4jError
+
+        mock_session = AsyncMock()
+        mock_session.execute_read = AsyncMock(
+            side_effect=Neo4jError("connection lost")
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session = MagicMock(return_value=mock_session)
+
+        degree = await _probe_start_degree(mock_driver, "node-1", "tenant-a")
+        assert degree == 0
+
+
+class TestRunTraversalStrategySelection:
+    @pytest.mark.asyncio
+    async def test_adaptive_selects_bounded_for_low_degree(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.ADAPTIVE,
+            degree_threshold=200,
+        )
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+        expected = [{"target_id": "svc-b", "target_name": "svc-b"}]
+
+        with (
+            patch(
+                "orchestrator.app.agentic_traversal._probe_start_degree",
+                new_callable=AsyncMock,
+                return_value=50,
+            ) as mock_probe,
+            patch(
+                "orchestrator.app.agentic_traversal.bounded_path_expansion",
+                new_callable=AsyncMock,
+                return_value=expected,
+            ) as mock_bounded,
+            patch(
+                "orchestrator.app.agentic_traversal._batched_bfs",
+                new_callable=AsyncMock,
+            ) as mock_bfs,
+        ):
+            result = await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                config=config,
+            )
+            mock_probe.assert_called_once()
+            mock_bounded.assert_called_once()
+            mock_bfs.assert_not_called()
+            assert result == expected
+
+    @pytest.mark.asyncio
+    async def test_adaptive_selects_batched_for_high_degree(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.ADAPTIVE,
+            degree_threshold=200,
+        )
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+        expected = [{"target_id": "svc-c"}]
+
+        with (
+            patch(
+                "orchestrator.app.agentic_traversal._probe_start_degree",
+                new_callable=AsyncMock,
+                return_value=500,
+            ) as mock_probe,
+            patch(
+                "orchestrator.app.agentic_traversal.bounded_path_expansion",
+                new_callable=AsyncMock,
+            ) as mock_bounded,
+            patch(
+                "orchestrator.app.agentic_traversal._batched_bfs",
+                new_callable=AsyncMock,
+                return_value=expected,
+            ) as mock_bfs,
+        ):
+            result = await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                config=config,
+            )
+            mock_probe.assert_called_once()
+            mock_bounded.assert_not_called()
+            mock_bfs.assert_called_once()
+            assert result == expected
+
+    @pytest.mark.asyncio
+    async def test_bounded_strategy_always_uses_bounded(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.BOUNDED_CYPHER,
+            degree_threshold=10,
+        )
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+        expected = [{"target_id": "svc-d"}]
+
+        with (
+            patch(
+                "orchestrator.app.agentic_traversal._probe_start_degree",
+                new_callable=AsyncMock,
+            ) as mock_probe,
+            patch(
+                "orchestrator.app.agentic_traversal.bounded_path_expansion",
+                new_callable=AsyncMock,
+                return_value=expected,
+            ) as mock_bounded,
+            patch(
+                "orchestrator.app.agentic_traversal._batched_bfs",
+                new_callable=AsyncMock,
+            ) as mock_bfs,
+        ):
+            result = await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                config=config,
+            )
+            mock_probe.assert_not_called()
+            mock_bounded.assert_called_once()
+            mock_bfs.assert_not_called()
+            assert result == expected
+
+    @pytest.mark.asyncio
+    async def test_batched_strategy_always_uses_batched(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.BATCHED_BFS,
+            degree_threshold=10,
+        )
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+        expected = [{"target_id": "svc-e"}]
+
+        with (
+            patch(
+                "orchestrator.app.agentic_traversal._probe_start_degree",
+                new_callable=AsyncMock,
+            ) as mock_probe,
+            patch(
+                "orchestrator.app.agentic_traversal.bounded_path_expansion",
+                new_callable=AsyncMock,
+            ) as mock_bounded,
+            patch(
+                "orchestrator.app.agentic_traversal._batched_bfs",
+                new_callable=AsyncMock,
+                return_value=expected,
+            ) as mock_bfs,
+        ):
+            result = await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                config=config,
+            )
+            mock_probe.assert_not_called()
+            mock_bounded.assert_not_called()
+            mock_bfs.assert_called_once()
+            assert result == expected
+
+    @pytest.mark.asyncio
+    async def test_adaptive_fallback_on_bounded_error(self) -> None:
+        from neo4j.exceptions import Neo4jError
+
+        config = TraversalConfig(
+            strategy=TraversalStrategy.ADAPTIVE,
+            degree_threshold=200,
+        )
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+        fallback_result = [{"target_id": "svc-f"}]
+
+        with (
+            patch(
+                "orchestrator.app.agentic_traversal._probe_start_degree",
+                new_callable=AsyncMock,
+                return_value=50,
+            ),
+            patch(
+                "orchestrator.app.agentic_traversal.bounded_path_expansion",
+                new_callable=AsyncMock,
+                side_effect=Neo4jError("timeout"),
+            ) as mock_bounded,
+            patch(
+                "orchestrator.app.agentic_traversal._batched_bfs",
+                new_callable=AsyncMock,
+                return_value=fallback_result,
+            ) as mock_bfs,
+        ):
+            result = await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                config=config,
+            )
+            mock_bounded.assert_called_once()
+            mock_bfs.assert_called_once()
+            assert result == fallback_result

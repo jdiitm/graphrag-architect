@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import enum
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
@@ -16,6 +18,43 @@ logger = logging.getLogger(__name__)
 MAX_HOPS = 5
 MAX_VISITED = 50
 MAX_NODE_DEGREE = 500
+
+_DEFAULT_DEGREE_THRESHOLD = 200
+
+
+class TraversalStrategy(enum.Enum):
+    BOUNDED_CYPHER = "bounded_cypher"
+    BATCHED_BFS = "batched_bfs"
+    ADAPTIVE = "adaptive"
+
+
+@dataclass(frozen=True)
+class TraversalConfig:
+    strategy: TraversalStrategy = TraversalStrategy.ADAPTIVE
+    degree_threshold: int = _DEFAULT_DEGREE_THRESHOLD
+    max_hops: int = MAX_HOPS
+    max_visited: int = MAX_VISITED
+    timeout: float = 30.0
+
+    @classmethod
+    def from_env(cls) -> TraversalConfig:
+        raw_strategy = os.environ.get("TRAVERSAL_STRATEGY", "adaptive").lower()
+        strategy = TraversalStrategy(raw_strategy)
+        return cls(
+            strategy=strategy,
+            degree_threshold=int(
+                os.environ.get(
+                    "TRAVERSAL_DEGREE_THRESHOLD",
+                    str(_DEFAULT_DEGREE_THRESHOLD),
+                )
+            ),
+            max_hops=int(os.environ.get("TRAVERSAL_MAX_HOPS", str(MAX_HOPS))),
+            max_visited=int(
+                os.environ.get("TRAVERSAL_MAX_VISITED", str(MAX_VISITED))
+            ),
+            timeout=float(os.environ.get("TRAVERSAL_TIMEOUT", "30.0")),
+        )
+
 
 _DEGREE_CHECK_QUERY = (
     "MATCH (n {id: $source_id, tenant_id: $tenant_id}) "
@@ -353,17 +392,41 @@ async def _batched_bfs(
     return agent.get_context(state)
 
 
-async def run_traversal(
+async def _probe_start_degree(
+    driver: AsyncDriver,
+    start_id: str,
+    tenant_id: str,
+) -> int:
+    params = {"source_id": start_id, "tenant_id": tenant_id}
+
+    async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
+        result = await tx.run(_DEGREE_CHECK_QUERY, **params)
+        return await result.data()
+
+    try:
+        async with driver.session() as session:
+            records = await session.execute_read(_tx, timeout=10.0)
+            if records:
+                return int(records[0].get("degree", 0))
+            return 0
+    except (Neo4jError, asyncio.TimeoutError, OSError):
+        logger.warning(
+            "Degree probe failed for node %s, defaulting to 0",
+            start_id,
+            exc_info=True,
+        )
+        return 0
+
+
+async def _run_bounded_with_fallback(
     driver: AsyncDriver,
     start_node_id: str,
     tenant_id: str,
     acl_params: Dict[str, Any],
-    max_hops: int = MAX_HOPS,
-    timeout: float = 30.0,
-    token_budget: Optional[TokenBudget] = None,
+    max_hops: int,
+    timeout: float,
+    effective_budget: TokenBudget,
 ) -> List[Dict[str, Any]]:
-    effective_budget = token_budget or TokenBudget()
-
     try:
         raw_results = await bounded_path_expansion(
             driver=driver,
@@ -389,4 +452,88 @@ async def run_traversal(
         max_hops=max_hops,
         timeout=timeout,
         token_budget=effective_budget,
+    )
+
+
+async def run_traversal(
+    driver: AsyncDriver,
+    start_node_id: str,
+    tenant_id: str,
+    acl_params: Dict[str, Any],
+    max_hops: int = MAX_HOPS,
+    timeout: float = 30.0,
+    token_budget: Optional[TokenBudget] = None,
+    config: Optional[TraversalConfig] = None,
+) -> List[Dict[str, Any]]:
+    effective_budget = token_budget or TokenBudget()
+
+    if config is None:
+        return await _run_bounded_with_fallback(
+            driver=driver,
+            start_node_id=start_node_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            max_hops=max_hops,
+            timeout=timeout,
+            effective_budget=effective_budget,
+        )
+
+    effective_hops = min(max_hops, config.max_hops)
+    effective_timeout = min(timeout, config.timeout)
+
+    if config.strategy == TraversalStrategy.BATCHED_BFS:
+        return await _batched_bfs(
+            driver=driver,
+            start_node_id=start_node_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            max_hops=effective_hops,
+            timeout=effective_timeout,
+            token_budget=effective_budget,
+        )
+
+    if config.strategy == TraversalStrategy.BOUNDED_CYPHER:
+        return await _run_bounded_with_fallback(
+            driver=driver,
+            start_node_id=start_node_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            max_hops=effective_hops,
+            timeout=effective_timeout,
+            effective_budget=effective_budget,
+        )
+
+    degree = await _probe_start_degree(driver, start_node_id, tenant_id)
+
+    if degree >= config.degree_threshold:
+        logger.info(
+            "ADAPTIVE: high-degree node %s (degree=%d, threshold=%d), using batched BFS",
+            start_node_id,
+            degree,
+            config.degree_threshold,
+        )
+        return await _batched_bfs(
+            driver=driver,
+            start_node_id=start_node_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            max_hops=effective_hops,
+            timeout=effective_timeout,
+            token_budget=effective_budget,
+        )
+
+    logger.info(
+        "ADAPTIVE: low-degree node %s (degree=%d, threshold=%d), using bounded Cypher",
+        start_node_id,
+        degree,
+        config.degree_threshold,
+    )
+    return await _run_bounded_with_fallback(
+        driver=driver,
+        start_node_id=start_node_id,
+        tenant_id=tenant_id,
+        acl_params=acl_params,
+        max_hops=effective_hops,
+        timeout=effective_timeout,
+        effective_budget=effective_budget,
     )
