@@ -334,7 +334,9 @@ class TestMissingQuerySpans:
         }
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver"
-        ) as mock_get:
+        ) as mock_get, patch(
+            "orchestrator.app.query_engine._get_neo4j_write_driver"
+        ) as mock_write_get:
             mock_driver = MagicMock()
             mock_driver.close = AsyncMock()
             mock_result = MagicMock()
@@ -345,6 +347,7 @@ class TestMissingQuerySpans:
             mock_session.__aexit__ = AsyncMock(return_value=False)
             mock_driver.session.return_value = mock_session
             mock_get.return_value = mock_driver
+            mock_write_get.return_value = mock_driver
             await single_hop_retrieve(state)
 
         span_names = [s.name for s in telemetry.get_finished_spans()]

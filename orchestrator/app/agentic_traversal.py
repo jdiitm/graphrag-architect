@@ -132,6 +132,36 @@ _SAMPLED_NEIGHBOR_NO_ACL = (
     "LIMIT $sample_size"
 )
 
+_SEMANTIC_PRUNED_NEIGHBOR_TEMPLATE = (
+    "MATCH (source {id: $source_id, tenant_id: $tenant_id})"
+    "-[r]->(target) "
+    "WHERE target.tenant_id = $tenant_id AND r.tombstoned_at IS NULL "
+    "AND ($is_admin OR target.team_owner = $acl_team "
+    "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
+    "AND (CASE WHEN $query_embedding IS NOT NULL "
+    "THEN vector.similarity.cosine(target.embedding, $query_embedding) > $sim_threshold "
+    "ELSE true END) "
+    "RETURN target.id AS target_id, target.name AS target_name, "
+    "type(r) AS rel_type, labels(target)[0] AS target_label "
+    "ORDER BY coalesce(target.pagerank, 0) DESC, "
+    "coalesce(target.degree, 0) DESC, target.id "
+    "LIMIT $sample_size"
+)
+
+_SEMANTIC_PRUNED_NEIGHBOR_NO_ACL = (
+    "MATCH (source {id: $source_id, tenant_id: $tenant_id})"
+    "-[r]->(target) "
+    "WHERE target.tenant_id = $tenant_id AND r.tombstoned_at IS NULL "
+    "AND (CASE WHEN $query_embedding IS NOT NULL "
+    "THEN vector.similarity.cosine(target.embedding, $query_embedding) > $sim_threshold "
+    "ELSE true END) "
+    "RETURN target.id AS target_id, target.name AS target_name, "
+    "type(r) AS rel_type, labels(target)[0] AS target_label "
+    "ORDER BY coalesce(target.pagerank, 0) DESC, "
+    "coalesce(target.degree, 0) DESC, target.id "
+    "LIMIT $sample_size"
+)
+
 _BOUNDED_PATH_TEMPLATE = (
     "MATCH path = (source {{id: $start_id, tenant_id: $tenant_id}})"
     "-[*1..{max_hops}]->(target) "
@@ -271,14 +301,19 @@ async def _run_sampled_query(
     sample_size: int,
     timeout: float,
     template: str = "",
+    query_embedding: Optional[List[float]] = None,
+    similarity_threshold: float = 0.5,
 ) -> List[Dict[str, Any]]:
     effective_template = template or _SAMPLED_NEIGHBOR_TEMPLATE
-    params = {
+    params: Dict[str, Any] = {
         "source_id": source_id,
         "tenant_id": tenant_id,
         "sample_size": sample_size,
         **acl_params,
     }
+    if query_embedding is not None:
+        params["query_embedding"] = query_embedding
+        params["sim_threshold"] = similarity_threshold
 
     async def _sample_tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
         result = await tx.run(effective_template, **params)
@@ -297,6 +332,8 @@ async def execute_hop(
     max_degree: int = MAX_NODE_DEGREE,
     sample_size: int = 50,
     skip_acl: bool = False,
+    query_embedding: Optional[List[float]] = None,
+    similarity_threshold: float = 0.5,
 ) -> List[Dict[str, Any]]:
     degree_params = {"source_id": source_id, "tenant_id": tenant_id}
 
@@ -322,12 +359,23 @@ async def execute_hop(
                     "Sampling super-node %s with degree %d (threshold %d, sample %d)",
                     source_id, degree, max_degree, sample_size,
                 )
+                if query_embedding is not None:
+                    semantic_template = (
+                        _SEMANTIC_PRUNED_NEIGHBOR_NO_ACL if skip_acl
+                        else _SEMANTIC_PRUNED_NEIGHBOR_TEMPLATE
+                    )
+                    return await _run_sampled_query(
+                        session, source_id, tenant_id, acl_params,
+                        sample_size, timeout, template=semantic_template,
+                        query_embedding=query_embedding,
+                        similarity_threshold=similarity_threshold,
+                    )
                 return await _run_sampled_query(
                     session, source_id, tenant_id, acl_params,
                     sample_size, timeout, template=sampled_template,
                 )
 
-        params = {
+        params: Dict[str, Any] = {
             "source_id": source_id,
             "tenant_id": tenant_id,
             "limit": limit,

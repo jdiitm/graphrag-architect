@@ -57,6 +57,7 @@ def _ppr_iterate(
 
 
 _DEFAULT_MAX_EDGES = 2000
+_LOCAL_SAFETY_CAP = 10000
 
 
 @runtime_checkable
@@ -89,6 +90,17 @@ class LocalPageRankStrategy:
         if not edges:
             return []
 
+        if len(edges) > _LOCAL_SAFETY_CAP:
+            _logger.warning(
+                "LocalPageRankStrategy is deprecated for large graphs "
+                "(%d edges > safety cap %d). Use PrecomputedPageRankStrategy. "
+                "Truncating to %d edges.",
+                len(edges),
+                _LOCAL_SAFETY_CAP,
+                _LOCAL_SAFETY_CAP,
+            )
+            edges = edges[:_LOCAL_SAFETY_CAP]
+
         bounded = edges[:self._max_edges] if len(edges) > self._max_edges else edges
         adjacency, nodes = _build_undirected_adjacency(bounded)
         if not nodes:
@@ -103,6 +115,36 @@ class LocalPageRankStrategy:
             self._iterations, self._damping,
         )
         ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        return ranked[:top_n]
+
+
+class PrecomputedPageRankStrategy:
+    """Uses pre-stored ``pagerank`` edge properties instead of computing on the fly.
+
+    ``seed_nodes`` is accepted to satisfy the ``PageRankStrategy`` protocol
+    but intentionally ignored — rankings are global (precomputed), not
+    personalised per query.
+    """
+
+    def rank(
+        self,
+        edges: List[Dict[str, Any]],
+        seed_nodes: List[str],
+        top_n: int = 50,
+    ) -> List[Tuple[str, float]]:
+        if not edges:
+            return []
+
+        node_scores: Dict[str, float] = {}
+        for edge in edges:
+            src = edge.get("source", "")
+            tgt = edge.get("target", "")
+            if src and src not in node_scores:
+                node_scores[src] = float(edge.get("source_pagerank", 0.0))
+            if tgt and tgt not in node_scores:
+                node_scores[tgt] = float(edge.get("target_pagerank", 0.0))
+
+        ranked = sorted(node_scores.items(), key=lambda item: item[1], reverse=True)
         return ranked[:top_n]
 
 
@@ -291,7 +333,7 @@ async def gds_pagerank_filter(
     ]
 
 
-_DEFAULT_STRATEGY = LocalPageRankStrategy()
+_DEFAULT_STRATEGY = PrecomputedPageRankStrategy()
 
 
 def personalized_pagerank(

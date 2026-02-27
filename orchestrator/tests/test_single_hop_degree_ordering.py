@@ -59,6 +59,10 @@ class TestSingleHopDegreeOrdering:
                 return_value=mock_driver,
             ),
             patch(
+                "orchestrator.app.query_engine._get_neo4j_write_driver",
+                return_value=mock_driver,
+            ),
+            patch(
                 "orchestrator.app.query_engine._fetch_candidates",
                 new_callable=AsyncMock,
                 return_value=vector_results,

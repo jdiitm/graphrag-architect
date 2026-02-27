@@ -51,7 +51,12 @@ from orchestrator.app.subgraph_cache import (
 )
 from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.vector_store import SearchResult, create_vector_store
-from orchestrator.app.neo4j_pool import get_driver, get_query_timeout, resolve_driver_for_tenant
+from orchestrator.app.neo4j_pool import (
+    get_driver,
+    get_query_timeout,
+    get_read_driver,
+    resolve_driver_for_tenant,
+)
 from orchestrator.app.observability import EMBEDDING_FALLBACK_TOTAL, QUERY_DURATION, get_tracer
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
@@ -176,6 +181,10 @@ async def _embed_query(text: str, tenant_id: str = "") -> Optional[List[float]]:
 
 
 def _get_neo4j_driver() -> AsyncDriver:
+    return get_read_driver()
+
+
+def _get_neo4j_write_driver() -> AsyncDriver:
     return get_driver()
 
 
@@ -504,7 +513,7 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                 return {
                     "candidates": candidates,
                     "cypher_results": await gds_pagerank_filter(
-                        driver, hop_records, names,
+                        _get_neo4j_write_driver(), hop_records, names,
                         state.get("tenant_id", ""),
                     ),
                 }
