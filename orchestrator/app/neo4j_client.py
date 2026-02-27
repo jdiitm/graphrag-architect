@@ -336,6 +336,7 @@ class GraphRepository:
         entities = compute_hashes(entities)
         nodes, edges = _partition_entities(entities)
         await self._cb.call(self._execute_batched_commit, nodes, edges)
+        await self._refresh_degree_property()
 
     async def _execute_batched_commit(
         self, nodes: List[Any], edges: List[Any],
@@ -361,6 +362,19 @@ class GraphRepository:
                 _guarded_write(et, recs)
                 for et, recs in edge_groups.items()
             ))
+
+    async def _refresh_degree_property(self) -> None:
+        degree_cypher = (
+            "MATCH (n) WHERE n:Service OR n:Database "
+            "OR n:KafkaTopic OR n:K8sDeployment "
+            "SET n.degree = size((n)--())"
+        )
+
+        async def _tx(tx: AsyncManagedTransaction) -> None:
+            await tx.run(degree_cypher)
+
+        async with self._write_session() as session:
+            await session.execute_write(_tx)
 
     async def _write_batches(
         self,

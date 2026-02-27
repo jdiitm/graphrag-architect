@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
@@ -41,7 +42,7 @@ type Consumer struct {
 	ackTimeout          time.Duration
 	maxBatchWait        time.Duration
 	healthThreshold     int
-	consecutiveTimeouts int
+	consecutiveTimeouts atomic.Int32
 }
 
 type ConsumerOption func(*Consumer)
@@ -85,7 +86,7 @@ func New(source JobSource, jobs chan<- domain.Job, acks <-chan struct{}, opts ..
 }
 
 func (c *Consumer) Healthy() bool {
-	return c.consecutiveTimeouts < c.healthThreshold
+	return int(c.consecutiveTimeouts.Load()) < c.healthThreshold
 }
 
 func (c *Consumer) Run(ctx context.Context) error {
@@ -123,8 +124,8 @@ func (c *Consumer) Run(ctx context.Context) error {
 		if err := c.awaitAcks(pollCtx, len(batch)); err != nil {
 			batchCancel()
 			if errors.Is(err, ErrAckTimeout) || errors.Is(err, context.DeadlineExceeded) {
-				c.consecutiveTimeouts++
-				c.observer.RecordBatchDuration(time.Since(batchStart).Seconds())
+			c.consecutiveTimeouts.Add(1)
+			c.observer.RecordBatchDuration(time.Since(batchStart).Seconds())
 				pollSpan.End()
 				continue
 			}
@@ -135,7 +136,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 			return err
 		}
 
-		c.consecutiveTimeouts = 0
+		c.consecutiveTimeouts.Store(0)
 		commitCtx, commitSpan := telemetry.StartCommitSpan(pollCtx)
 		if err := c.source.Commit(commitCtx); err != nil {
 			commitSpan.End()

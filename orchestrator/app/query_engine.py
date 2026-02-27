@@ -452,6 +452,18 @@ def _filter_by_ppr(
     ]
 
 
+def _build_single_hop_cypher() -> str:
+    return (
+        "MATCH (n)-[r]-(m) "
+        "WHERE n.name IN $names "
+        "AND r.tombstoned_at IS NULL "
+        "AND m.degree < $degree_cap "
+        "RETURN n.name AS source, type(r) AS rel, "
+        "m.name AS target "
+        "LIMIT $hop_limit"
+    )
+
+
 async def single_hop_retrieve(state: QueryState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("query.single_hop_retrieve"):
@@ -466,13 +478,7 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                 hop_limit = _get_hop_edge_limit()
                 degree_cap = _get_degree_cap()
                 hop_cypher, hop_acl = _apply_acl(
-                    "MATCH (n)-[r]-(m) "
-                    "WHERE n.name IN $names "
-                    "AND r.tombstoned_at IS NULL "
-                    "AND size((m)--()) < $degree_cap "
-                    "RETURN n.name AS source, type(r) AS rel, "
-                    "m.name AS target "
-                    "LIMIT $hop_limit",
+                    _build_single_hop_cypher(),
                     state, alias="m",
                 )
 

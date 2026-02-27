@@ -307,7 +307,7 @@ func TestDLQHandlerClosesDoneOnSuccess(t *testing.T) {
 	<-done
 }
 
-func TestDLQHandlerDoneNotClosedWhenSinkFailsNoFallback(t *testing.T) {
+func TestDLQHandlerDoneClosedEvenWhenSinkFailsNoFallback(t *testing.T) {
 	source := make(chan domain.Result, 1)
 	sink := &spySink{sendErr: errors.New("permanent failure")}
 	handler := dlq.NewHandler(source, sink,
@@ -329,19 +329,17 @@ func TestDLQHandlerDoneNotClosedWhenSinkFailsNoFallback(t *testing.T) {
 		Done:     resultDone,
 	}
 
-	time.Sleep(200 * time.Millisecond)
-
 	select {
 	case <-resultDone:
-		t.Fatal("Done channel must NOT be closed when sink fails and no fallback exists — closing it allows silent message loss via premature offset commit")
-	default:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done channel must be closed even on total failure to prevent dispatcher hang and cascading Kafka rebalance")
 	}
 
 	cancel()
 	<-handlerDone
 }
 
-func TestDLQHandlerDoneNotClosedWhenFallbackFails(t *testing.T) {
+func TestDLQHandlerDoneClosedEvenWhenFallbackFails(t *testing.T) {
 	source := make(chan domain.Result, 1)
 	sink := &spySink{sendErr: errors.New("primary failure")}
 	fallback := &spySink{sendErr: errors.New("fallback failure")}
@@ -365,12 +363,10 @@ func TestDLQHandlerDoneNotClosedWhenFallbackFails(t *testing.T) {
 		Done:     resultDone,
 	}
 
-	time.Sleep(200 * time.Millisecond)
-
 	select {
 	case <-resultDone:
-		t.Fatal("Done channel must NOT be closed when both sink and fallback fail — closing it causes silent message loss")
-	default:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done channel must be closed even on double-fault to prevent dispatcher hang and cascading Kafka rebalance")
 	}
 
 	cancel()

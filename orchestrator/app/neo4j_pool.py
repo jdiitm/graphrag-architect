@@ -11,6 +11,14 @@ from orchestrator.app.tenant_isolation import (
     TenantRouter,
 )
 
+
+class UnknownTenantError(LookupError):
+    pass
+
+
+class RegistryUnavailableError(RuntimeError):
+    pass
+
 _state: dict[str, Optional[AsyncDriver | float | str]] = {
     "driver": None,
     "query_timeout": None,
@@ -98,10 +106,16 @@ def resolve_database_for_tenant(
     default_database: str = "neo4j",
 ) -> str:
     if registry is None:
-        return default_database
+        raise RegistryUnavailableError(
+            "Tenant registry not configured — cannot resolve tenant "
+            f"{tenant_id!r}. All tenants must be explicitly registered."
+        )
     cfg = registry.get(tenant_id)
     if cfg is None:
-        return default_database
+        raise UnknownTenantError(
+            f"Tenant {tenant_id!r} is not registered. Fail-closed: "
+            f"refusing to route to default database."
+        )
     if cfg.isolation_mode == IsolationMode.PHYSICAL:
         return cfg.database_name
     return default_database
