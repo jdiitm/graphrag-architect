@@ -15,6 +15,8 @@ _ENV_VARS = {
     "GOOGLE_API_KEY": "test-key",
 }
 
+_REDIS_ENV = {**_ENV_VARS, "REDIS_URL": "redis://localhost:6379"}
+
 
 def _make_services(count: int) -> List[ServiceNode]:
     return [
@@ -184,4 +186,51 @@ class TestVectorStoreCleanupOnPrune:
         assert result["commit_status"] == "success"
         assert len(vector_delete_calls) == 0, (
             "commit_to_neo4j must NOT call VectorStore.delete when no IDs were pruned"
+        )
+
+
+class TestDrainVectorOutboxRedisReuse:
+
+    @pytest.mark.asyncio
+    async def test_drain_reuses_redis_connection_across_calls(self) -> None:
+        from orchestrator.app.graph_builder import (
+            _RedisHolder,
+            drain_vector_outbox,
+        )
+
+        _RedisHolder.value = None
+
+        mock_redis = AsyncMock()
+        create_redis_calls: List[int] = []
+
+        def _tracking_create(*args, **kwargs):
+            create_redis_calls.append(1)
+            return mock_redis
+
+        mock_drainer = AsyncMock()
+        mock_drainer.process_once = AsyncMock(return_value=0)
+
+        with (
+            patch.dict("os.environ", _REDIS_ENV),
+            patch(
+                "orchestrator.app.redis_client.create_async_redis",
+                side_effect=_tracking_create,
+            ),
+            patch(
+                "orchestrator.app.graph_builder.get_vector_store",
+                return_value=AsyncMock(),
+            ),
+            patch(
+                "orchestrator.app.graph_builder.create_outbox_drainer",
+                return_value=mock_drainer,
+            ),
+        ):
+            await drain_vector_outbox()
+            await drain_vector_outbox()
+
+        _RedisHolder.value = None
+
+        assert len(create_redis_calls) == 1, (
+            "drain_vector_outbox must reuse a cached Redis connection, "
+            f"but create_async_redis was called {len(create_redis_calls)} time(s)"
         )

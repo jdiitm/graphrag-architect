@@ -42,19 +42,35 @@ from orchestrator.app.vector_store import create_vector_store, resolve_collectio
 from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.workspace_loader import load_directory_chunked
 from orchestrator.app.vector_sync_outbox import (
+    DurableOutboxDrainer,
     OutboxDrainer,
+    RedisOutboxStore,
     VectorSyncEvent,
     VectorSyncOutbox,
 )
+from orchestrator.app.config import IngestionConfig
 
-SINK_BATCH_SIZE = 500
 _VECTOR_COLLECTION = "services"
+
+
+class IngestRejectionError(RuntimeError):
+    pass
 
 
 def resolve_vector_collection(tenant_id: Optional[str] = None) -> str:
     return resolve_collection_name(_VECTOR_COLLECTION, tenant_id)
 
 _VECTOR_OUTBOX = VectorSyncOutbox()
+
+
+def create_outbox_drainer(
+    redis_conn: Any,
+    vector_store: Any,
+) -> OutboxDrainer | DurableOutboxDrainer:
+    if redis_conn is not None:
+        store = RedisOutboxStore(redis_conn=redis_conn)
+        return DurableOutboxDrainer(store=store, vector_store=vector_store)
+    return OutboxDrainer(outbox=_VECTOR_OUTBOX, vector_store=vector_store)
 
 logger = logging.getLogger(__name__)
 
@@ -95,29 +111,46 @@ def get_vector_store() -> Any:
     return _VectorStoreHolder.value
 
 
+class _RedisHolder:
+    value: Any = None
+
+
+def _get_redis_conn() -> Any:
+    if _RedisHolder.value is not None:
+        return _RedisHolder.value
+    from orchestrator.app.config import RedisConfig
+    redis_cfg = RedisConfig.from_env()
+    if not redis_cfg.url:
+        return None
+    from orchestrator.app.redis_client import create_async_redis
+    _RedisHolder.value = create_async_redis(
+        redis_cfg.url, password=redis_cfg.password, db=redis_cfg.db,
+    )
+    return _RedisHolder.value
+
+
 async def invalidate_caches_after_ingest(tenant_id: str = "") -> None:
+    if not tenant_id:
+        raise IngestRejectionError(
+            "Refusing global cache invalidation: tenant_id is required. "
+            "Untagged ingestion payloads must be rejected to prevent "
+            "thundering-herd cache collapse."
+        )
     try:
         from orchestrator.app.query_engine import (
             _SUBGRAPH_CACHE,
             _SEMANTIC_CACHE,
         )
-        if tenant_id:
-            _SUBGRAPH_CACHE.invalidate_tenant(tenant_id)
-            if _SEMANTIC_CACHE is not None:
-                result = _SEMANTIC_CACHE.invalidate_tenant(tenant_id)
-                if hasattr(result, "__await__"):
-                    await result
-            logger.info(
-                "Tenant-scoped cache invalidation complete: %s", tenant_id,
-            )
-        else:
-            logger.warning(
-                "Empty tenant_id received; advancing cache generation globally",
-            )
-            _SUBGRAPH_CACHE.advance_generation()
-            if _SEMANTIC_CACHE is not None:
-                _SEMANTIC_CACHE.advance_generation()
-            logger.info("Global generational cache invalidation complete")
+        _SUBGRAPH_CACHE.invalidate_tenant(tenant_id)
+        if _SEMANTIC_CACHE is not None:
+            result = _SEMANTIC_CACHE.invalidate_tenant(tenant_id)
+            if hasattr(result, "__await__"):
+                await result
+        logger.info(
+            "Tenant-scoped cache invalidation complete: %s", tenant_id,
+        )
+    except IngestRejectionError:
+        raise
     except Exception as exc:
         logger.warning("Cache invalidation failed (non-fatal): %s", exc)
 
@@ -419,8 +452,34 @@ def _enqueue_vector_cleanup(
 
 async def drain_vector_outbox() -> int:
     vs = get_vector_store()
-    drainer = OutboxDrainer(outbox=_VECTOR_OUTBOX, vector_store=vs)
+    redis_conn = _get_redis_conn()
+    drainer = create_outbox_drainer(redis_conn=redis_conn, vector_store=vs)
     return await drainer.process_once()
+
+
+def _get_sink_batch_size() -> int:
+    return IngestionConfig.from_env().sink_batch_size
+
+
+async def _post_commit_side_effects(
+    repo: GraphRepository,
+    ingestion_id: str,
+    tenant_id: str,
+    span: Any,
+) -> None:
+    try:
+        pruned_count, pruned_ids = await repo.prune_stale_edges(ingestion_id)
+        span.set_attribute("edges_pruned", pruned_count)
+        _enqueue_vector_cleanup(pruned_ids, span, tenant_id=tenant_id)
+        await drain_vector_outbox()
+    except Exception as prune_exc:
+        logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
+    try:
+        await invalidate_caches_after_ingest(tenant_id=tenant_id)
+    except IngestRejectionError as rej_exc:
+        logger.warning(
+            "Cache invalidation rejected (non-fatal): %s", rej_exc,
+        )
 
 
 async def commit_to_neo4j(state: IngestionState) -> dict:
@@ -437,23 +496,18 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
             repo = GraphRepository(
                 driver, circuit_breaker=get_container().circuit_breaker
             )
-            sink = IncrementalNodeSink(repo, batch_size=SINK_BATCH_SIZE)
+            sink = IncrementalNodeSink(
+                repo, batch_size=_get_sink_batch_size(),
+            )
             await sink.ingest(entities)
             await sink.flush()
             span.set_attribute("entity_count", sink.total_entities)
             span.set_attribute("flush_count", sink.flush_count)
             span.set_attribute("ingestion_id", ingestion_id)
             tenant_id = state.get("tenant_id", "")
-            try:
-                pruned_count, pruned_ids = await repo.prune_stale_edges(
-                    ingestion_id,
-                )
-                span.set_attribute("edges_pruned", pruned_count)
-                _enqueue_vector_cleanup(pruned_ids, span, tenant_id=tenant_id)
-                await drain_vector_outbox()
-            except Exception as prune_exc:
-                logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
-            await invalidate_caches_after_ingest(tenant_id=tenant_id)
+            await _post_commit_side_effects(
+                repo, ingestion_id, tenant_id, span,
+            )
             return {"commit_status": "success", "completion_tracked": True}
         except (Neo4jError, OSError, CircuitOpenError, RuntimeError) as exc:
             span.set_status(StatusCode.ERROR, str(exc))

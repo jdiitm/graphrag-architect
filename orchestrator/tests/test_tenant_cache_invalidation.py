@@ -103,33 +103,14 @@ class TestGranularCacheInvalidation:
         semantic_cache.invalidate_tenant.assert_called_once_with("team-alpha")
 
     @pytest.mark.asyncio
-    async def test_ingest_invalidation_global_when_no_tenant(self) -> None:
-        from orchestrator.app.graph_builder import invalidate_caches_after_ingest
+    async def test_ingest_invalidation_rejects_empty_tenant(self) -> None:
+        from orchestrator.app.graph_builder import (
+            IngestRejectionError,
+            invalidate_caches_after_ingest,
+        )
 
-        subgraph_cache = MagicMock()
-        subgraph_cache.advance_generation = MagicMock(return_value=1)
-        subgraph_cache.invalidate_stale = MagicMock(return_value=0)
-
-        semantic_cache = MagicMock()
-        semantic_cache.advance_generation = MagicMock(return_value=1)
-        semantic_cache.invalidate_stale = AsyncMock(return_value=0)
-
-        with (
-            patch(
-                "orchestrator.app.query_engine._SUBGRAPH_CACHE",
-                new=subgraph_cache,
-            ),
-            patch(
-                "orchestrator.app.query_engine._SEMANTIC_CACHE",
-                new=semantic_cache,
-            ),
-        ):
+        with pytest.raises(IngestRejectionError):
             await invalidate_caches_after_ingest(tenant_id="")
-
-        subgraph_cache.advance_generation.assert_called_once()
-        subgraph_cache.invalidate_stale.assert_not_called()
-        semantic_cache.advance_generation.assert_called_once()
-        semantic_cache.invalidate_stale.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_sandboxed_read_cache_key_uses_tenant_prefix(self) -> None:
