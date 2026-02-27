@@ -7,7 +7,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 
 from orchestrator.app.redis_client import (
     create_async_redis,
@@ -111,6 +111,8 @@ class SemanticQueryCache:
         self._misses = 0
         self._evictions = 0
         self._inflight: Dict[str, _InflightRequest] = {}
+        self._node_tags: Dict[str, Set[str]] = {}
+        self._key_nodes: Dict[str, Set[str]] = {}
 
     @property
     def similarity_threshold(self) -> float:
@@ -203,6 +205,7 @@ class SemanticQueryCache:
         result: Dict[str, Any],
         tenant_id: str = "",
         complexity: str = "",
+        node_ids: Optional[Set[str]] = None,
     ) -> None:
         self._evict_expired()
         self._enforce_max_size()
@@ -212,6 +215,8 @@ class SemanticQueryCache:
             ttl = self._config.ttl_by_complexity.get(complexity, ttl)
 
         key_hash = _embedding_hash(query_embedding)
+        if key_hash in self._entries:
+            self._remove_node_tags_for_key(key_hash)
         entry = CacheEntry(
             key_hash=key_hash,
             embedding=query_embedding,
@@ -223,6 +228,23 @@ class SemanticQueryCache:
         )
         self._entries[key_hash] = entry
         self._entry_generations[key_hash] = self._generation
+        if node_ids:
+            self._key_nodes[key_hash] = set(node_ids)
+            for nid in node_ids:
+                if nid not in self._node_tags:
+                    self._node_tags[nid] = set()
+                self._node_tags[nid].add(key_hash)
+
+    def _remove_node_tags_for_key(self, key: str) -> None:
+        nids = self._key_nodes.pop(key, None)
+        if not nids:
+            return
+        for nid in nids:
+            tag_set = self._node_tags.get(nid)
+            if tag_set is not None:
+                tag_set.discard(key)
+                if not tag_set:
+                    del self._node_tags[nid]
 
     def invalidate_tenant(self, tenant_id: str) -> int:
         to_remove = [
@@ -231,7 +253,22 @@ class SemanticQueryCache:
         for k in to_remove:
             del self._entries[k]
             self._entry_generations.pop(k, None)
+            self._remove_node_tags_for_key(k)
         return len(to_remove)
+
+    def invalidate_by_nodes(self, node_ids: Set[str]) -> int:
+        if not node_ids:
+            return 0
+        keys_to_remove: Set[str] = set()
+        for nid in node_ids:
+            tag_set = self._node_tags.get(nid)
+            if tag_set:
+                keys_to_remove.update(tag_set)
+        for k in keys_to_remove:
+            self._entries.pop(k, None)
+            self._entry_generations.pop(k, None)
+            self._remove_node_tags_for_key(k)
+        return len(keys_to_remove)
 
     def invalidate_stale(self) -> int:
         stale = [
@@ -241,6 +278,7 @@ class SemanticQueryCache:
         for k in stale:
             self._entries.pop(k, None)
             self._entry_generations.pop(k, None)
+            self._remove_node_tags_for_key(k)
             self._evictions += 1
         return len(stale)
 
@@ -248,6 +286,8 @@ class SemanticQueryCache:
         count = len(self._entries)
         self._entries.clear()
         self._entry_generations.clear()
+        self._node_tags.clear()
+        self._key_nodes.clear()
         return count
 
     def stats(self) -> CacheStats:
@@ -264,6 +304,7 @@ class SemanticQueryCache:
         for k in expired:
             del self._entries[k]
             self._entry_generations.pop(k, None)
+            self._remove_node_tags_for_key(k)
             self._evictions += 1
 
     def _enforce_max_size(self) -> None:
@@ -273,6 +314,7 @@ class SemanticQueryCache:
             )
             del self._entries[oldest_key]
             self._entry_generations.pop(oldest_key, None)
+            self._remove_node_tags_for_key(oldest_key)
             self._evictions += 1
 
 
@@ -395,10 +437,12 @@ class RedisSemanticQueryCache:
         result: Dict[str, Any],
         tenant_id: str = "",
         complexity: str = "",
+        node_ids: Optional[Set[str]] = None,
     ) -> None:
         self._l1.store(
             query=query, query_embedding=query_embedding,
             result=result, tenant_id=tenant_id, complexity=complexity,
+            node_ids=node_ids,
         )
         key_hash = _embedding_hash(query_embedding)
         try:
@@ -414,10 +458,34 @@ class RedisSemanticQueryCache:
                     f"{self._prefix}{key_hash}", self._ttl, payload,
                 )
             )
+            if node_ids:
+                for nid in node_ids:
+                    tag_key = f"{self._prefix}nodetag:{nid}"
+                    loop.create_task(
+                        self._redis.sadd(tag_key, f"{self._prefix}{key_hash}"),
+                    )
         except RuntimeError:
             pass
         except Exception:
             logger.debug("Redis semantic cache store failed (non-fatal)")
+
+    async def invalidate_by_nodes(self, node_ids: Set[str]) -> int:
+        l1_removed = self._l1.invalidate_by_nodes(node_ids)
+        try:
+            keys_to_delete: set = set()
+            tag_keys: list = []
+            for nid in node_ids:
+                tag_key = f"{self._prefix}nodetag:{nid}"
+                tag_keys.append(tag_key)
+                members = await self._redis.smembers(tag_key)
+                keys_to_delete.update(members)
+            if keys_to_delete:
+                await self._redis.delete(*keys_to_delete)
+            if tag_keys:
+                await self._redis.delete(*tag_keys)
+        except Exception:
+            logger.warning("Redis node-level invalidation failed (non-fatal)")
+        return l1_removed
 
     async def invalidate_tenant(self, tenant_id: str) -> int:
         l1_removed = self._l1.invalidate_tenant(tenant_id)

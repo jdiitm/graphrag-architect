@@ -110,6 +110,21 @@ class TestVectorStoreCleanupOnPrune:
         mock_vector_store = AsyncMock()
         mock_vector_store.delete = _tracking_vector_delete
 
+        from orchestrator.app import graph_builder as _gb
+        from orchestrator.app.vector_sync_outbox import OutboxDrainer
+
+        original = _gb._post_commit_side_effects
+
+        async def _force_inmemory(*args: Any, **kwargs: Any) -> None:
+            kwargs["neo4j_driver"] = None
+            return await original(*args, **kwargs)
+
+        async def _drain_inmemory() -> int:
+            drainer = OutboxDrainer(
+                outbox=_gb._VECTOR_OUTBOX, vector_store=mock_vector_store,
+            )
+            return await drainer.process_once()
+
         with (
             patch.dict("os.environ", _ENV_VARS),
             patch(
@@ -127,6 +142,14 @@ class TestVectorStoreCleanupOnPrune:
             patch(
                 "orchestrator.app.graph_builder.get_vector_store",
                 return_value=mock_vector_store,
+            ),
+            patch.object(
+                _gb, "_post_commit_side_effects",
+                side_effect=_force_inmemory,
+            ),
+            patch.object(
+                _gb, "drain_vector_outbox",
+                side_effect=_drain_inmemory,
             ),
         ):
             result = await commit_to_neo4j({"extracted_nodes": entities})

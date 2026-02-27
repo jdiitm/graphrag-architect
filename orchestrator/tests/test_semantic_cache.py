@@ -387,3 +387,100 @@ class TestRedisSemanticQueryCacheInvalidateTenant:
             removed = await cache.invalidate_tenant("t1")
 
         assert removed >= 1
+
+
+class TestSemanticQueryCacheNodeLevelInvalidation:
+
+    def test_invalidate_by_nodes_removes_tagged_entries(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        cache.store("q1", [1.0, 0.0], {"a": 1}, tenant_id="t1", node_ids={"n1", "n2"})
+        cache.store("q2", [0.0, 1.0], {"a": 2}, tenant_id="t1", node_ids={"n3"})
+        removed = cache.invalidate_by_nodes({"n1"})
+        assert removed == 1
+        assert cache.stats().size == 1
+
+    def test_invalidate_by_nodes_preserves_unrelated_entries(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        cache.store("q1", [1.0, 0.0], {"a": 1}, tenant_id="t1", node_ids={"n1"})
+        cache.store("q2", [0.0, 1.0], {"a": 2}, tenant_id="t1", node_ids={"n2"})
+        cache.invalidate_by_nodes({"n1"})
+        assert cache.lookup([0.0, 1.0], tenant_id="t1") == {"a": 2}
+
+    def test_invalidate_by_nodes_handles_overlapping_tags(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        cache.store("q1", [1.0, 0.0], {"a": 1}, node_ids={"n1", "n2"})
+        cache.store("q2", [0.0, 1.0], {"a": 2}, node_ids={"n2", "n3"})
+        removed = cache.invalidate_by_nodes({"n2"})
+        assert removed == 2
+        assert cache.stats().size == 0
+
+    def test_invalidate_by_nodes_empty_set_is_noop(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        cache.store("q1", [1.0, 0.0], {"a": 1}, node_ids={"n1"})
+        removed = cache.invalidate_by_nodes(set())
+        assert removed == 0
+        assert cache.stats().size == 1
+
+    def test_invalidate_by_nodes_unknown_nodes_is_noop(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        cache.store("q1", [1.0, 0.0], {"a": 1}, node_ids={"n1"})
+        removed = cache.invalidate_by_nodes({"n99"})
+        assert removed == 0
+        assert cache.stats().size == 1
+
+    def test_store_without_node_ids_is_not_affected_by_invalidate_by_nodes(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        cache.store("q1", [1.0, 0.0], {"a": 1})
+        removed = cache.invalidate_by_nodes({"n1"})
+        assert removed == 0
+        assert cache.stats().size == 1
+
+
+class TestRedisSemanticCacheNodeLevelInvalidation:
+
+    @pytest.mark.asyncio
+    async def test_invalidate_by_nodes_clears_l1_and_redis_tags(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.smembers = AsyncMock(return_value={b"graphrag:semcache:hash1"})
+        mock_redis.delete = AsyncMock()
+
+        with patch(
+            "orchestrator.app.semantic_cache.create_async_redis",
+            return_value=mock_redis,
+        ), patch(
+            "orchestrator.app.semantic_cache.require_redis",
+        ):
+            cache = RedisSemanticQueryCache(
+                redis_url="redis://fake:6379",
+                config=CacheConfig(similarity_threshold=0.9),
+            )
+            cache._l1.store(
+                "q1", [0.1] * 32, {"a": 1}, tenant_id="t1",
+                node_ids={"n1"},
+            )
+            removed = await cache.invalidate_by_nodes({"n1"})
+
+        assert removed >= 1
+
+    @pytest.mark.asyncio
+    async def test_invalidate_by_nodes_tolerates_redis_failure(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.smembers = AsyncMock(side_effect=ConnectionError("redis down"))
+
+        with patch(
+            "orchestrator.app.semantic_cache.create_async_redis",
+            return_value=mock_redis,
+        ), patch(
+            "orchestrator.app.semantic_cache.require_redis",
+        ):
+            cache = RedisSemanticQueryCache(
+                redis_url="redis://fake:6379",
+                config=CacheConfig(similarity_threshold=0.9),
+            )
+            cache._l1.store(
+                "q1", [0.1] * 32, {"a": 1}, tenant_id="t1",
+                node_ids={"n1"},
+            )
+            removed = await cache.invalidate_by_nodes({"n1"})
+
+        assert removed >= 1

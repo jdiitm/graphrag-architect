@@ -170,6 +170,108 @@ class RedisOutboxStore:
         )
 
 
+class Neo4jOutboxStore:
+    _CREATE_QUERY = (
+        "CREATE (e:OutboxEvent {"
+        "  event_id: $event_id,"
+        "  collection: $collection,"
+        "  operation: $operation,"
+        "  pruned_ids: $pruned_ids,"
+        "  vectors: $vectors,"
+        "  status: $status,"
+        "  retry_count: $retry_count"
+        "})"
+    )
+    _LOAD_QUERY = (
+        "MATCH (e:OutboxEvent {status: 'pending'}) "
+        "RETURN e.event_id AS event_id, e.collection AS collection, "
+        "e.operation AS operation, e.pruned_ids AS pruned_ids, "
+        "e.vectors AS vectors, e.status AS status, "
+        "e.retry_count AS retry_count"
+    )
+    _DELETE_QUERY = (
+        "MATCH (e:OutboxEvent {event_id: $event_id}) "
+        "DELETE e"
+    )
+    _UPDATE_RETRY_QUERY = (
+        "MATCH (e:OutboxEvent {event_id: $event_id}) "
+        "SET e.retry_count = $retry_count"
+    )
+
+    def __init__(self, driver: Any) -> None:
+        self._driver = driver
+
+    def _event_params(self, event: VectorSyncEvent) -> dict:
+        return {
+            "event_id": event.event_id,
+            "collection": event.collection,
+            "operation": event.operation,
+            "pruned_ids": json.dumps(event.pruned_ids),
+            "vectors": json.dumps([
+                dataclasses.asdict(v)
+                if dataclasses.is_dataclass(v) and not isinstance(v, type)
+                else v
+                for v in event.vectors
+            ]),
+            "status": event.status,
+            "retry_count": event.retry_count,
+        }
+
+    async def write_in_tx(self, tx: Any, event: VectorSyncEvent) -> None:
+        await tx.run(self._CREATE_QUERY, **self._event_params(event))
+
+    async def write_event(self, event: VectorSyncEvent) -> None:
+        async with self._driver.session(default_access_mode="WRITE") as session:
+            await session.execute_write(self.write_in_tx, event=event)
+
+    async def load_pending(self) -> List[VectorSyncEvent]:
+        async with self._driver.session(default_access_mode="READ") as session:
+            records = await session.execute_read(self._read_pending)
+        events: List[VectorSyncEvent] = []
+        for data in records:
+            events.append(VectorSyncEvent(
+                event_id=data["event_id"],
+                collection=data["collection"],
+                operation=data.get("operation", "delete"),
+                pruned_ids=json.loads(data["pruned_ids"]),
+                vectors=[
+                    VectorRecord(**v)
+                    for v in json.loads(data.get("vectors", "[]"))
+                ],
+                status=data.get("status", "pending"),
+                retry_count=int(data.get("retry_count", 0)),
+            ))
+        return events
+
+    @staticmethod
+    async def _read_pending(tx: Any) -> list:
+        result = await tx.run(Neo4jOutboxStore._LOAD_QUERY)
+        return [record.data() async for record in result]
+
+    async def delete_event(self, event_id: str) -> None:
+        async with self._driver.session(default_access_mode="WRITE") as session:
+            await session.execute_write(self._delete_node, event_id=event_id)
+
+    @staticmethod
+    async def _delete_node(tx: Any, event_id: str) -> None:
+        await tx.run(Neo4jOutboxStore._DELETE_QUERY, event_id=event_id)
+
+    async def update_retry_count(
+        self, event_id: str, retry_count: int,
+    ) -> None:
+        async with self._driver.session(default_access_mode="WRITE") as session:
+            await session.execute_write(
+                self._set_retry, event_id=event_id, retry_count=retry_count,
+            )
+
+    @staticmethod
+    async def _set_retry(tx: Any, event_id: str, retry_count: int) -> None:
+        await tx.run(
+            Neo4jOutboxStore._UPDATE_RETRY_QUERY,
+            event_id=event_id, retry_count=retry_count,
+        )
+
+
 DEFAULT_MAX_RETRIES = 5
 
 
