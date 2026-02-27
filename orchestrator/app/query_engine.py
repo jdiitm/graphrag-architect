@@ -17,9 +17,9 @@ from orchestrator.app.access_control import (
     SecurityPrincipal,
 )
 from orchestrator.app.circuit_breaker import (
-    CircuitBreaker,
     CircuitBreakerConfig,
     CircuitOpenError,
+    TenantCircuitBreakerRegistry,
 )
 from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfig, RAGEvalConfig
 from orchestrator.app.cypher_sandbox import (
@@ -89,13 +89,13 @@ _VECTOR_STORE = create_vector_store(
 
 _VECTOR_COLLECTION = "service_embeddings"
 
-_CB_LLM = CircuitBreaker(
-    CircuitBreakerConfig(failure_threshold=3, recovery_timeout=30.0),
-    name="llm-synthesize",
+_CB_LLM_REGISTRY = TenantCircuitBreakerRegistry(
+    config=CircuitBreakerConfig(failure_threshold=3, recovery_timeout=30.0),
+    name_prefix="llm-synthesize",
 )
-_CB_EMBEDDING = CircuitBreaker(
-    CircuitBreakerConfig(failure_threshold=5, recovery_timeout=20.0),
-    name="embedding",
+_CB_EMBEDDING_REGISTRY = TenantCircuitBreakerRegistry(
+    config=CircuitBreakerConfig(failure_threshold=5, recovery_timeout=20.0),
+    name_prefix="embedding",
 )
 
 
@@ -149,9 +149,10 @@ async def _raw_embed_query(text: str) -> Optional[List[float]]:
     return None
 
 
-async def _embed_query(text: str) -> Optional[List[float]]:
+async def _embed_query(text: str, tenant_id: str = "") -> Optional[List[float]]:
+    breaker = await _CB_EMBEDDING_REGISTRY.for_tenant(tenant_id)
     try:
-        return await _CB_EMBEDDING.call(_raw_embed_query, text)
+        return await breaker.call(_raw_embed_query, text)
     except CircuitOpenError:
         _query_logger.warning("Embedding circuit open, falling back to fulltext")
         EMBEDDING_FALLBACK_TOTAL.add(1, {"reason": "circuit_open"})
@@ -329,9 +330,11 @@ async def _raw_llm_synthesize_stream(
 async def _llm_synthesize(
     query: str,
     context: List[Dict[str, Any]],
+    tenant_id: str = "",
 ) -> str:
+    breaker = await _CB_LLM_REGISTRY.for_tenant(tenant_id)
     try:
-        return await _CB_LLM.call(_raw_llm_synthesize, query, context)
+        return await breaker.call(_raw_llm_synthesize, query, context)
     except CircuitOpenError:
         _query_logger.warning("LLM circuit open, returning degraded response")
         return (
@@ -370,7 +373,8 @@ async def vector_retrieve(state: QueryState) -> dict:
     with tracer.start_as_current_span("query.vector_retrieve"):
         start = time.monotonic()
         try:
-            embedding = await _embed_query(state["query"])
+            tenant_id = state.get("tenant_id", "")
+            embedding = await _embed_query(state["query"], tenant_id=tenant_id)
             degraded = embedding is None
             async with _neo4j_session(tenant_id=state.get("tenant_id", "")) as driver:
                 candidates = await _fetch_candidates_with_embedding(
@@ -389,7 +393,8 @@ async def vector_retrieve(state: QueryState) -> dict:
 async def _fetch_candidates(
     driver: AsyncDriver, state: QueryState,
 ) -> list:
-    query_embedding = await _embed_query(state["query"])
+    tenant_id = state.get("tenant_id", "")
+    query_embedding = await _embed_query(state["query"], tenant_id=tenant_id)
     return await _fetch_candidates_with_embedding(
         driver, state, query_embedding,
     )
@@ -591,7 +596,7 @@ async def _check_semantic_cache(
 ) -> Tuple[Optional[dict], Optional[List[float]], bool]:
     if _SEMANTIC_CACHE is None:
         return None, None, False
-    query_embedding = await _embed_query(query)
+    query_embedding = await _embed_query(query, tenant_id=tenant_id)
     if query_embedding is None:
         return None, None, False
     result, is_owner = await _SEMANTIC_CACHE.lookup_or_wait(
@@ -817,7 +822,8 @@ async def _do_synthesize(state: QueryState) -> dict:
     ranked_context = _apply_structural_rerank(ranked_context)
     truncated = truncate_context_topology(ranked_context, _DEFAULT_TOKEN_BUDGET)
 
-    answer = await _llm_synthesize(state["query"], truncated)
+    tenant_id = state.get("tenant_id", "")
+    answer = await _llm_synthesize(state["query"], truncated, tenant_id=tenant_id)
     return {"answer": answer, "sources": truncated}
 
 
@@ -893,7 +899,8 @@ async def _run_background_evaluation(
         start = time.monotonic()
         try:
             eval_config = RAGEvalConfig.from_env()
-            query_embedding = await _embed_query(state["query"])
+            tenant_id = state.get("tenant_id", "")
+            query_embedding = await _embed_query(state["query"], tenant_id=tenant_id)
             if query_embedding is None:
                 _EVAL_STORE.put(query_id, {
                     "evaluation_score": None,
