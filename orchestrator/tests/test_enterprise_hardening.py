@@ -123,7 +123,7 @@ class TestVectorStoreProductionGuard:
 
     def test_qdrant_backend_allowed_in_production(self) -> None:
         from orchestrator.app.vector_store import (
-            PooledQdrantVectorStore,
+            QdrantVectorStore,
             create_vector_store,
         )
 
@@ -132,7 +132,7 @@ class TestVectorStoreProductionGuard:
             url="http://localhost:6333",
             deployment_mode="production",
         )
-        assert isinstance(store, PooledQdrantVectorStore)
+        assert isinstance(store, QdrantVectorStore)
 
     def test_unrecognized_backend_raises_in_production(self) -> None:
         from orchestrator.app.vector_store import create_vector_store

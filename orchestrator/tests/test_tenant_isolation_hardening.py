@@ -71,7 +71,6 @@ from orchestrator.app.neo4j_client import (
 from orchestrator.app.vector_store import (
     InMemoryVectorStore,
     QdrantVectorStore,
-    PooledQdrantVectorStore,
     VectorRecord,
 )
 from orchestrator.app.context_manager import format_context_for_prompt
@@ -375,19 +374,14 @@ class TestQdrantDeleteTenantCompoundFilter:
         removed = await store.delete("coll", ["id1", "id2", "id3"], tenant_id="t-a")
         assert removed == 1, "Should return actual count (1), not len(ids) (3)"
 
-    async def test_pooled_qdrant_delete_with_tenant_uses_compound_filter(self) -> None:
-        store = PooledQdrantVectorStore(
-            url="http://localhost:6333", pool_size=1,
-        )
+    async def test_qdrant_delete_with_tenant_uses_compound_filter(self) -> None:
+        store = QdrantVectorStore(url="http://localhost:6333")
         mock_client = AsyncMock()
         mock_count_result = MagicMock()
         mock_count_result.count = 2
         mock_client.count = AsyncMock(return_value=mock_count_result)
         mock_client.delete = AsyncMock()
-        mock_client.get_collections = AsyncMock()
-
-        store._pool._factory = lambda: mock_client
-        store._pool._idle.append(mock_client)
+        store._client = mock_client
 
         await store.delete("coll", ["id1", "id2"], tenant_id="t-a")
 
@@ -398,19 +392,14 @@ class TestQdrantDeleteTenantCompoundFilter:
         assert len(has_id_conds) == 1
         assert len(field_conds) == 1
 
-    async def test_pooled_qdrant_delete_with_tenant_returns_actual_count(self) -> None:
-        store = PooledQdrantVectorStore(
-            url="http://localhost:6333", pool_size=1,
-        )
+    async def test_qdrant_delete_with_tenant_returns_actual_count(self) -> None:
+        store = QdrantVectorStore(url="http://localhost:6333")
         mock_client = AsyncMock()
         mock_count_result = MagicMock()
         mock_count_result.count = 1
         mock_client.count = AsyncMock(return_value=mock_count_result)
         mock_client.delete = AsyncMock()
-        mock_client.get_collections = AsyncMock()
-
-        store._pool._factory = lambda: mock_client
-        store._pool._idle.append(mock_client)
+        store._client = mock_client
 
         removed = await store.delete("coll", ["id1", "id2", "id3"], tenant_id="t-a")
         assert removed == 1, "Should return actual count (1), not len(ids) (3)"
