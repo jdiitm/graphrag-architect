@@ -186,6 +186,15 @@ class BoundedTaskSet:
         self._tasks = {t for t in self._tasks if not t.done()}
         return len(self._tasks) > 0
 
+    async def drain_all(self, timeout: float = 10.0) -> int:
+        self._tasks = {t for t in self._tasks if not t.done()}
+        if not self._tasks:
+            return 0
+        pending = set(self._tasks)
+        done, _ = await asyncio.wait(pending, timeout=timeout)
+        self._tasks -= done
+        return len(done)
+
 
 def create_ingestion_lock(
     key_prefix: str = "graphrag:lock:",

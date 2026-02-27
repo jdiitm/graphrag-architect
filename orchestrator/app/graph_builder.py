@@ -181,9 +181,11 @@ async def invalidate_caches_after_ingest(
             _SEMANTIC_CACHE,
         )
         if node_ids:
-            _SUBGRAPH_CACHE.invalidate_by_nodes(node_ids)
+            sg_result = _SUBGRAPH_CACHE.invalidate_by_nodes(node_ids)
         else:
-            _SUBGRAPH_CACHE.invalidate_tenant(tenant_id)
+            sg_result = _SUBGRAPH_CACHE.invalidate_tenant(tenant_id)
+        if hasattr(sg_result, "__await__"):
+            await sg_result
         if _SEMANTIC_CACHE is not None:
             if node_ids and hasattr(_SEMANTIC_CACHE, "invalidate_by_nodes"):
                 result = _SEMANTIC_CACHE.invalidate_by_nodes(node_ids)

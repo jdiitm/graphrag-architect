@@ -260,6 +260,9 @@ def cache_key(cypher: str, acl_params: Dict[str, str]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+_DEFAULT_MAX_VALUE_BYTES = 1_048_576
+
+
 def create_subgraph_cache() -> Any:
     from orchestrator.app.config import RedisConfig
     redis_cfg = RedisConfig.from_env()
@@ -270,10 +273,15 @@ def create_subgraph_cache() -> Any:
             db=redis_cfg.db,
             key_prefix=redis_cfg.key_prefix,
         )
-    return SubgraphCache(maxsize=default_cache_maxsize())
+    return SubgraphCache(
+        maxsize=default_cache_maxsize(),
+        max_value_bytes=_DEFAULT_MAX_VALUE_BYTES,
+    )
 
 
 class RedisSubgraphCache:
+    _NODE_TAG_PREFIX = "nodetag:"
+
     def __init__(
         self,
         redis_url: str,
@@ -327,14 +335,40 @@ class RedisSubgraphCache:
         try:
             raw = json.dumps(value)
             await self._redis.setex(self._rkey(key), self._ttl, raw)
+            if node_ids:
+                for nid in node_ids:
+                    tag_key = f"{self._prefix}{self._NODE_TAG_PREFIX}{nid}"
+                    await self._redis.sadd(tag_key, self._rkey(key))
+                    await self._redis.expire(tag_key, self._ttl)
         except Exception:
             logger.debug("Redis cache put failed, L1 still updated")
 
-    def invalidate_tenant(self, tenant_id: str) -> int:
-        return self._l1.invalidate_tenant(tenant_id)
+    async def invalidate_tenant(self, tenant_id: str) -> int:
+        count = self._l1.invalidate_tenant(tenant_id)
+        try:
+            prefix = f"{self._prefix}{tenant_id}:"
+            await delete_keys_by_prefix(self._redis, prefix)
+        except Exception:
+            logger.debug("Redis tenant invalidation failed in subgraph cache")
+        return count
 
-    def invalidate_by_nodes(self, node_ids: Set[str]) -> int:
-        return self._l1.invalidate_by_nodes(node_ids)
+    async def invalidate_by_nodes(self, node_ids: Set[str]) -> int:
+        count = self._l1.invalidate_by_nodes(node_ids)
+        try:
+            keys_to_delete: set = set()
+            tag_keys: list = []
+            for nid in node_ids:
+                tag_key = f"{self._prefix}{self._NODE_TAG_PREFIX}{nid}"
+                tag_keys.append(tag_key)
+                members = await self._redis.smembers(tag_key)
+                keys_to_delete.update(members)
+            if keys_to_delete:
+                await self._redis.delete(*keys_to_delete)
+            if tag_keys:
+                await self._redis.delete(*tag_keys)
+        except Exception:
+            logger.debug("Redis node-level invalidation failed in subgraph cache")
+        return count
 
     async def invalidate_all(self) -> None:
         self._l1.invalidate_all()

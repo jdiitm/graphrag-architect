@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import random
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -41,6 +42,7 @@ class CircuitBreakerConfig:
     failure_threshold: int = 3
     recovery_timeout: float = 30.0
     half_open_max_calls: int = 1
+    jitter_factor: float = 0.2
 
 
 @dataclass
@@ -130,6 +132,14 @@ class CircuitBreaker:
         self._name = name
         self._lock: asyncio.Lock | None = None
         self._should_trip = should_trip or _always_trip
+        self._jittered_recovery = self._compute_jittered_recovery()
+
+    def _compute_jittered_recovery(self) -> float:
+        base = self._config.recovery_timeout
+        jf = self._config.jitter_factor
+        if jf <= 0:
+            return base
+        return base * (1.0 + random.uniform(-jf, jf))
 
     def _get_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -150,7 +160,7 @@ class CircuitBreaker:
     def _resolve_state_sync(self, snap: CircuitSnapshot) -> CircuitSnapshot:
         if snap.state == CircuitState.OPEN:
             elapsed = time.monotonic() - snap.last_failure_time
-            if elapsed >= self._config.recovery_timeout:
+            if elapsed >= self._jittered_recovery:
                 snap.state = CircuitState.HALF_OPEN
                 snap.half_open_calls = 0
         return snap
@@ -159,7 +169,7 @@ class CircuitBreaker:
         snap = await self._store.load(self._name)
         if snap.state == CircuitState.OPEN:
             elapsed = time.monotonic() - snap.last_failure_time
-            if elapsed >= self._config.recovery_timeout:
+            if elapsed >= self._jittered_recovery:
                 snap.state = CircuitState.HALF_OPEN
                 snap.half_open_calls = 0
         return snap
@@ -212,13 +222,16 @@ class CircuitBreaker:
         if snap.state == CircuitState.HALF_OPEN:
             snap.state = CircuitState.OPEN
             snap.failure_count = 0
+            self._jittered_recovery = self._compute_jittered_recovery()
         elif snap.failure_count >= self._config.failure_threshold:
             snap.state = CircuitState.OPEN
+            self._jittered_recovery = self._compute_jittered_recovery()
 
     def _record_success(self, snap: CircuitSnapshot) -> None:
         snap.failure_count = 0
         snap.state = CircuitState.CLOSED
         snap.half_open_calls = 0
+        self._jittered_recovery = self._compute_jittered_recovery()
 
     def _sync_snapshot(self, snap: CircuitSnapshot) -> None:
         self._sync_state = snap.state
