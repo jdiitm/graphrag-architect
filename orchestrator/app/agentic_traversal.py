@@ -56,6 +56,20 @@ _SAMPLED_NEIGHBOR_TEMPLATE = (
     "ORDER BY rand() LIMIT $sample_size"
 )
 
+_BATCHED_NEIGHBOR_TEMPLATE = (
+    "UNWIND $frontier_ids AS fid "
+    "MATCH (source {id: fid, tenant_id: $tenant_id})"
+    "-[r]->(target) "
+    "WHERE target.tenant_id = $tenant_id "
+    "AND r.tombstoned_at IS NULL "
+    "AND ($is_admin OR target.team_owner = $acl_team "
+    "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
+    "RETURN source.id AS source_id, target.id AS target_id, "
+    "target.name AS target_name, type(r) AS rel_type, "
+    "labels(target)[0] AS target_label "
+    "LIMIT $limit"
+)
+
 _BOUNDED_PATH_TEMPLATE = (
     "MATCH path = (source {{id: $start_id, tenant_id: $tenant_id}})"
     "-[*1..{max_hops}]->(target) "
@@ -250,7 +264,63 @@ async def execute_hop(
         return await session.execute_read(_tx, timeout=timeout)
 
 
-async def _sequential_bfs(
+async def execute_batched_hop(
+    driver: AsyncDriver,
+    source_ids: List[str],
+    tenant_id: str,
+    acl_params: Dict[str, Any],
+    timeout: float = 30.0,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    if not source_ids:
+        return []
+
+    params = {
+        "frontier_ids": source_ids,
+        "tenant_id": tenant_id,
+        "limit": limit,
+        **acl_params,
+    }
+
+    async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
+        result = await tx.run(_BATCHED_NEIGHBOR_TEMPLATE, **params)
+        return await result.data()
+
+    async with driver.session() as session:
+        return await session.execute_read(_tx, timeout=timeout)
+
+
+def _drain_frontier(state: TraversalState) -> List[str]:
+    batch: List[str] = []
+    seen: Set[str] = set()
+    while state.frontier:
+        candidate = state.frontier.pop(0)
+        if candidate not in state.visited_nodes and candidate not in seen:
+            batch.append(candidate)
+            seen.add(candidate)
+    return batch
+
+
+def _record_batched_results(
+    agent: TraversalAgent,
+    state: TraversalState,
+    frontier_batch: List[str],
+    results: List[Dict[str, Any]],
+    hop_number: int,
+) -> None:
+    for node_id in frontier_batch:
+        node_results = [r for r in results if r.get("source_id") == node_id]
+        new_frontier = [r["target_id"] for r in node_results if "target_id" in r]
+        step = TraversalStep(
+            node_id=node_id,
+            hop_number=hop_number,
+            results=node_results,
+            new_frontier=new_frontier,
+        )
+        agent.record_step(state, step)
+
+
+async def _batched_bfs(
     driver: AsyncDriver,
     start_node_id: str,
     tenant_id: str,
@@ -259,38 +329,24 @@ async def _sequential_bfs(
     timeout: float,
     token_budget: TokenBudget,
 ) -> List[Dict[str, Any]]:
-    agent = TraversalAgent(
-        max_hops=max_hops,
-        token_budget=token_budget,
-    )
+    agent = TraversalAgent(max_hops=max_hops, token_budget=token_budget)
     state = agent.create_state(start_node_id)
-
     hop_number = 0
+
     while state.should_continue:
-        node_id = agent.select_next_node(state)
-        if node_id is None:
+        frontier_batch = _drain_frontier(state)
+        if not frontier_batch:
             break
 
         hop_number += 1
-        results = await execute_hop(
+        results = await execute_batched_hop(
             driver=driver,
-            source_id=node_id,
+            source_ids=frontier_batch,
             tenant_id=tenant_id,
             acl_params=acl_params,
             timeout=timeout,
         )
-
-        new_frontier = [
-            r["target_id"] for r in results if "target_id" in r
-        ]
-
-        step = TraversalStep(
-            node_id=node_id,
-            hop_number=hop_number,
-            results=results,
-            new_frontier=new_frontier,
-        )
-        agent.record_step(state, step)
+        _record_batched_results(agent, state, frontier_batch, results, hop_number)
 
     return agent.get_context(state)
 
@@ -318,12 +374,12 @@ async def run_traversal(
         return truncate_context(raw_results, effective_budget)
     except (Neo4jError, asyncio.TimeoutError, OSError):
         logger.warning(
-            "Bounded path expansion failed for node %s, falling back to sequential BFS",
+            "Bounded path expansion failed for node %s, falling back to batched BFS",
             start_node_id,
             exc_info=True,
         )
 
-    return await _sequential_bfs(
+    return await _batched_bfs(
         driver=driver,
         start_node_id=start_node_id,
         tenant_id=tenant_id,

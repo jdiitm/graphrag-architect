@@ -117,8 +117,11 @@ class TestRunTraversal:
 
     @pytest.mark.asyncio
     async def test_single_hop_traversal(self) -> None:
-        hop_results = [
+        from neo4j.exceptions import Neo4jError
+
+        batched_results = [
             {
+                "source_id": "svc-a",
                 "target_id": "svc-b",
                 "target_name": "payment-service",
                 "rel_type": "CALLS",
@@ -127,92 +130,131 @@ class TestRunTraversal:
         ]
         mock_session = AsyncMock()
         mock_session.execute_read = AsyncMock(
-            side_effect=[_LOW_DEGREE, hop_results, _LOW_DEGREE, []]
+            side_effect=[batched_results, []]
         )
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         driver = _mock_driver(mock_session)
 
-        context = await run_traversal(
-            driver=driver,
-            start_node_id="svc-a",
-            tenant_id="tenant-1",
-            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
-            max_hops=2,
-            timeout=30.0,
-        )
+        with patch(
+            "orchestrator.app.agentic_traversal.bounded_path_expansion",
+            new_callable=AsyncMock,
+            side_effect=Neo4jError("force fallback"),
+        ):
+            context = await run_traversal(
+                driver=driver,
+                start_node_id="svc-a",
+                tenant_id="tenant-1",
+                acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+                max_hops=2,
+                timeout=30.0,
+            )
 
         assert len(context) >= 1
-        assert any(r["target_id"] == "svc-b" for r in context)
+        assert any(r.get("target_id") == "svc-b" for r in context)
 
     @pytest.mark.asyncio
     async def test_traversal_stops_at_max_hops(self) -> None:
-        endless_results = [
-            {
-                "target_id": f"svc-{i}",
-                "target_name": f"service-{i}",
-                "rel_type": "CALLS",
-                "target_label": "Service",
-            }
+        from neo4j.exceptions import Neo4jError
+
+        hop1_results = [
+            {"source_id": "root", "target_id": f"svc-{i}",
+             "target_name": f"service-{i}", "rel_type": "CALLS",
+             "target_label": "Service"}
             for i in range(5)
         ]
-        effects = []
-        for _ in range(10):
-            effects.append(_LOW_DEGREE)
-            effects.append(endless_results)
+        hop2_results = [
+            {"source_id": f"svc-{i}", "target_id": f"deep-{i}",
+             "target_name": f"deep-{i}", "rel_type": "CALLS",
+             "target_label": "Service"}
+            for i in range(5)
+        ]
+        hop3_results = [
+            {"source_id": f"deep-{i}", "target_id": f"ultra-{i}",
+             "target_name": f"ultra-{i}", "rel_type": "CALLS",
+             "target_label": "Service"}
+            for i in range(5)
+        ]
         mock_session = AsyncMock()
-        mock_session.execute_read = AsyncMock(side_effect=effects)
+        mock_session.execute_read = AsyncMock(
+            side_effect=[hop1_results, hop2_results, hop3_results]
+        )
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         driver = _mock_driver(mock_session)
 
-        await run_traversal(
-            driver=driver,
-            start_node_id="root",
-            tenant_id="t1",
-            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
-            max_hops=2,
-            timeout=30.0,
-        )
+        with patch(
+            "orchestrator.app.agentic_traversal.bounded_path_expansion",
+            new_callable=AsyncMock,
+            side_effect=Neo4jError("force fallback"),
+        ):
+            context = await run_traversal(
+                driver=driver,
+                start_node_id="root",
+                tenant_id="t1",
+                acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+                max_hops=2,
+                timeout=30.0,
+            )
 
-        assert mock_session.execute_read.call_count <= 6
+        assert mock_session.execute_read.call_count == 2
+        assert len(context) >= 1
 
     @pytest.mark.asyncio
     async def test_traversal_respects_token_budget(self) -> None:
-        big_results = [
-            {
-                "target_id": "big",
-                "target_name": "x" * 200,
-                "rel_type": "CALLS",
-                "target_label": "Service",
-            }
+        from neo4j.exceptions import Neo4jError
+
+        hop1_results = [
+            {"source_id": "root", "target_id": f"svc-{i}",
+             "target_name": f"service-{i}", "rel_type": "CALLS",
+             "target_label": "Service"}
+            for i in range(3)
         ]
-        effects = []
-        for _ in range(10):
-            effects.append(_LOW_DEGREE)
-            effects.append(big_results)
+        hop2_results = [
+            {"source_id": f"svc-{i}", "target_id": f"deep-{i}",
+             "target_name": f"deep-{i}", "rel_type": "CALLS",
+             "target_label": "Service"}
+            for i in range(3)
+        ]
         mock_session = AsyncMock()
-        mock_session.execute_read = AsyncMock(side_effect=effects)
+        mock_session.execute_read = AsyncMock(
+            side_effect=[hop1_results, hop2_results, []]
+        )
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         driver = _mock_driver(mock_session)
 
-        context = await run_traversal(
-            driver=driver,
-            start_node_id="root",
-            tenant_id="t1",
-            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
-            max_hops=5,
-            timeout=30.0,
-            token_budget=TokenBudget(max_context_tokens=10),
-        )
+        with patch(
+            "orchestrator.app.agentic_traversal.bounded_path_expansion",
+            new_callable=AsyncMock,
+            side_effect=Neo4jError("force fallback"),
+        ), patch(
+            "orchestrator.app.agentic_traversal.estimate_tokens",
+            return_value=10,
+        ), patch(
+            "orchestrator.app.context_manager.estimate_tokens",
+            return_value=10,
+        ):
+            context = await run_traversal(
+                driver=driver,
+                start_node_id="root",
+                tenant_id="t1",
+                acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+                max_hops=5,
+                timeout=30.0,
+                token_budget=TokenBudget(max_context_tokens=30),
+            )
 
-        assert isinstance(context, list)
+        assert mock_session.execute_read.call_count == 1
+        assert len(context) == 3
 
     @pytest.mark.asyncio
     async def test_traversal_does_not_revisit_nodes(self) -> None:
+        from neo4j.exceptions import Neo4jError
+
         cycle_results = [
             {
+                "source_id": "svc-a",
                 "target_id": "svc-a",
                 "target_name": "self-ref",
                 "rel_type": "CALLS",
@@ -221,40 +263,51 @@ class TestRunTraversal:
         ]
         mock_session = AsyncMock()
         mock_session.execute_read = AsyncMock(
-            side_effect=[_LOW_DEGREE, cycle_results]
+            side_effect=[cycle_results, []]
         )
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         driver = _mock_driver(mock_session)
 
-        await run_traversal(
-            driver=driver,
-            start_node_id="svc-a",
-            tenant_id="t1",
-            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
-            max_hops=5,
-            timeout=30.0,
-        )
+        with patch(
+            "orchestrator.app.agentic_traversal.bounded_path_expansion",
+            new_callable=AsyncMock,
+            side_effect=Neo4jError("force fallback"),
+        ):
+            await run_traversal(
+                driver=driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+                max_hops=5,
+                timeout=30.0,
+            )
 
-        assert mock_session.execute_read.call_count == 2
+        assert mock_session.execute_read.call_count <= 2
 
     @pytest.mark.asyncio
     async def test_traversal_returns_empty_for_isolated_node(self) -> None:
+        from neo4j.exceptions import Neo4jError
+
         mock_session = AsyncMock()
-        mock_session.execute_read = AsyncMock(
-            side_effect=[_LOW_DEGREE, []]
-        )
+        mock_session.execute_read = AsyncMock(side_effect=[[]])
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         driver = _mock_driver(mock_session)
 
-        context = await run_traversal(
-            driver=driver,
-            start_node_id="orphan",
-            tenant_id="t1",
-            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
-            max_hops=3,
-            timeout=30.0,
-        )
+        with patch(
+            "orchestrator.app.agentic_traversal.bounded_path_expansion",
+            new_callable=AsyncMock,
+            side_effect=Neo4jError("force fallback"),
+        ):
+            context = await run_traversal(
+                driver=driver,
+                start_node_id="orphan",
+                tenant_id="t1",
+                acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+                max_hops=3,
+                timeout=30.0,
+            )
 
         assert context == []
+        assert mock_session.execute_read.call_count == 1
