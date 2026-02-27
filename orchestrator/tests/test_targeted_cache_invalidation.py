@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -293,3 +293,78 @@ class TestInvalidateCachesWithNodeIds:
             await invalidate_caches_after_ingest(tenant_id="team-alpha")
 
         subgraph_cache.invalidate_tenant.assert_called_once_with("team-alpha")
+
+
+class TestCachePutPropagatesNodeIds:
+
+    @pytest.mark.asyncio
+    async def test_cache_put_tags_entries_for_targeted_invalidation(self) -> None:
+        cache = SubgraphCache(maxsize=256)
+        records: List[Dict[str, Any]] = [
+            {"id": "node-A", "name": "auth-service"},
+            {"id": "node-B", "name": "billing-service"},
+        ]
+        node_ids = {r.get("id") or r.get("target_id", "") for r in records}
+        node_ids.discard("")
+
+        with patch("orchestrator.app.query_engine._SUBGRAPH_CACHE", new=cache):
+            from orchestrator.app.query_engine import _cache_put
+            await _cache_put("test-key", records, node_ids=node_ids)
+
+        assert cache.get("test-key") == records
+        evicted = cache.invalidate_by_nodes({"node-A"})
+        assert evicted == 1
+        assert cache.get("test-key") is None
+
+
+class TestRedisSubgraphCachePutForwardsNodeIds:
+
+    @pytest.mark.asyncio
+    async def test_put_forwards_node_ids_to_l1(self) -> None:
+        from orchestrator.app.subgraph_cache import RedisSubgraphCache
+
+        mock_redis = AsyncMock()
+        with patch("redis.asyncio.from_url", return_value=mock_redis):
+            cache = RedisSubgraphCache(redis_url="redis://localhost:6379")
+
+        await cache.put("q1", [{"svc": "auth"}], node_ids={"node-A"})
+
+        assert cache._l1.get("q1") == [{"svc": "auth"}]
+        evicted = cache.invalidate_by_nodes({"node-A"})
+        assert evicted == 1
+        assert cache._l1.get("q1") is None
+
+
+class TestEndToEndTargetedInvalidation:
+
+    @pytest.mark.asyncio
+    async def test_ingest_invalidates_entries_populated_via_cache_put(self) -> None:
+        cache = SubgraphCache(maxsize=256)
+        records: List[Dict[str, Any]] = [
+            {"id": "svc-0", "name": "service-0"},
+        ]
+        node_ids = {r.get("id") or r.get("target_id", "") for r in records}
+        node_ids.discard("")
+
+        semantic_cache = MagicMock()
+        semantic_cache.invalidate_tenant = MagicMock(return_value=0)
+
+        with (
+            patch("orchestrator.app.query_engine._SUBGRAPH_CACHE", new=cache),
+            patch("orchestrator.app.query_engine._SEMANTIC_CACHE", new=semantic_cache),
+        ):
+            from orchestrator.app.query_engine import _cache_put
+            await _cache_put("test-tenant:query-key", records, node_ids=node_ids)
+
+        assert cache.get("test-tenant:query-key") is not None
+
+        with (
+            patch("orchestrator.app.query_engine._SUBGRAPH_CACHE", new=cache),
+            patch("orchestrator.app.query_engine._SEMANTIC_CACHE", new=semantic_cache),
+        ):
+            from orchestrator.app.graph_builder import invalidate_caches_after_ingest
+            await invalidate_caches_after_ingest(
+                tenant_id="test-tenant", node_ids={"svc-0"},
+            )
+
+        assert cache.get("test-tenant:query-key") is None

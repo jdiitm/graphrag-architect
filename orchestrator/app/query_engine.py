@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -518,8 +518,10 @@ async def _cache_get(key: str) -> Optional[list]:
     return result
 
 
-async def _cache_put(key: str, value: list) -> None:
-    result = _SUBGRAPH_CACHE.put(key, value)
+async def _cache_put(
+    key: str, value: list, node_ids: Optional[Set[str]] = None,
+) -> None:
+    result = _SUBGRAPH_CACHE.put(key, value, node_ids=node_ids)
     if inspect.isawaitable(result):
         await result
 
@@ -558,7 +560,10 @@ async def _execute_sandboxed_read(
         records = await session.execute_read(_tx, timeout=timeout)
 
     if records:
-        await _cache_put(cache_key, records)
+        await _cache_put(
+            cache_key, records,
+            node_ids={r.get("id") or r.get("target_id", "") for r in records} - {""} or None,
+        )
     return records
 
 

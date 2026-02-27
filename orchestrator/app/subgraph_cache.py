@@ -319,8 +319,11 @@ class RedisSubgraphCache:
             logger.debug("Redis cache get failed, falling back to L1 miss")
         return None
 
-    async def put(self, key: str, value: List[Dict[str, Any]]) -> None:
-        self._l1.put(key, value)
+    async def put(
+        self, key: str, value: List[Dict[str, Any]],
+        node_ids: Optional[Set[str]] = None,
+    ) -> None:
+        self._l1.put(key, value, node_ids=node_ids)
         try:
             raw = json.dumps(value)
             await self._redis.setex(self._rkey(key), self._ttl, raw)
