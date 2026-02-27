@@ -36,6 +36,7 @@ from orchestrator.app.context_manager import (
 from orchestrator.app.prompt_sanitizer import sanitize_query_input
 from orchestrator.app.graph_embeddings import compute_centroid, rerank_with_structural
 from orchestrator.app.reranker import BM25Reranker
+from orchestrator.app.density_reranker import DensityReranker, DensityRerankerConfig
 from orchestrator.app.agentic_traversal import run_traversal
 from orchestrator.app.tombstone_filter import filter_tombstoned_results
 from orchestrator.app.lazy_traversal import gds_pagerank_filter
@@ -762,6 +763,9 @@ async def synthesize_answer(state: QueryState) -> dict:
 
 
 _DEFAULT_RERANKER = BM25Reranker()
+_DENSITY_CFG = DensityRerankerConfig.from_env()
+_DENSITY_RERANKER = DensityReranker(
+    lambda_param=_DENSITY_CFG.lambda_param, min_candidates=_DENSITY_CFG.min_candidates)
 _DEFAULT_TOKEN_BUDGET = TokenBudget()
 _STRUCTURAL_EMBEDDINGS: Dict[str, List[float]] = {}
 
@@ -827,6 +831,10 @@ async def _do_synthesize(state: QueryState) -> dict:
     reranked = _DEFAULT_RERANKER.rerank(state["query"], context)
     ranked_context = [sc.data for sc in reranked]
     ranked_context = _apply_structural_rerank(ranked_context)
+
+    if _DENSITY_CFG.enable_density_rerank:
+        ranked_context = [sc.data for sc in _DENSITY_RERANKER.rerank(
+            state["query"], ranked_context)]
     truncated = truncate_context_topology(ranked_context, _DEFAULT_TOKEN_BUDGET)
 
     tenant_id = state.get("tenant_id", "")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Protocol
+from typing import Any, Dict, List, Protocol, runtime_checkable
 
 
 @dataclass
@@ -12,6 +12,7 @@ class ScoredCandidate:
     score: float = 0.0
 
 
+@runtime_checkable
 class Reranker(Protocol):
     def rerank(
         self,
