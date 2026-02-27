@@ -137,6 +137,7 @@ class TraversalState:
     frontier: List[str] = field(default_factory=list)
     accumulated_context: List[Dict[str, Any]] = field(default_factory=list)
     remaining_hops: int = MAX_HOPS
+    max_visited: int = MAX_VISITED
     token_budget: TokenBudget = field(default_factory=TokenBudget)
     current_tokens: int = 0
 
@@ -144,7 +145,7 @@ class TraversalState:
     def should_continue(self) -> bool:
         if self.remaining_hops <= 0:
             return False
-        if len(self.visited_nodes) >= MAX_VISITED:
+        if len(self.visited_nodes) >= self.max_visited:
             return False
         if not self.frontier:
             return False
@@ -176,6 +177,7 @@ class TraversalAgent:
         return TraversalState(
             frontier=[start_node_id],
             remaining_hops=self._max_hops,
+            max_visited=self._max_visited,
             token_budget=self._token_budget,
         )
 
@@ -369,8 +371,11 @@ async def _batched_bfs(
     max_hops: int,
     timeout: float,
     token_budget: TokenBudget,
+    max_visited: int = MAX_VISITED,
 ) -> List[Dict[str, Any]]:
-    agent = TraversalAgent(max_hops=max_hops, token_budget=token_budget)
+    agent = TraversalAgent(
+        max_hops=max_hops, max_visited=max_visited, token_budget=token_budget
+    )
     state = agent.create_state(start_node_id)
     hop_number = 0
 
@@ -426,6 +431,7 @@ async def _run_bounded_with_fallback(
     max_hops: int,
     timeout: float,
     effective_budget: TokenBudget,
+    max_visited: int = MAX_VISITED,
 ) -> List[Dict[str, Any]]:
     try:
         raw_results = await bounded_path_expansion(
@@ -434,6 +440,7 @@ async def _run_bounded_with_fallback(
             tenant_id=tenant_id,
             acl_params=acl_params,
             max_hops=max_hops,
+            max_nodes=max_visited,
             timeout=timeout,
         )
         return truncate_context(raw_results, effective_budget)
@@ -452,6 +459,7 @@ async def _run_bounded_with_fallback(
         max_hops=max_hops,
         timeout=timeout,
         token_budget=effective_budget,
+        max_visited=max_visited,
     )
 
 
@@ -480,6 +488,7 @@ async def run_traversal(
 
     effective_hops = min(max_hops, config.max_hops)
     effective_timeout = min(timeout, config.timeout)
+    effective_max_visited = config.max_visited
 
     if config.strategy == TraversalStrategy.BATCHED_BFS:
         return await _batched_bfs(
@@ -490,6 +499,7 @@ async def run_traversal(
             max_hops=effective_hops,
             timeout=effective_timeout,
             token_budget=effective_budget,
+            max_visited=effective_max_visited,
         )
 
     if config.strategy == TraversalStrategy.BOUNDED_CYPHER:
@@ -501,7 +511,11 @@ async def run_traversal(
             max_hops=effective_hops,
             timeout=effective_timeout,
             effective_budget=effective_budget,
+            max_visited=effective_max_visited,
         )
+
+    if config.strategy != TraversalStrategy.ADAPTIVE:
+        raise ValueError(f"Unknown traversal strategy: {config.strategy}")
 
     degree = await _probe_start_degree(driver, start_node_id, tenant_id)
 
@@ -520,6 +534,7 @@ async def run_traversal(
             max_hops=effective_hops,
             timeout=effective_timeout,
             token_budget=effective_budget,
+            max_visited=effective_max_visited,
         )
 
     logger.info(
@@ -536,4 +551,5 @@ async def run_traversal(
         max_hops=effective_hops,
         timeout=effective_timeout,
         effective_budget=effective_budget,
+        max_visited=effective_max_visited,
     )

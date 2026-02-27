@@ -73,6 +73,24 @@ class TestTraversalState:
         )
         assert state.should_continue is False
 
+    def test_should_continue_respects_custom_max_visited(self) -> None:
+        state = TraversalState(
+            visited_nodes=set(f"n-{i}" for i in range(5)),
+            frontier=["node-next"],
+            remaining_hops=3,
+            max_visited=5,
+        )
+        assert state.should_continue is False
+
+    def test_should_continue_true_below_custom_max_visited(self) -> None:
+        state = TraversalState(
+            visited_nodes=set(f"n-{i}" for i in range(4)),
+            frontier=["node-next"],
+            remaining_hops=3,
+            max_visited=5,
+        )
+        assert state.should_continue is True
+
 
 class TestTraversalAgent:
     def test_create_state_initializes_correctly(self) -> None:
@@ -371,6 +389,140 @@ class TestRunTraversalStrategySelection:
             mock_bounded.assert_not_called()
             mock_bfs.assert_called_once()
             assert result == expected
+
+    @pytest.mark.asyncio
+    async def test_config_max_visited_flows_to_batched_bfs(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.BATCHED_BFS,
+            max_visited=10,
+        )
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+
+        with patch(
+            "orchestrator.app.agentic_traversal._batched_bfs",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_bfs:
+            await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                config=config,
+            )
+            assert mock_bfs.call_args.kwargs["max_visited"] == 10
+
+    @pytest.mark.asyncio
+    async def test_config_max_visited_flows_to_bounded_expansion(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.BOUNDED_CYPHER,
+            max_visited=10,
+        )
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+
+        with patch(
+            "orchestrator.app.agentic_traversal.bounded_path_expansion",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_bounded:
+            await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                config=config,
+            )
+            assert mock_bounded.call_args.kwargs["max_nodes"] == 10
+
+    @pytest.mark.asyncio
+    async def test_unknown_strategy_raises_value_error(self) -> None:
+        config = TraversalConfig()
+        object.__setattr__(config, "strategy", "not_a_real_strategy")
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+
+        with pytest.raises(ValueError, match="Unknown traversal strategy"):
+            await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                config=config,
+            )
+
+    @pytest.mark.asyncio
+    async def test_config_clamps_max_hops_when_config_is_lower(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.BATCHED_BFS,
+            max_hops=2,
+        )
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+
+        with patch(
+            "orchestrator.app.agentic_traversal._batched_bfs",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_bfs:
+            await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                max_hops=5,
+                config=config,
+            )
+            assert mock_bfs.call_args.kwargs["max_hops"] == 2
+
+    @pytest.mark.asyncio
+    async def test_config_clamps_max_hops_when_arg_is_lower(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.BATCHED_BFS,
+            max_hops=5,
+        )
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+
+        with patch(
+            "orchestrator.app.agentic_traversal._batched_bfs",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_bfs:
+            await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                max_hops=3,
+                config=config,
+            )
+            assert mock_bfs.call_args.kwargs["max_hops"] == 3
+
+    @pytest.mark.asyncio
+    async def test_config_clamps_timeout_when_config_is_lower(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.BATCHED_BFS,
+            timeout=10.0,
+        )
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+
+        with patch(
+            "orchestrator.app.agentic_traversal._batched_bfs",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_bfs:
+            await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                timeout=30.0,
+                config=config,
+            )
+            assert mock_bfs.call_args.kwargs["timeout"] == 10.0
 
     @pytest.mark.asyncio
     async def test_adaptive_fallback_on_bounded_error(self) -> None:
