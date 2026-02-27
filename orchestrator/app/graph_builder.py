@@ -502,7 +502,7 @@ async def _enqueue_vector_cleanup(
     span.set_attribute("vectors_queued_for_delete", len(pruned_ids))
 
 
-async def _enqueue_vector_cleanup_transactional(
+async def _enqueue_vector_cleanup_durable(
     pruned_ids: list, span: Any, tenant_id: str,
     neo4j_driver: Any,
 ) -> None:
@@ -511,8 +511,7 @@ async def _enqueue_vector_cleanup_transactional(
         collection=collection, pruned_ids=pruned_ids,
     )
     store = Neo4jOutboxStore(driver=neo4j_driver)
-    async with neo4j_driver.session() as session:
-        await session.execute_write(store.write_in_tx, event=event)
+    await store.write_event(event)
     span.set_attribute("vector_sync_events_queued", 1)
     span.set_attribute("vectors_queued_for_delete", len(pruned_ids))
 
@@ -549,7 +548,7 @@ async def _post_commit_side_effects(
         pruned_count, pruned_ids = await repo.prune_stale_edges(ingestion_id)
         span.set_attribute("edges_pruned", pruned_count)
         if pruned_ids and neo4j_driver is not None:
-            await _enqueue_vector_cleanup_transactional(
+            await _enqueue_vector_cleanup_durable(
                 pruned_ids, span, tenant_id, neo4j_driver,
             )
         else:
