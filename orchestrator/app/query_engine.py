@@ -38,6 +38,7 @@ from orchestrator.app.graph_embeddings import compute_centroid, rerank_with_stru
 from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.density_reranker import DensityReranker, DensityRerankerConfig
 from orchestrator.app.agentic_traversal import run_traversal
+from orchestrator.app.executor import get_thread_pool
 from orchestrator.app.tombstone_filter import filter_tombstoned_results
 from orchestrator.app.lazy_traversal import gds_pagerank_filter
 from orchestrator.app.query_templates import (
@@ -832,6 +833,47 @@ _DEGRADATION_NOTICE = (
 )
 
 
+def _sync_bm25_rerank(
+    query: str, candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    scored = _DEFAULT_RERANKER.rerank(query, candidates)
+    return [sc.data for sc in scored]
+
+
+def _sync_density_rerank(
+    query: str, candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    scored = _DENSITY_RERANKER.rerank(query, candidates)
+    return [sc.data for sc in scored]
+
+
+async def _async_rerank_candidates(
+    query: str,
+    candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not candidates:
+        return []
+
+    loop = asyncio.get_running_loop()
+    pool = get_thread_pool()
+
+    ranked = await loop.run_in_executor(
+        pool, _sync_bm25_rerank, query, candidates,
+    )
+
+    if _STRUCTURAL_EMBEDDINGS:
+        ranked = await loop.run_in_executor(
+            pool, _apply_structural_rerank, ranked,
+        )
+
+    if _DENSITY_CFG.enable_density_rerank:
+        ranked = await loop.run_in_executor(
+            pool, _sync_density_rerank, query, ranked,
+        )
+
+    return ranked
+
+
 async def _do_synthesize(state: QueryState) -> dict:
     context: List[Dict[str, Any]] = []
     if state.get("candidates"):
@@ -848,13 +890,7 @@ async def _do_synthesize(state: QueryState) -> dict:
     if state.get("retrieval_degraded"):
         context.insert(0, {"_degradation_notice": _DEGRADATION_NOTICE})
 
-    reranked = _DEFAULT_RERANKER.rerank(state["query"], context)
-    ranked_context = [sc.data for sc in reranked]
-    ranked_context = _apply_structural_rerank(ranked_context)
-
-    if _DENSITY_CFG.enable_density_rerank:
-        ranked_context = [sc.data for sc in _DENSITY_RERANKER.rerank(
-            state["query"], ranked_context)]
+    ranked_context = await _async_rerank_candidates(state["query"], context)
     truncated = truncate_context_topology(ranked_context, _DEFAULT_TOKEN_BUDGET)
 
     tenant_id = state.get("tenant_id", "")
