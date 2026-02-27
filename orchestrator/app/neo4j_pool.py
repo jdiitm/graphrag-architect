@@ -45,6 +45,37 @@ def init_driver() -> None:
     _state["database"] = config.database
 
 
+class ReplicaAwarePool:
+    def __init__(
+        self,
+        primary_driver: AsyncDriver,
+        replica_drivers: tuple[AsyncDriver, ...] = (),
+    ) -> None:
+        self._primary = primary_driver
+        self._replicas = replica_drivers
+        self._index = 0
+
+    def get_read_driver(self) -> AsyncDriver:
+        if not self._replicas:
+            return self._primary
+        driver = self._replicas[self._index % len(self._replicas)]
+        self._index += 1
+        return driver
+
+    def get_write_driver(self) -> AsyncDriver:
+        return self._primary
+
+    async def close_all(self) -> None:
+        await self._primary.close()
+        for replica in self._replicas:
+            await replica.close()
+
+
+_REPLICA_STATE: dict[str, Optional[ReplicaAwarePool]] = {
+    "pool": None,
+}
+
+
 async def close_driver() -> None:
     driver = _state.get("driver")
     if driver is not None:
@@ -77,6 +108,13 @@ def get_driver() -> AsyncDriver:
             "Neo4j driver not initialized. Call init_driver() first."
         )
     return driver
+
+
+def get_read_driver() -> AsyncDriver:
+    pool = _REPLICA_STATE.get("pool")
+    if pool is not None:
+        return pool.get_read_driver()
+    return get_driver()
 
 
 def get_tenant_registry() -> Optional[TenantRegistry]:

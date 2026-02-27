@@ -218,6 +218,31 @@ class JobStoreConfig:
         return cls()
 
 
+@dataclass(frozen=True)
+class ReadReplicaConfig:
+    enabled: bool = False
+    read_replica_uris: tuple[str, ...] = ()
+    read_pool_size: int = 50
+
+    @classmethod
+    def from_env(cls) -> ReadReplicaConfig:
+        enabled = os.environ.get(
+            "NEO4J_READ_REPLICA_ENABLED", "false",
+        ).lower() in ("true", "1", "yes")
+        raw_uris = os.environ.get("NEO4J_READ_REPLICA_URIS", "")
+        uris = tuple(
+            u.strip() for u in raw_uris.split(",") if u.strip()
+        )
+        pool_size = int(
+            os.environ.get("NEO4J_READ_REPLICA_POOL_SIZE", "50"),
+        )
+        return cls(
+            enabled=enabled,
+            read_replica_uris=uris,
+            read_pool_size=pool_size,
+        )
+
+
 _SINK_BATCH_MIN = 100
 _SINK_BATCH_MAX = 5000
 _SINK_BATCH_DEFAULT = 500
