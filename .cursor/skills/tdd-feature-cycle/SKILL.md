@@ -1,29 +1,28 @@
 ---
 name: tdd-feature-cycle
-description: Autonomous end-to-end feature development cycle for graphrag-architect. Launches an independent audit subagent (Phase 0) if needed, discovers the highest-priority missing requirement, implements it with strict TDD (red-green-refactor), performs a staff-level self-review, and raises a Pull Request. Use when asked to implement the next feature, build the next component, continue development, pick up the next task, or start a new development cycle.
+description: Autonomous end-to-end feature development cycle for graphrag-architect. Consumes an audit report provided in the triggering prompt, picks the highest-priority finding, implements it with strict TDD (red-green-refactor), performs a staff-level self-review, and raises a Pull Request. Use when asked to implement the next feature, build the next component, continue development, pick up the next task, or start a new development cycle.
 ---
 
 # TDD Feature Cycle
 
-Autonomous workflow: launch an independent audit (zero-context subagent), discover the next missing feature, implement it via strict TDD, self-review, and raise a PR. Halt after PR creation -- never merge your own PRs.
+Autonomous workflow: consume an audit report supplied in the triggering prompt, pick the highest-priority finding, implement it via strict TDD, self-review, and raise a PR. Halt after PR creation -- never merge your own PRs.
 
 ## FSM Position
 
 ```
-AUDIT (separate session) → **TDD** ─┬─ [RED/YELLOW] → implement → PR → REVIEW ─┬─ [merged]  → AUDIT → TDD
-                                     └─ [GREEN]      → idle                      └─ [changes] → FIX → REVIEW
+AUDIT (user-provided) → **TDD** ─── implement → PR → REVIEW ─┬─ [merged]  → TDD
+                                                               └─ [changes] → FIX → REVIEW
 ```
 
 You are in the **TDD** state. You are the primary entry point for development cycles.
-Phase 0 verifies an independent audit exists. The audit MUST have run in a separate chat — never in this session.
-Only GREEN halts — both RED and YELLOW have actionable work.
+The audit report is provided by the user in the prompt that triggers this skill — you never generate it yourself.
 
 ## Isolation Protocol
 
-This skill MUST run in a **fresh conversation** with no prior context from `@pr-review`, `@pr-fix`, `@system-audit`, or `@doc-sync`.
-You are Engineer 1. You have never seen the review feedback, fix commits, or audit reports from any other skill.
+This skill MUST run in a **fresh conversation** with no prior context from `@pr-review`, `@pr-fix`, or `@doc-sync`.
+You are Engineer 1. You have never seen the review feedback or fix commits from any other skill.
 
-If you have any memory of reviewing, fixing, or auditing code in this session, STOP — you are contaminated.
+If you have any memory of reviewing or fixing code in this session, STOP — you are contaminated.
 Tell the user: "This skill must run in a new conversation to maintain isolation."
 
 ## Precondition Gate
@@ -41,6 +40,18 @@ gh pr list --state open --limit 1  # must be empty
 **If not on main:** HALT. Tell the user: "Not on main branch. Resolve the current branch first."
 **If open PRs exist:** HALT. Tell the user: "Open PR detected. Complete the review/fix cycle first via `@pr-review`."
 
+### Audit Report Input
+
+The user's triggering prompt MUST include an audit report (inline text or pasted content). This report contains a Verdict section and a Requirement Gaps table produced by a prior `@system-audit` run.
+
+**If the triggering prompt does not contain an audit report:** HALT. Tell the user:
+> "No audit report found in your prompt. Run `@system-audit` first, then paste the report when triggering this skill."
+
+**If the audit verdict is GREEN:** HALT. Tell the user:
+> "Audit verdict is GREEN. All requirements implemented, all gates pass. Nothing to build."
+
+**If the audit verdict is RED or YELLOW:** Continue to Phase 1. The report identifies what needs building.
+
 ## Integrity Invariants (Non-Negotiable)
 
 These rules are absolute. Violating any of them is a **showstopper** — stop, undo, and fix.
@@ -56,38 +67,11 @@ These rules are absolute. Violating any of them is a **showstopper** — stop, u
 9. **Never swallow exceptions silently.** No bare `except:`, no `except Exception: pass`. Every error path must be explicit and tested.
 10. **Never merge with failing tests.** Zero tolerance. The full suite must be green before any push.
 
-## Phase 0: Audit Gate (Independent Verification)
-
-The system audit MUST be performed by an **independent agent with zero context** from this session. You must NEVER audit and implement in the same agent context. That would make you both judge and executor, which is a rubber stamp.
-
-```bash
-cat audit-report.md 2>/dev/null
-```
-
-**If `audit-report.md` does not exist:** Launch `@system-audit` as an independent subagent. Use the **Task tool** with `subagent_type: "generalPurpose"` to spawn a fresh agent that has no memory of this conversation. The subagent prompt must:
-
-1. Instruct it to read `.cursor/skills/system-audit/SKILL.md` and execute every step
-2. Include the workspace path (`/home/j/side/graphrag-architect`)
-3. NOT include any context from this TDD session — no feature plans, no audit expectations, no hints about what you think the verdict should be
-
-The subagent will produce `audit-report.md` on disk. Wait for it to complete, then continue below.
-
-**If `audit-report.md` exists** (either already present or just produced by the subagent): Read the `## Verdict` section.
-
-- **If verdict is GREEN:** HALT. Delete the report and tell the user:
-  ```bash
-  rm audit-report.md
-  ```
-  > Audit verdict is GREEN. All Phase 1 FRs implemented, all gates pass, zero findings. System is healthy.
-
-  Then STOP.
-
-- **If verdict is RED or YELLOW:** Continue to Phase 1. The report identifies what needs building — RED has CRITICAL/Stub gaps, YELLOW has HIGH findings. Either way, there is real work to do.
-
 ## Phase 1: Discovery & Branching
 
-1. Read `audit-report.md` — identify the **highest-priority missing feature** from the Requirement Gaps table.
+1. Parse the audit report from the triggering prompt — identify the **highest-priority finding** from the Requirement Gaps table (CRITICAL/Stub gaps first, then HIGH findings).
 2. Read these files for context:
+   - `docs/SPEC.md`
    - `docs/prd/02_SYSTEM_REQUIREMENTS.md`
    - `docs/architecture/01_SYSTEM_DESIGN.md`
 3. Explore the codebase to confirm what exists vs. what is stubbed.
@@ -207,13 +191,7 @@ EOF
 git checkout main
 ```
 
-5. Delete the ephemeral audit report:
-
-```bash
-rm audit-report.md
-```
-
-6. **HALT. Your job is done. Do NOT continue.**
+5. **HALT. Your job is done. Do NOT continue.**
 
 Do NOT merge your own PR. Do NOT review your own PR. Do NOT trigger any other skill.
 

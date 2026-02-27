@@ -418,6 +418,7 @@ class QdrantClientPool:
         self._idle: deque[Any] = deque()
         self._active_count = 0
         self._factory: Callable[[], Any] = self._default_factory
+        self._sweep_task: Optional[asyncio.Task[None]] = None
 
     def _default_factory(self) -> Any:
         try:
@@ -444,12 +445,10 @@ class QdrantClientPool:
 
     async def acquire(self) -> Any:
         await self._semaphore.acquire()
-        while self._idle:
+        if self._idle:
             client = self._idle.popleft()
-            if await self._health_check(client):
-                self._active_count += 1
-                return client
-            logger.debug("Discarding stale Qdrant connection from pool")
+            self._active_count += 1
+            return client
         client = self._factory()
         self._active_count += 1
         return client
@@ -458,6 +457,45 @@ class QdrantClientPool:
         self._active_count -= 1
         self._idle.append(client)
         self._semaphore.release()
+
+    async def discard(self, client: Any) -> None:
+        _ = client
+        self._active_count -= 1
+        self._semaphore.release()
+
+    async def sweep_idle(self) -> int:
+        healthy: deque[Any] = deque()
+        removed = 0
+        while self._idle:
+            client = self._idle.popleft()
+            if await self._health_check(client):
+                healthy.append(client)
+            else:
+                removed += 1
+                logger.debug("Background sweep: discarded stale Qdrant connection")
+        self._idle = healthy
+        return removed
+
+    def start_health_sweep(self, interval: float = 30.0) -> None:
+        if self._sweep_task is not None:
+            return
+
+        async def _loop() -> None:
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    await self.sweep_idle()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.debug("Health sweep iteration failed", exc_info=True)
+
+        self._sweep_task = asyncio.get_event_loop().create_task(_loop())
+
+    def stop_health_sweep(self) -> None:
+        if self._sweep_task is not None:
+            self._sweep_task.cancel()
+            self._sweep_task = None
 
     def stats(self) -> Dict[str, int]:
         return {
