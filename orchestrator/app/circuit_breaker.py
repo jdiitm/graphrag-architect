@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import enum
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Protocol, TypeVar, runtime_checkable
 
@@ -215,3 +216,37 @@ class CircuitBreaker:
     _sync_failure_count: int = 0
     _sync_last_failure_time: float = 0.0
     _sync_half_open_calls: int = 0
+
+
+class TenantCircuitBreakerRegistry:
+    def __init__(
+        self,
+        config: CircuitBreakerConfig,
+        name_prefix: str = "default",
+        max_tenants: int = 1000,
+    ) -> None:
+        self._config = config
+        self._name_prefix = name_prefix
+        self._max_tenants = max_tenants
+        self._breakers: OrderedDict[str, CircuitBreaker] = OrderedDict()
+        self._lock: asyncio.Lock | None = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    async def for_tenant(self, tenant_id: str) -> CircuitBreaker:
+        lock = self._get_lock()
+        async with lock:
+            if tenant_id in self._breakers:
+                self._breakers.move_to_end(tenant_id)
+                return self._breakers[tenant_id]
+            if len(self._breakers) >= self._max_tenants:
+                self._breakers.popitem(last=False)
+            breaker = CircuitBreaker(
+                config=self._config,
+                name=f"{self._name_prefix}-{tenant_id}",
+            )
+            self._breakers[tenant_id] = breaker
+            return breaker

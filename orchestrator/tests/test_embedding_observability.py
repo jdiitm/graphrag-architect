@@ -10,6 +10,7 @@ from orchestrator.app.circuit_breaker import (
     CircuitBreakerConfig,
     CircuitOpenError,
     InMemoryStateStore,
+    TenantCircuitBreakerRegistry,
 )
 
 
@@ -39,8 +40,11 @@ class TestEmbedQueryFallbackMetric:
         with pytest.raises(ConnectionError):
             await test_cb.call(failing)
 
+        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
+        mock_registry.for_tenant = AsyncMock(return_value=test_cb)
+
         with patch(
-            "orchestrator.app.query_engine._CB_EMBEDDING", test_cb,
+            "orchestrator.app.query_engine._CB_EMBEDDING_REGISTRY", mock_registry,
         ), patch(
             "orchestrator.app.query_engine.EMBEDDING_FALLBACK_TOTAL",
         ) as mock_counter:
@@ -53,12 +57,17 @@ class TestEmbedQueryFallbackMetric:
     async def test_increments_on_generic_exception(self):
         from orchestrator.app.query_engine import _embed_query
 
+        mock_breaker = AsyncMock()
+        mock_breaker.call = AsyncMock(side_effect=RuntimeError("API error"))
+
+        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
+        mock_registry.for_tenant = AsyncMock(return_value=mock_breaker)
+
         with patch(
-            "orchestrator.app.query_engine._CB_EMBEDDING",
-        ) as mock_cb, patch(
+            "orchestrator.app.query_engine._CB_EMBEDDING_REGISTRY", mock_registry,
+        ), patch(
             "orchestrator.app.query_engine.EMBEDDING_FALLBACK_TOTAL",
         ) as mock_counter:
-            mock_cb.call = AsyncMock(side_effect=RuntimeError("API error"))
             result = await _embed_query("test query")
 
         assert result is None
@@ -70,12 +79,17 @@ class TestEmbedQueryFallbackMetric:
 
         fake_embedding = [0.1] * 10
 
+        mock_breaker = AsyncMock()
+        mock_breaker.call = AsyncMock(return_value=fake_embedding)
+
+        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
+        mock_registry.for_tenant = AsyncMock(return_value=mock_breaker)
+
         with patch(
-            "orchestrator.app.query_engine._CB_EMBEDDING",
-        ) as mock_cb, patch(
+            "orchestrator.app.query_engine._CB_EMBEDDING_REGISTRY", mock_registry,
+        ), patch(
             "orchestrator.app.query_engine.EMBEDDING_FALLBACK_TOTAL",
         ) as mock_counter:
-            mock_cb.call = AsyncMock(return_value=fake_embedding)
             result = await _embed_query("test query")
 
         assert result == fake_embedding

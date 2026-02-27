@@ -62,6 +62,7 @@ class QueryState(TypedDict, total=False):
     answer: str
     sources: List[Dict[str, Any]]
     authorization: str
+    tenant_id: str
     evaluation_score: Optional[float]
     retrieval_quality: str
     query_id: str

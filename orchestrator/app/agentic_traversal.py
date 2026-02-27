@@ -43,6 +43,17 @@ _NEIGHBOR_DISCOVERY_TEMPLATE = (
     "LIMIT $limit"
 )
 
+_SAMPLED_NEIGHBOR_TEMPLATE = (
+    "MATCH (source {id: $source_id, tenant_id: $tenant_id})"
+    "-[r]->(target) "
+    "WHERE target.tenant_id = $tenant_id AND r.tombstoned_at IS NULL "
+    "AND ($is_admin OR target.team_owner = $acl_team "
+    "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
+    "RETURN target.id AS target_id, target.name AS target_name, "
+    "type(r) AS rel_type, labels(target)[0] AS target_label "
+    "ORDER BY rand() LIMIT $sample_size"
+)
+
 
 def build_one_hop_cypher(rel_type: str) -> str:
     if rel_type not in ALLOWED_RELATIONSHIP_TYPES:
@@ -129,6 +140,28 @@ class TraversalAgent:
         )
 
 
+async def _run_sampled_query(
+    session: Any,
+    source_id: str,
+    tenant_id: str,
+    acl_params: Dict[str, Any],
+    sample_size: int,
+    timeout: float,
+) -> List[Dict[str, Any]]:
+    params = {
+        "source_id": source_id,
+        "tenant_id": tenant_id,
+        "sample_size": sample_size,
+        **acl_params,
+    }
+
+    async def _sample_tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
+        result = await tx.run(_SAMPLED_NEIGHBOR_TEMPLATE, **params)
+        return await result.data()
+
+    return await session.execute_read(_sample_tx, timeout=timeout)
+
+
 async def execute_hop(
     driver: AsyncDriver,
     source_id: str,
@@ -137,6 +170,7 @@ async def execute_hop(
     timeout: float = 30.0,
     limit: int = 50,
     max_degree: int = MAX_NODE_DEGREE,
+    sample_size: int = 50,
 ) -> List[Dict[str, Any]]:
     degree_params = {"source_id": source_id, "tenant_id": tenant_id}
 
@@ -150,10 +184,12 @@ async def execute_hop(
             degree = degree_result[0].get("degree", 0)
             if degree > max_degree:
                 logger.warning(
-                    "Skipping super-node %s with degree %d (threshold %d)",
-                    source_id, degree, max_degree,
+                    "Sampling super-node %s with degree %d (threshold %d, sample %d)",
+                    source_id, degree, max_degree, sample_size,
                 )
-                return []
+                return await _run_sampled_query(
+                    session, source_id, tenant_id, acl_params, sample_size, timeout,
+                )
 
         params = {
             "source_id": source_id,

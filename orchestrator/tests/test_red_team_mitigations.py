@@ -115,7 +115,7 @@ class TestEmbeddingDegradationNotice:
         captured_context: List[List[Dict[str, Any]]] = []
 
         async def _spy_synthesize(
-            query: str, context: List[Dict[str, Any]],
+            query: str, context: List[Dict[str, Any]], **kwargs: Any,
         ) -> str:
             captured_context.append(context)
             return "synthesized answer"
@@ -151,7 +151,7 @@ class TestEmbeddingDegradationNotice:
         captured_context: List[List[Dict[str, Any]]] = []
 
         async def _spy_synthesize(
-            query: str, context: List[Dict[str, Any]],
+            query: str, context: List[Dict[str, Any]], **kwargs: Any,
         ) -> str:
             captured_context.append(context)
             return "synthesized answer"

@@ -1079,6 +1079,7 @@ class TestCircuitBreakerWiring:
             CircuitBreakerConfig,
             CircuitBreaker,
             InMemoryStateStore,
+            TenantCircuitBreakerRegistry,
         )
 
         test_cb = CircuitBreaker(
@@ -1091,13 +1092,16 @@ class TestCircuitBreakerWiring:
         with pytest.raises(ConnectionError):
             await test_cb.call(failing)
 
+        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
+        mock_registry.for_tenant = AsyncMock(return_value=test_cb)
+
         state = _make_state(
             base_query_state,
             candidates=[{"name": "svc-a", "score": 0.9}],
         )
 
         with patch(
-            "orchestrator.app.query_engine._CB_LLM", test_cb,
+            "orchestrator.app.query_engine._CB_LLM_REGISTRY", mock_registry,
         ):
             result = await _do_synthesize(state)
 
@@ -1107,16 +1111,13 @@ class TestCircuitBreakerWiring:
         )
 
     @pytest.mark.asyncio
-    async def test_embedding_cb_exists_at_module_level(self):
-        from orchestrator.app.query_engine import _CB_EMBEDDING
+    async def test_embedding_cb_registry_exists_at_module_level(self):
+        from orchestrator.app.query_engine import _CB_EMBEDDING_REGISTRY
 
-        from orchestrator.app.circuit_breaker import CircuitBreakerConfig
+        from orchestrator.app.circuit_breaker import TenantCircuitBreakerRegistry
 
-        assert _CB_EMBEDDING is not None, (
-            "_CB_EMBEDDING must exist as a module-level CircuitBreaker"
-        )
-        assert isinstance(
-            _CB_EMBEDDING._config, CircuitBreakerConfig
+        assert isinstance(_CB_EMBEDDING_REGISTRY, TenantCircuitBreakerRegistry), (
+            "_CB_EMBEDDING_REGISTRY must be a TenantCircuitBreakerRegistry"
         )
 
     @pytest.mark.asyncio
@@ -1126,6 +1127,7 @@ class TestCircuitBreakerWiring:
             CircuitBreakerConfig,
             CircuitBreaker,
             InMemoryStateStore,
+            TenantCircuitBreakerRegistry,
         )
 
         test_cb = CircuitBreaker(
@@ -1138,8 +1140,11 @@ class TestCircuitBreakerWiring:
         with pytest.raises(ConnectionError):
             await test_cb.call(failing)
 
+        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
+        mock_registry.for_tenant = AsyncMock(return_value=test_cb)
+
         with patch(
-            "orchestrator.app.query_engine._CB_EMBEDDING", test_cb,
+            "orchestrator.app.query_engine._CB_EMBEDDING_REGISTRY", mock_registry,
         ):
             result = await _embed_query("test query")
 
@@ -1148,24 +1153,25 @@ class TestCircuitBreakerWiring:
         )
 
     @pytest.mark.asyncio
-    async def test_llm_cb_exists_at_module_level(self):
-        from orchestrator.app.query_engine import _CB_LLM
+    async def test_llm_cb_registry_exists_at_module_level(self):
+        from orchestrator.app.query_engine import _CB_LLM_REGISTRY
 
-        from orchestrator.app.circuit_breaker import CircuitBreaker
+        from orchestrator.app.circuit_breaker import TenantCircuitBreakerRegistry
 
-        assert isinstance(_CB_LLM, CircuitBreaker), (
-            "_CB_LLM must be a CircuitBreaker instance at module level"
+        assert isinstance(_CB_LLM_REGISTRY, TenantCircuitBreakerRegistry), (
+            "_CB_LLM_REGISTRY must be a TenantCircuitBreakerRegistry at module level"
         )
 
     @pytest.mark.asyncio
     async def test_synthesize_graceful_degradation_on_open_circuit(
         self, base_query_state,
     ):
-        from orchestrator.app.query_engine import _do_synthesize, _CB_LLM
+        from orchestrator.app.query_engine import _do_synthesize
         from orchestrator.app.circuit_breaker import (
             CircuitBreakerConfig,
             CircuitBreaker,
             InMemoryStateStore,
+            TenantCircuitBreakerRegistry,
         )
 
         test_cb = CircuitBreaker(
@@ -1178,13 +1184,16 @@ class TestCircuitBreakerWiring:
         with pytest.raises(ConnectionError):
             await test_cb.call(failing)
 
+        mock_registry = AsyncMock(spec=TenantCircuitBreakerRegistry)
+        mock_registry.for_tenant = AsyncMock(return_value=test_cb)
+
         state = _make_state(
             base_query_state,
             candidates=[{"name": "svc-a", "score": 0.9}],
         )
 
         with patch(
-            "orchestrator.app.query_engine._CB_LLM", test_cb,
+            "orchestrator.app.query_engine._CB_LLM_REGISTRY", mock_registry,
         ):
             result = await _do_synthesize(state)
 
