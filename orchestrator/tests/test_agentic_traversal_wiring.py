@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -110,7 +111,7 @@ class TestRunTraversal:
         with patch(
             "orchestrator.app.agentic_traversal.bounded_path_expansion",
             new_callable=AsyncMock,
-            side_effect=RuntimeError("force sequential BFS in legacy tests"),
+            side_effect=asyncio.TimeoutError("force sequential BFS in legacy tests"),
         ):
             yield
 

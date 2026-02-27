@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
+from neo4j.exceptions import Neo4jError
 
 from orchestrator.app.context_manager import TokenBudget, estimate_tokens, truncate_context
 from orchestrator.app.query_templates import ALLOWED_RELATIONSHIP_TYPES
@@ -56,11 +58,11 @@ _SAMPLED_NEIGHBOR_TEMPLATE = (
 
 _BOUNDED_PATH_TEMPLATE = (
     "MATCH path = (source {{id: $start_id, tenant_id: $tenant_id}})"
-    "-[*1..{max_hops}]-(target) "
+    "-[*1..{max_hops}]->(target) "
     "WHERE all(n IN nodes(path) WHERE n.tenant_id = $tenant_id) "
     "AND all(r IN relationships(path) WHERE r.tombstoned_at IS NULL) "
-    "AND ($is_admin OR target.team_owner = $acl_team "
-    "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
+    "AND all(n IN nodes(path) WHERE $is_admin OR n.team_owner = $acl_team "
+    "OR ANY(ns IN n.namespace_acl WHERE ns IN $acl_namespaces)) "
     "WITH DISTINCT target "
     "RETURN target.id AS target_id, target.name AS target_name, "
     "labels(target)[0] AS target_label "
@@ -314,7 +316,7 @@ async def run_traversal(
             timeout=timeout,
         )
         return truncate_context(raw_results, effective_budget)
-    except Exception:
+    except (Neo4jError, asyncio.TimeoutError, OSError):
         logger.warning(
             "Bounded path expansion failed for node %s, falling back to sequential BFS",
             start_node_id,

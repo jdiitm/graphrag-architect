@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -157,6 +158,54 @@ class TestBoundedPathExpansion:
                 max_hops=0,
             )
 
+    @pytest.mark.asyncio
+    async def test_bounded_template_uses_directed_edges(self) -> None:
+        session = _mock_bounded_session(return_value=[])
+        driver = _mock_driver(session)
+
+        await bounded_path_expansion(
+            driver=driver,
+            start_id="root",
+            tenant_id="t-1",
+            acl_params=_DEFAULT_ACL,
+        )
+
+        tx_func = session.execute_read.call_args[0][0]
+
+        mock_tx = AsyncMock()
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=[])
+        mock_tx.run = AsyncMock(return_value=mock_result)
+        await tx_func(mock_tx)
+
+        cypher_query = mock_tx.run.call_args[0][0]
+        assert "]->(target)" in cypher_query
+
+    @pytest.mark.asyncio
+    async def test_bounded_template_acl_checks_all_path_nodes(self) -> None:
+        session = _mock_bounded_session(return_value=[])
+        driver = _mock_driver(session)
+
+        await bounded_path_expansion(
+            driver=driver,
+            start_id="root",
+            tenant_id="t-1",
+            acl_params=_DEFAULT_ACL,
+        )
+
+        tx_func = session.execute_read.call_args[0][0]
+
+        mock_tx = AsyncMock()
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=[])
+        mock_tx.run = AsyncMock(return_value=mock_result)
+        await tx_func(mock_tx)
+
+        cypher_query = mock_tx.run.call_args[0][0]
+        assert "all(n IN nodes(path)" in cypher_query
+        assert "n.team_owner" in cypher_query
+        assert "n.namespace_acl" in cypher_query
+
 
 class TestRunTraversalBounded:
     @pytest.mark.asyncio
@@ -194,7 +243,7 @@ class TestRunTraversalBounded:
         with patch(
             "orchestrator.app.agentic_traversal.bounded_path_expansion",
             new_callable=AsyncMock,
-            side_effect=RuntimeError("query timeout"),
+            side_effect=asyncio.TimeoutError("query timeout"),
         ), patch(
             "orchestrator.app.agentic_traversal.execute_hop",
             new_callable=AsyncMock,
@@ -212,6 +261,23 @@ class TestRunTraversalBounded:
 
             mock_hop.assert_called()
             assert any(r.get("target_id") == "svc-fallback" for r in context)
+
+    @pytest.mark.asyncio
+    async def test_run_traversal_propagates_programming_errors(self) -> None:
+        with patch(
+            "orchestrator.app.agentic_traversal.bounded_path_expansion",
+            new_callable=AsyncMock,
+            side_effect=TypeError("unexpected None value"),
+        ):
+            driver = MagicMock()
+
+            with pytest.raises(TypeError, match="unexpected None value"):
+                await run_traversal(
+                    driver=driver,
+                    start_node_id="root",
+                    tenant_id="t-1",
+                    acl_params=_DEFAULT_ACL,
+                )
 
     @pytest.mark.asyncio
     async def test_run_traversal_token_budget_applied(self) -> None:
