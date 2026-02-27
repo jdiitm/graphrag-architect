@@ -8,16 +8,22 @@ from orchestrator.app.agentic_traversal import _SAMPLED_NEIGHBOR_TEMPLATE
 class TestSampledNeighborTemplateDeterminism:
 
     def test_template_orders_by_pagerank_first(self) -> None:
-        assert "pagerank" in _SAMPLED_NEIGHBOR_TEMPLATE
-        pr_pos = _SAMPLED_NEIGHBOR_TEMPLATE.index("pagerank")
-        rand_pos = _SAMPLED_NEIGHBOR_TEMPLATE.index("rand()")
-        assert pr_pos < rand_pos
+        order_section = _SAMPLED_NEIGHBOR_TEMPLATE[
+            _SAMPLED_NEIGHBOR_TEMPLATE.index("ORDER BY"):
+        ]
+        assert "pagerank" in order_section
+        pr_pos = order_section.index("pagerank")
+        id_pos = order_section.index("target.id")
+        assert pr_pos < id_pos
 
     def test_template_orders_by_degree_second(self) -> None:
-        assert "degree" in _SAMPLED_NEIGHBOR_TEMPLATE
-        degree_pos = _SAMPLED_NEIGHBOR_TEMPLATE.index("degree")
-        rand_pos = _SAMPLED_NEIGHBOR_TEMPLATE.index("rand()")
-        assert degree_pos < rand_pos
+        order_section = _SAMPLED_NEIGHBOR_TEMPLATE[
+            _SAMPLED_NEIGHBOR_TEMPLATE.index("ORDER BY"):
+        ]
+        assert "degree" in order_section
+        degree_pos = order_section.index("degree")
+        id_pos = order_section.index("target.id")
+        assert degree_pos < id_pos
 
     def test_template_uses_coalesce_for_pagerank(self) -> None:
         assert "coalesce(target.pagerank, 0)" in _SAMPLED_NEIGHBOR_TEMPLATE
@@ -28,8 +34,9 @@ class TestSampledNeighborTemplateDeterminism:
         ]
         assert "DESC" in order_section
 
-    def test_template_still_has_rand_as_tiebreaker(self) -> None:
-        assert "rand()" in _SAMPLED_NEIGHBOR_TEMPLATE
+    def test_template_uses_deterministic_tiebreaker(self) -> None:
+        assert "target.id" in _SAMPLED_NEIGHBOR_TEMPLATE
+        assert "rand()" not in _SAMPLED_NEIGHBOR_TEMPLATE
 
     def test_template_preserves_limit_parameter(self) -> None:
         assert "LIMIT $sample_size" in _SAMPLED_NEIGHBOR_TEMPLATE
