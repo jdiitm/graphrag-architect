@@ -39,12 +39,12 @@ class TestIngestCircuitBreakerReturns503:
         assert retry_val > 0
 
     def test_returns_429_when_semaphore_locked(self) -> None:
+        from orchestrator.app.distributed_lock import LocalFallbackSemaphore
         from orchestrator.app.main import app
 
         client = TestClient(app)
 
-        locked_sem = asyncio.Semaphore(1)
-        locked_sem._value = 0
+        locked_sem = LocalFallbackSemaphore(max_concurrent=0)
 
         with patch(
             "orchestrator.app.main.get_ingestion_semaphore",

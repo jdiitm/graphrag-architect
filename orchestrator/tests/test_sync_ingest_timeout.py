@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from orchestrator.app.distributed_lock import LocalFallbackSemaphore
 from orchestrator.app.main import _ingest_sync
 
 
@@ -24,7 +25,7 @@ class TestSyncIngestTimeout:
             ),
             patch(
                 "orchestrator.app.main.get_ingestion_semaphore",
-                return_value=asyncio.Semaphore(1),
+                return_value=LocalFallbackSemaphore(max_concurrent=1),
             ),
         ):
             from fastapi import HTTPException
@@ -49,7 +50,7 @@ class TestSyncIngestTimeout:
             ),
             patch(
                 "orchestrator.app.main.get_ingestion_semaphore",
-                return_value=asyncio.Semaphore(1),
+                return_value=LocalFallbackSemaphore(max_concurrent=1),
             ),
         ):
             response = await _ingest_sync(
@@ -76,7 +77,7 @@ class TestSyncIngestTimeout:
             ),
             patch(
                 "orchestrator.app.main.get_ingestion_semaphore",
-                return_value=asyncio.Semaphore(1),
+                return_value=LocalFallbackSemaphore(max_concurrent=1),
             ),
         ):
             from orchestrator.app.main import _get_sync_ingest_timeout

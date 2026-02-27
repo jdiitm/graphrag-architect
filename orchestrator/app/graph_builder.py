@@ -50,6 +50,10 @@ from orchestrator.app.vector_sync_outbox import (
     VectorSyncOutbox,
 )
 from orchestrator.app.config import IngestionConfig
+from orchestrator.app.distributed_lock import (
+    BoundedTaskSet,
+    create_ingestion_lock,
+)
 
 _VECTOR_COLLECTION = "services"
 
@@ -63,7 +67,7 @@ def resolve_vector_collection(tenant_id: Optional[str] = None) -> str:
 
 _VECTOR_OUTBOX = VectorSyncOutbox()
 
-_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+_BACKGROUND_TASKS = BoundedTaskSet(max_tasks=50)
 
 
 def create_outbox_drainer(
@@ -132,9 +136,18 @@ def _get_redis_conn() -> Any:
     return _RedisHolder.value
 
 
-_INGESTION_LOCKS: Dict[str, asyncio.Lock] = {}
-_LOCK_REFCOUNTS: Dict[str, int] = {}
-_LOCKS_GUARD = asyncio.Lock()
+class _IngestionLockHolder:
+    value: Any = None
+
+
+def get_ingestion_lock() -> Any:
+    if _IngestionLockHolder.value is None:
+        _IngestionLockHolder.value = create_ingestion_lock()
+    return _IngestionLockHolder.value
+
+
+def set_ingestion_lock(lock: Any) -> None:
+    _IngestionLockHolder.value = lock
 
 
 @asynccontextmanager
@@ -142,21 +155,9 @@ async def acquire_ingestion_lock(
     tenant_id: str, namespace: str,
 ) -> AsyncIterator[None]:
     key = f"{tenant_id}:{namespace}"
-    async with _LOCKS_GUARD:
-        if key not in _INGESTION_LOCKS:
-            _INGESTION_LOCKS[key] = asyncio.Lock()
-            _LOCK_REFCOUNTS[key] = 0
-        _LOCK_REFCOUNTS[key] += 1
-        lock = _INGESTION_LOCKS[key]
-    try:
-        async with lock:
-            yield
-    finally:
-        async with _LOCKS_GUARD:
-            _LOCK_REFCOUNTS[key] -= 1
-            if _LOCK_REFCOUNTS[key] <= 0:
-                del _INGESTION_LOCKS[key]
-                del _LOCK_REFCOUNTS[key]
+    lock = get_ingestion_lock()
+    async with lock.acquire(key, ttl=300):
+        yield
 
 
 async def invalidate_caches_after_ingest(
@@ -511,8 +512,8 @@ async def _post_commit_side_effects(
         span.set_attribute("edges_pruned", pruned_count)
         _enqueue_vector_cleanup(pruned_ids, span, tenant_id=tenant_id)
         task = asyncio.create_task(_safe_drain_vector_outbox())
-        _BACKGROUND_TASKS.add(task)
-        task.add_done_callback(_BACKGROUND_TASKS.discard)
+        if not _BACKGROUND_TASKS.try_add(task):
+            logger.warning("Background task limit reached; vector drain skipped")
     except Exception as prune_exc:
         logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
     try:

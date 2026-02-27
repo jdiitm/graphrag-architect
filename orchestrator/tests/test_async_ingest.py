@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from starlette.testclient import TestClient
 
+from orchestrator.app.distributed_lock import LocalFallbackSemaphore
 from orchestrator.app.main import app, set_ingestion_semaphore
 
 
@@ -100,7 +101,7 @@ class TestAsyncIngestSemaphoreGating:
     ):
         from orchestrator.app.main import _INGEST_JOB_STORE, _run_ingest_job
 
-        sem = asyncio.Semaphore(1)
+        sem = LocalFallbackSemaphore(max_concurrent=1)
         set_ingestion_semaphore(sem)
 
         mock_graph.ainvoke = AsyncMock(return_value={
@@ -113,7 +114,7 @@ class TestAsyncIngestSemaphoreGating:
             job.job_id,
             [{"path": "main.go", "content": "package main"}],
         )
-        assert not sem.locked()
+        assert sem.active_count == 0
         set_ingestion_semaphore(None)
 
     @pytest.mark.asyncio
@@ -123,7 +124,7 @@ class TestAsyncIngestSemaphoreGating:
     ):
         from orchestrator.app.main import _INGEST_JOB_STORE, _run_ingest_job
 
-        sem = asyncio.Semaphore(1)
+        sem = LocalFallbackSemaphore(max_concurrent=1)
         set_ingestion_semaphore(sem)
 
         mock_graph.ainvoke = AsyncMock(
@@ -134,7 +135,7 @@ class TestAsyncIngestSemaphoreGating:
             job.job_id,
             [{"path": "main.go", "content": "package main"}],
         )
-        assert not sem.locked()
+        assert sem.active_count == 0
         completed = await _INGEST_JOB_STORE.get(job.job_id)
         assert completed is not None
         assert completed.status.value == "failed"
