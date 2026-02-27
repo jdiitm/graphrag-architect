@@ -127,12 +127,11 @@ class TestVectorStoreProductionGuard:
             create_vector_store,
         )
 
-        with patch("qdrant_client.AsyncQdrantClient"):
-            store = create_vector_store(
-                backend="qdrant",
-                url="http://localhost:6333",
-                deployment_mode="production",
-            )
+        store = create_vector_store(
+            backend="qdrant",
+            url="http://localhost:6333",
+            deployment_mode="production",
+        )
         assert isinstance(store, PooledQdrantVectorStore)
 
     def test_unrecognized_backend_raises_in_production(self) -> None:
