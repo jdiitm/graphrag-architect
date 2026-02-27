@@ -59,17 +59,19 @@ from orchestrator.app.distributed_lock import (
 
 _VECTOR_COLLECTION = "services"
 
-_PROCESS_POOL: Optional[concurrent.futures.ProcessPoolExecutor] = None
 _PROCESS_POOL_MAX_WORKERS = int(os.environ.get("AST_POOL_WORKERS", "4"))
 
 
+class _ASTPoolHolder:
+    instance: Optional[concurrent.futures.ProcessPoolExecutor] = None
+
+
 def _get_process_pool() -> concurrent.futures.ProcessPoolExecutor:
-    global _PROCESS_POOL
-    if _PROCESS_POOL is None:
-        _PROCESS_POOL = concurrent.futures.ProcessPoolExecutor(
+    if _ASTPoolHolder.instance is None:
+        _ASTPoolHolder.instance = concurrent.futures.ProcessPoolExecutor(
             max_workers=_PROCESS_POOL_MAX_WORKERS,
         )
-    return _PROCESS_POOL
+    return _ASTPoolHolder.instance
 
 
 class IngestRejectionError(RuntimeError):
