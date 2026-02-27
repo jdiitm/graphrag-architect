@@ -708,3 +708,146 @@ class TestAdaptiveSemanticCacheLookup:
         dissimilar = [0.7, 0.7, 0.1]
         result_miss = cache.lookup(dissimilar)
         assert result_miss is None
+
+
+class TestACLAwareCacheIsolation:
+
+    def test_same_tenant_different_acl_key_is_cache_miss(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store(
+            "what calls auth?", embedding, {"answer": "admin-visible-nodes"},
+            tenant_id="acme", acl_key="admin:ns1,ns2",
+        )
+        result = cache.lookup(embedding, tenant_id="acme", acl_key="readonly:ns1")
+        assert result is None
+
+    def test_same_tenant_same_acl_key_is_cache_hit(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store(
+            "what calls auth?", embedding, {"answer": "admin-nodes"},
+            tenant_id="acme", acl_key="admin:ns1,ns2",
+        )
+        result = cache.lookup(embedding, tenant_id="acme", acl_key="admin:ns1,ns2")
+        assert result == {"answer": "admin-nodes"}
+
+    def test_different_tenant_same_acl_key_is_cache_miss(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store(
+            "q", embedding, {"answer": "t1"},
+            tenant_id="t1", acl_key="admin:ns1",
+        )
+        result = cache.lookup(embedding, tenant_id="t2", acl_key="admin:ns1")
+        assert result is None
+
+    def test_empty_acl_key_matches_empty_acl_key(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store("q", embedding, {"answer": "open"}, tenant_id="t1", acl_key="")
+        result = cache.lookup(embedding, tenant_id="t1", acl_key="")
+        assert result == {"answer": "open"}
+
+    def test_acl_key_store_without_lookup_acl_key_is_miss(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store(
+            "q", embedding, {"answer": "restricted"},
+            tenant_id="t1", acl_key="admin:ns1",
+        )
+        result = cache.lookup(embedding, tenant_id="t1")
+        assert result is None
+
+    def test_invalidate_tenant_clears_all_acl_variants(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        cache.store(
+            "q1", [1.0, 0.0], {"a": 1},
+            tenant_id="t1", acl_key="admin",
+        )
+        cache.store(
+            "q2", [0.0, 1.0], {"a": 2},
+            tenant_id="t1", acl_key="readonly",
+        )
+        cache.store(
+            "q3", [0.5, 0.5], {"a": 3},
+            tenant_id="t2", acl_key="admin",
+        )
+        removed = cache.invalidate_tenant("t1")
+        assert removed == 2
+        assert cache.stats().size == 1
+
+    @pytest.mark.asyncio
+    async def test_lookup_or_wait_respects_acl_key(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store(
+            "q", embedding, {"answer": "admin"},
+            tenant_id="t1", acl_key="admin",
+        )
+        result, is_owner = await cache.lookup_or_wait(
+            embedding, tenant_id="t1", acl_key="readonly",
+        )
+        assert result is None
+        assert is_owner is True
+        cache.notify_complete(embedding, acl_key="readonly")
+
+    @pytest.mark.asyncio
+    async def test_lookup_or_wait_hits_matching_acl_key(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store(
+            "q", embedding, {"answer": "admin"},
+            tenant_id="t1", acl_key="admin",
+        )
+        result, is_owner = await cache.lookup_or_wait(
+            embedding, tenant_id="t1", acl_key="admin",
+        )
+        assert result == {"answer": "admin"}
+        assert is_owner is False
+
+    def test_stats_count_acl_scoped_hits_and_misses(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store(
+            "q", embedding, {"answer": "a"},
+            tenant_id="t1", acl_key="admin",
+        )
+        cache.lookup(embedding, tenant_id="t1", acl_key="admin")
+        cache.lookup(embedding, tenant_id="t1", acl_key="readonly")
+        stats = cache.stats()
+        assert stats.hits == 1
+        assert stats.misses == 1
+
+
+class TestRedisSemanticCacheACLIsolation:
+
+    @pytest.mark.asyncio
+    async def test_redis_cache_stores_and_retrieves_with_acl_key(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.scan = AsyncMock(return_value=(0, []))
+        mock_redis.get = AsyncMock(return_value=None)
+        mock_redis.setex = AsyncMock()
+        mock_redis.sadd = AsyncMock()
+        mock_redis.expire = AsyncMock()
+
+        with patch(
+            "orchestrator.app.semantic_cache.create_async_redis",
+            return_value=mock_redis,
+        ), patch(
+            "orchestrator.app.semantic_cache.require_redis",
+        ):
+            cache = RedisSemanticQueryCache(
+                redis_url="redis://fake:6379",
+                config=CacheConfig(similarity_threshold=0.9),
+            )
+            embedding = [1.0, 0.0, 0.0]
+            cache.store(
+                "q", embedding, {"answer": "admin"},
+                tenant_id="t1", acl_key="admin:ns1",
+            )
+            hit = cache.lookup(embedding, tenant_id="t1", acl_key="admin:ns1")
+            assert hit == {"answer": "admin"}
+
+            miss = cache.lookup(embedding, tenant_id="t1", acl_key="readonly")
+            assert miss is None

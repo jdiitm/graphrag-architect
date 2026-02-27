@@ -14,6 +14,7 @@ disable = [
     "W0718",  # broad-exception-caught: OTel span processors must never crash the app on export
     "C0415",  # import-outside-toplevel: lazy imports for optional deps (qdrant-client)
     "R0801",  # duplicate-code: IngestJobStore and QueryJobStore share structure by design
+    "C0302",  # too-many-lines: query_engine.py is a LangGraph DAG orchestrator with many nodes
 ]
 
 [tool.pylint.imports]

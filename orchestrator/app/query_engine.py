@@ -599,8 +599,21 @@ async def _try_template_match(
     }
 
 
+def _compute_acl_cache_key(state: QueryState) -> str:
+    try:
+        acl_params = _build_traversal_acl_params(state)
+    except (AuthConfigurationError, Exception):
+        return ""
+    is_admin = acl_params.get("is_admin", False)
+    if is_admin:
+        return "admin"
+    team = acl_params.get("acl_team", "")
+    namespaces = sorted(acl_params.get("acl_namespaces", []))
+    return f"{team}:{','.join(namespaces)}"
+
+
 async def _check_semantic_cache(
-    query: str, tenant_id: str,
+    query: str, tenant_id: str, acl_key: str = "",
 ) -> Tuple[Optional[dict], Optional[List[float]], bool]:
     if _SEMANTIC_CACHE is None:
         return None, None, False
@@ -608,7 +621,7 @@ async def _check_semantic_cache(
     if query_embedding is None:
         return None, None, False
     result, is_owner = await _SEMANTIC_CACHE.lookup_or_wait(
-        query_embedding, tenant_id=tenant_id,
+        query_embedding, tenant_id=tenant_id, acl_key=acl_key,
     )
     return result, query_embedding, is_owner
 
@@ -619,6 +632,7 @@ def _store_in_semantic_cache(
     result: dict,
     tenant_id: str,
     complexity: str = "",
+    acl_key: str = "",
 ) -> None:
     if _SEMANTIC_CACHE is None or query_embedding is None:
         return
@@ -628,8 +642,9 @@ def _store_in_semantic_cache(
         result=result,
         tenant_id=tenant_id,
         complexity=complexity,
+        acl_key=acl_key,
     )
-    _SEMANTIC_CACHE.notify_complete(query_embedding)
+    _SEMANTIC_CACHE.notify_complete(query_embedding, acl_key=acl_key)
 
 
 async def cypher_retrieve(state: QueryState) -> dict:
@@ -638,8 +653,9 @@ async def cypher_retrieve(state: QueryState) -> dict:
         start = time.monotonic()
         try:
             tenant_id = state.get("tenant_id", "")
+            acl_cache_key = _compute_acl_cache_key(state)
             cached, query_embedding, is_owner = await _check_semantic_cache(
-                state["query"], tenant_id,
+                state["query"], tenant_id, acl_key=acl_cache_key,
             )
             if cached is not None:
                 _query_logger.debug("Semantic cache hit for cypher_retrieve")
@@ -652,6 +668,7 @@ async def cypher_retrieve(state: QueryState) -> dict:
                         _store_in_semantic_cache(
                             state["query"], query_embedding,
                             template_result, tenant_id,
+                            acl_key=acl_cache_key,
                         )
                         return template_result
 
@@ -660,6 +677,7 @@ async def cypher_retrieve(state: QueryState) -> dict:
                         if is_owner and query_embedding is not None:
                             _SEMANTIC_CACHE.notify_complete(
                                 query_embedding, failed=True,
+                                acl_key=acl_cache_key,
                             )
                         return {
                             "cypher_query": "",
@@ -687,12 +705,14 @@ async def cypher_retrieve(state: QueryState) -> dict:
                         state["query"], query_embedding,
                         result, tenant_id,
                         complexity=str(state.get("complexity", "")),
+                        acl_key=acl_cache_key,
                     )
                     return result
             except Exception:
                 if is_owner and query_embedding is not None:
                     _SEMANTIC_CACHE.notify_complete(
                         query_embedding, failed=True,
+                        acl_key=acl_cache_key,
                     )
                 raise
         finally:

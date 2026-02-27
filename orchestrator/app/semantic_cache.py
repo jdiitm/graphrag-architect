@@ -62,6 +62,7 @@ class CacheEntry:
     created_at: float
     ttl_seconds: float
     tenant_id: str = ""
+    acl_key: str = ""
     access_count: int = 0
 
     @property
@@ -164,18 +165,21 @@ class SemanticQueryCache:
         self,
         query_embedding: List[float],
         tenant_id: str = "",
+        acl_key: str = "",
     ) -> Tuple[Optional[Dict[str, Any]], bool]:
-        cached = self.lookup(query_embedding, tenant_id=tenant_id)
+        cached = self.lookup(query_embedding, tenant_id=tenant_id, acl_key=acl_key)
         if cached is not None:
             return cached, False
 
-        key_hash = _embedding_hash(query_embedding)
+        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
 
         inflight = self.get_inflight(key_hash)
         if inflight is not None:
             succeeded = await inflight.wait()
             if succeeded:
-                result = self.lookup(query_embedding, tenant_id=tenant_id)
+                result = self.lookup(
+                    query_embedding, tenant_id=tenant_id, acl_key=acl_key,
+                )
                 if result is not None:
                     return result, False
             return None, True
@@ -187,8 +191,9 @@ class SemanticQueryCache:
         self,
         query_embedding: List[float],
         failed: bool = False,
+        acl_key: str = "",
     ) -> None:
-        key_hash = _embedding_hash(query_embedding)
+        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
         inflight = self._inflight.pop(key_hash, None)
         if inflight is not None:
             inflight.complete(failed=failed)
@@ -197,6 +202,7 @@ class SemanticQueryCache:
         self,
         query_embedding: List[float],
         tenant_id: str = "",
+        acl_key: str = "",
     ) -> Optional[Dict[str, Any]]:
         self._evict_expired()
         best_sim = -1.0
@@ -206,6 +212,8 @@ class SemanticQueryCache:
 
         for entry in self._entries.values():
             if entry.tenant_id != tenant_id:
+                continue
+            if entry.acl_key != acl_key:
                 continue
             tenant_entry_count += 1
             sim = _vectorized_cosine_similarity(query_embedding, entry.embedding)
@@ -253,6 +261,7 @@ class SemanticQueryCache:
         tenant_id: str = "",
         complexity: str = "",
         node_ids: Optional[Set[str]] = None,
+        acl_key: str = "",
     ) -> None:
         self._evict_expired()
         self._enforce_max_size()
@@ -261,7 +270,7 @@ class SemanticQueryCache:
         if complexity and self._config.ttl_by_complexity:
             ttl = self._config.ttl_by_complexity.get(complexity, ttl)
 
-        key_hash = _embedding_hash(query_embedding)
+        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
         if key_hash in self._entries:
             self._remove_node_tags_for_key(key_hash)
         entry = CacheEntry(
@@ -272,6 +281,7 @@ class SemanticQueryCache:
             created_at=time.monotonic(),
             ttl_seconds=ttl,
             tenant_id=tenant_id,
+            acl_key=acl_key,
         )
         self._entries[key_hash] = entry
         self._entry_generations[key_hash] = self._generation
@@ -400,6 +410,7 @@ class RedisSemanticQueryCache:
         self,
         query_embedding: List[float],
         tenant_id: str = "",
+        acl_key: str = "",
     ) -> Optional[Dict[str, Any]]:
         try:
             cursor = None
@@ -419,6 +430,8 @@ class RedisSemanticQueryCache:
                     entry = json.loads(raw)
                     if tenant_id and entry.get("tenant_id") and entry["tenant_id"] != tenant_id:
                         continue
+                    if entry.get("acl_key", "") != acl_key:
+                        continue
                     stored_emb = entry.get("embedding", [])
                     sim = _vectorized_cosine_similarity(query_embedding[:32], stored_emb)
                     if sim >= threshold and sim > best_sim:
@@ -431,6 +444,7 @@ class RedisSemanticQueryCache:
                     query_embedding=query_embedding,
                     result=best_result,
                     tenant_id=tenant_id,
+                    acl_key=acl_key,
                 )
             return best_result
         except Exception:
@@ -441,21 +455,28 @@ class RedisSemanticQueryCache:
         self,
         query_embedding: List[float],
         tenant_id: str = "",
+        acl_key: str = "",
     ) -> Tuple[Optional[Dict[str, Any]], bool]:
-        cached = self._l1.lookup(query_embedding, tenant_id=tenant_id)
+        cached = self._l1.lookup(
+            query_embedding, tenant_id=tenant_id, acl_key=acl_key,
+        )
         if cached is not None:
             return cached, False
 
-        redis_hit = await self._redis_lookup(query_embedding, tenant_id=tenant_id)
+        redis_hit = await self._redis_lookup(
+            query_embedding, tenant_id=tenant_id, acl_key=acl_key,
+        )
         if redis_hit is not None:
             return redis_hit, False
 
-        key_hash = _embedding_hash(query_embedding)
+        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
         inflight = self._l1.get_inflight(key_hash)
         if inflight is not None:
             succeeded = await inflight.wait()
             if succeeded:
-                result = self._l1.lookup(query_embedding, tenant_id=tenant_id)
+                result = self._l1.lookup(
+                    query_embedding, tenant_id=tenant_id, acl_key=acl_key,
+                )
                 if result is not None:
                     return result, False
             return None, True
@@ -467,15 +488,19 @@ class RedisSemanticQueryCache:
         self,
         query_embedding: List[float],
         failed: bool = False,
+        acl_key: str = "",
     ) -> None:
-        self._l1.notify_complete(query_embedding, failed=failed)
+        self._l1.notify_complete(query_embedding, failed=failed, acl_key=acl_key)
 
     def lookup(
         self,
         query_embedding: List[float],
         tenant_id: str = "",
+        acl_key: str = "",
     ) -> Optional[Dict[str, Any]]:
-        return self._l1.lookup(query_embedding, tenant_id=tenant_id)
+        return self._l1.lookup(
+            query_embedding, tenant_id=tenant_id, acl_key=acl_key,
+        )
 
     def store(
         self,
@@ -485,19 +510,21 @@ class RedisSemanticQueryCache:
         tenant_id: str = "",
         complexity: str = "",
         node_ids: Optional[Set[str]] = None,
+        acl_key: str = "",
     ) -> None:
         self._l1.store(
             query=query, query_embedding=query_embedding,
             result=result, tenant_id=tenant_id, complexity=complexity,
-            node_ids=node_ids,
+            node_ids=node_ids, acl_key=acl_key,
         )
-        key_hash = _embedding_hash(query_embedding)
+        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
         try:
             payload = json.dumps({
                 "query": query,
                 "embedding": query_embedding[:32],
                 "result": result,
                 "tenant_id": tenant_id,
+                "acl_key": acl_key,
             }, default=str)
             loop = asyncio.get_running_loop()
             loop.create_task(

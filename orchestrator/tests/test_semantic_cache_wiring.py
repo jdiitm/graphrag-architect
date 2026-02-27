@@ -57,6 +57,7 @@ class TestSemanticCacheQueryEngineIntegration:
             query_embedding=embedding,
             result=cached_result,
             tenant_id="",
+            acl_key="admin",
         )
 
         state = {
@@ -75,6 +76,9 @@ class TestSemanticCacheQueryEngineIntegration:
         with patch(
             "orchestrator.app.query_engine._embed_query",
             return_value=embedding,
+        ), patch(
+            "orchestrator.app.query_engine._build_traversal_acl_params",
+            return_value={"is_admin": True, "acl_team": "", "acl_namespaces": []},
         ), patch(
             "orchestrator.app.query_engine._neo4j_session",
         ) as mock_neo4j:
@@ -140,7 +144,7 @@ class TestSemanticCacheQueryEngineIntegration:
         ) as mock_notify:
             await cypher_retrieve(state)
 
-        mock_notify.assert_called_once_with(embedding)
+        mock_notify.assert_called_once_with(embedding, acl_key="admin")
         _SEMANTIC_CACHE.invalidate_all()
 
     @pytest.mark.asyncio
@@ -170,6 +174,9 @@ class TestSemanticCacheQueryEngineIntegration:
             "orchestrator.app.query_engine._embed_query",
             return_value=embedding,
         ), patch(
+            "orchestrator.app.query_engine._build_traversal_acl_params",
+            return_value={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+        ), patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             side_effect=RuntimeError("db down"),
         ), patch.object(
@@ -178,7 +185,7 @@ class TestSemanticCacheQueryEngineIntegration:
             with pytest.raises(RuntimeError, match="db down"):
                 await cypher_retrieve(state)
 
-        mock_notify.assert_called_once_with(embedding, failed=True)
+        mock_notify.assert_called_once_with(embedding, failed=True, acl_key="admin")
         _SEMANTIC_CACHE.invalidate_all()
 
     @pytest.mark.asyncio
