@@ -485,12 +485,10 @@ class QdrantClientPool:
                 await asyncio.sleep(interval)
                 try:
                     await self.sweep_idle()
-                except asyncio.CancelledError:
-                    raise
                 except Exception:
                     logger.debug("Health sweep iteration failed", exc_info=True)
 
-        self._sweep_task = asyncio.get_event_loop().create_task(_loop())
+        self._sweep_task = asyncio.get_running_loop().create_task(_loop())
 
     def stop_health_sweep(self) -> None:
         if self._sweep_task is not None:
@@ -533,9 +531,12 @@ class PooledQdrantVectorStore:
                 for record in vectors
             ]
             await client.upsert(collection_name=collection, points=points)
-            return len(vectors)
-        finally:
-            await self._pool.release(client)
+            result = len(vectors)
+        except Exception:
+            await self._pool.discard(client)
+            raise
+        await self._pool.release(client)
+        return result
 
     async def search(
         self,
@@ -550,7 +551,7 @@ class PooledQdrantVectorStore:
                 query_vector=query_vector,
                 limit=limit,
             )
-            return [
+            output = [
                 SearchResult(
                     id=str(hit.id),
                     score=hit.score,
@@ -558,8 +559,11 @@ class PooledQdrantVectorStore:
                 )
                 for hit in results
             ]
-        finally:
-            await self._pool.release(client)
+        except Exception:
+            await self._pool.discard(client)
+            raise
+        await self._pool.release(client)
+        return output
 
     async def delete(self, collection: str, ids: List[str], tenant_id: str = "") -> int:
         client = await self._pool.acquire()
@@ -583,14 +587,18 @@ class PooledQdrantVectorStore:
                 await client.delete(
                     collection_name=collection, points_selector=compound,
                 )
-                return count_result.count
-            await client.delete(
-                collection_name=collection,
-                points_selector=PointIdsList(points=ids),
-            )
-            return len(ids)
-        finally:
-            await self._pool.release(client)
+                result = count_result.count
+            else:
+                await client.delete(
+                    collection_name=collection,
+                    points_selector=PointIdsList(points=ids),
+                )
+                result = len(ids)
+        except Exception:
+            await self._pool.discard(client)
+            raise
+        await self._pool.release(client)
+        return result
 
     async def search_with_tenant(
         self,
@@ -616,7 +624,7 @@ class PooledQdrantVectorStore:
                 query_filter=query_filter,
                 limit=limit,
             )
-            return [
+            output = [
                 SearchResult(
                     id=str(hit.id),
                     score=hit.score,
@@ -624,8 +632,11 @@ class PooledQdrantVectorStore:
                 )
                 for hit in results
             ]
-        finally:
-            await self._pool.release(client)
+        except Exception:
+            await self._pool.discard(client)
+            raise
+        await self._pool.release(client)
+        return output
 
 
 def create_vector_store(

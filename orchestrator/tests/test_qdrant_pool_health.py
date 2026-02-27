@@ -3,7 +3,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from orchestrator.app.vector_store import QdrantClientPool
+from orchestrator.app.vector_store import (
+    QdrantClientPool,
+    PooledQdrantVectorStore,
+    VectorRecord,
+)
 
 
 @pytest.fixture
@@ -92,6 +96,78 @@ class TestDiscard:
 
 
 @pytest.mark.asyncio
+class TestPooledStoreDiscardsOnFailure:
+    async def test_upsert_discards_client_on_exception(self) -> None:
+        store = PooledQdrantVectorStore(url="http://localhost:6333", pool_size=1)
+        failing_client = AsyncMock()
+        failing_client.upsert = AsyncMock(side_effect=ConnectionError("broken"))
+        store._pool._factory = lambda: failing_client
+        store._pool.discard = AsyncMock()
+        store._pool.release = AsyncMock()
+
+        with pytest.raises(ConnectionError, match="broken"):
+            await store.upsert("coll", [VectorRecord(id="1", vector=[0.1], metadata={})])
+
+        store._pool.discard.assert_awaited_once_with(failing_client)
+        store._pool.release.assert_not_awaited()
+
+    async def test_search_discards_client_on_exception(self) -> None:
+        store = PooledQdrantVectorStore(url="http://localhost:6333", pool_size=1)
+        failing_client = AsyncMock()
+        failing_client.search = AsyncMock(side_effect=ConnectionError("broken"))
+        store._pool._factory = lambda: failing_client
+        store._pool.discard = AsyncMock()
+        store._pool.release = AsyncMock()
+
+        with pytest.raises(ConnectionError, match="broken"):
+            await store.search("coll", [0.1], limit=5)
+
+        store._pool.discard.assert_awaited_once_with(failing_client)
+        store._pool.release.assert_not_awaited()
+
+    async def test_delete_discards_client_on_exception(self) -> None:
+        store = PooledQdrantVectorStore(url="http://localhost:6333", pool_size=1)
+        failing_client = AsyncMock()
+        failing_client.delete = AsyncMock(side_effect=ConnectionError("broken"))
+        store._pool._factory = lambda: failing_client
+        store._pool.discard = AsyncMock()
+        store._pool.release = AsyncMock()
+
+        with pytest.raises(ConnectionError, match="broken"):
+            await store.delete("coll", ["id1"])
+
+        store._pool.discard.assert_awaited_once_with(failing_client)
+        store._pool.release.assert_not_awaited()
+
+    async def test_search_with_tenant_discards_client_on_exception(self) -> None:
+        store = PooledQdrantVectorStore(url="http://localhost:6333", pool_size=1)
+        failing_client = AsyncMock()
+        failing_client.search = AsyncMock(side_effect=ConnectionError("broken"))
+        store._pool._factory = lambda: failing_client
+        store._pool.discard = AsyncMock()
+        store._pool.release = AsyncMock()
+
+        with pytest.raises(ConnectionError, match="broken"):
+            await store.search_with_tenant("coll", [0.1], "tenant-1", limit=5)
+
+        store._pool.discard.assert_awaited_once_with(failing_client)
+        store._pool.release.assert_not_awaited()
+
+    async def test_upsert_releases_client_on_success(self) -> None:
+        store = PooledQdrantVectorStore(url="http://localhost:6333", pool_size=1)
+        mock_client = AsyncMock()
+        mock_client.upsert = AsyncMock()
+        store._pool._factory = lambda: mock_client
+        store._pool.discard = AsyncMock()
+        store._pool.release = AsyncMock()
+
+        await store.upsert("coll", [VectorRecord(id="1", vector=[0.1], metadata={})])
+
+        store._pool.release.assert_awaited_once_with(mock_client)
+        store._pool.discard.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 class TestHealthSweep:
     async def test_sweep_removes_stale_clients_from_idle(
         self, stale_client,
@@ -127,17 +203,26 @@ class TestHealthSweep:
         assert removed == 1
         assert pool.stats()["idle"] == 1
 
-    async def test_start_health_sweep_runs_periodically(
-        self, stale_client,
-    ) -> None:
+    async def test_start_health_sweep_creates_task_and_stop_cancels_it(self) -> None:
         pool = QdrantClientPool(max_size=4)
-        pool._idle.append(stale_client)
+        assert pool._sweep_task is None
 
-        pool.start_health_sweep(interval=0.05)
-        await asyncio.sleep(0.15)
+        pool.start_health_sweep(interval=60.0)
+        assert pool._sweep_task is not None
+        assert not pool._sweep_task.done()
+
         pool.stop_health_sweep()
+        assert pool._sweep_task is None
 
-        assert pool.stats()["idle"] == 0
+    async def test_start_health_sweep_is_idempotent(self) -> None:
+        pool = QdrantClientPool(max_size=4)
+        pool.start_health_sweep(interval=60.0)
+        first_task = pool._sweep_task
+
+        pool.start_health_sweep(interval=60.0)
+        assert pool._sweep_task is first_task
+
+        pool.stop_health_sweep()
 
     async def test_stop_health_sweep_is_idempotent(self) -> None:
         pool = QdrantClientPool(max_size=2)
