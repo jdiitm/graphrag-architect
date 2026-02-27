@@ -53,7 +53,9 @@ _SAMPLED_NEIGHBOR_TEMPLATE = (
     "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
     "RETURN target.id AS target_id, target.name AS target_name, "
     "type(r) AS rel_type, labels(target)[0] AS target_label "
-    "ORDER BY rand() LIMIT $sample_size"
+    "ORDER BY coalesce(target.pagerank, 0) DESC, "
+    "coalesce(target.degree, 0) DESC, rand() "
+    "LIMIT $sample_size"
 )
 
 _BATCHED_NEIGHBOR_TEMPLATE = (
