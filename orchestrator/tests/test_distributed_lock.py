@@ -23,19 +23,8 @@ class TestDistributedLock:
     @pytest.mark.asyncio
     async def test_acquire_and_release_calls_redis(self) -> None:
         redis_mock = AsyncMock()
-        owner_captured: list[str] = []
-
-        async def _mock_set(key, value, nx=False, ex=None):
-            owner_captured.append(value)
-            return True
-
-        redis_mock.set = AsyncMock(side_effect=_mock_set)
-
-        async def _mock_get(key):
-            return owner_captured[0] if owner_captured else None
-
-        redis_mock.get = AsyncMock(side_effect=_mock_get)
-        redis_mock.delete = AsyncMock()
+        redis_mock.set = AsyncMock(return_value=True)
+        redis_mock.eval = AsyncMock(return_value=1)
         lock = DistributedLock(redis_conn=redis_mock, key_prefix="test:")
 
         async with lock.acquire("tenant:ns", ttl=30):
@@ -44,7 +33,7 @@ class TestDistributedLock:
             assert call_kwargs[1].get("nx") is True
             assert call_kwargs[1].get("ex") == 30
 
-        redis_mock.delete.assert_awaited_once()
+        redis_mock.eval.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_acquire_fails_when_key_already_held(self) -> None:
@@ -59,17 +48,20 @@ class TestDistributedLock:
                 pass
 
     @pytest.mark.asyncio
-    async def test_release_uses_owner_token_to_prevent_wrong_release(self) -> None:
-        redis_mock = AsyncMock()
+    async def test_release_uses_atomic_lua_compare_and_delete(self) -> None:
+        redis_mock = MagicMock()
         redis_mock.set = AsyncMock(return_value=True)
-        redis_mock.get = AsyncMock(return_value="wrong-owner")
-        redis_mock.delete = AsyncMock()
+        redis_mock.eval = AsyncMock(return_value=1)
         lock = DistributedLock(redis_conn=redis_mock, key_prefix="test:")
 
         async with lock.acquire("key1", ttl=30):
             pass
 
-        redis_mock.get.assert_awaited()
+        redis_mock.eval.assert_awaited_once()
+        call_args = redis_mock.eval.call_args
+        script = call_args[0][0]
+        assert "get" in script
+        assert "del" in script
 
     @pytest.mark.asyncio
     async def test_concurrent_acquires_serialize(self) -> None:
@@ -86,8 +78,7 @@ class TestDistributedLock:
             return True
 
         redis_mock.set = AsyncMock(side_effect=_mock_set)
-        redis_mock.get = AsyncMock(return_value=None)
-        redis_mock.delete = AsyncMock()
+        redis_mock.eval = AsyncMock(return_value=1)
         lock = DistributedLock(
             redis_conn=redis_mock, key_prefix="test:", retry_attempts=1, retry_delay=0.01,
         )
@@ -103,23 +94,19 @@ class TestDistributedSemaphore:
     @pytest.mark.asyncio
     async def test_try_acquire_succeeds_below_limit(self) -> None:
         redis_mock = AsyncMock()
-        redis_mock.zcard = AsyncMock(return_value=0)
-        redis_mock.zadd = AsyncMock()
-        redis_mock.zremrangebyscore = AsyncMock()
+        redis_mock.eval = AsyncMock(return_value=1)
         sem = DistributedSemaphore(
             redis_conn=redis_mock, key="test:sem", max_concurrent=5,
         )
 
         acquired, token = await sem.try_acquire()
         assert acquired is True
-        assert token is not None
+        assert token != ""
 
     @pytest.mark.asyncio
     async def test_try_acquire_fails_at_limit(self) -> None:
         redis_mock = AsyncMock()
-        redis_mock.zcard = AsyncMock(return_value=5)
-        redis_mock.zadd = AsyncMock()
-        redis_mock.zremrangebyscore = AsyncMock()
+        redis_mock.eval = AsyncMock(return_value=0)
         redis_mock.zrem = AsyncMock()
         sem = DistributedSemaphore(
             redis_conn=redis_mock, key="test:sem", max_concurrent=5,
@@ -127,13 +114,28 @@ class TestDistributedSemaphore:
 
         acquired, token = await sem.try_acquire()
         assert acquired is False
+        assert token == ""
+
+    @pytest.mark.asyncio
+    async def test_try_acquire_is_atomic_via_lua(self) -> None:
+        redis_mock = MagicMock()
+        redis_mock.eval = AsyncMock(return_value=1)
+        sem = DistributedSemaphore(
+            redis_conn=redis_mock, key="test:sem", max_concurrent=5,
+        )
+
+        acquired, token = await sem.try_acquire()
+        assert acquired is True
+        redis_mock.eval.assert_awaited_once()
+        call_args = redis_mock.eval.call_args
+        script = call_args[0][0]
+        assert "zcard" in script
+        assert "zadd" in script
 
     @pytest.mark.asyncio
     async def test_release_removes_token(self) -> None:
         redis_mock = AsyncMock()
-        redis_mock.zcard = AsyncMock(return_value=0)
-        redis_mock.zadd = AsyncMock()
-        redis_mock.zremrangebyscore = AsyncMock()
+        redis_mock.eval = AsyncMock(return_value=1)
         redis_mock.zrem = AsyncMock()
         sem = DistributedSemaphore(
             redis_conn=redis_mock, key="test:sem", max_concurrent=5,
@@ -248,15 +250,18 @@ class TestBoundedBackgroundTasks:
         async def _noop() -> None:
             await asyncio.sleep(0.1)
 
-        ok1 = bts.try_add(asyncio.create_task(_noop()))
-        ok2 = bts.try_add(asyncio.create_task(_noop()))
-        ok3 = bts.try_add(asyncio.create_task(_noop()))
+        t1 = asyncio.create_task(_noop())
+        t2 = asyncio.create_task(_noop())
+        t3 = asyncio.create_task(_noop())
+        ok1 = bts.try_add(t1)
+        ok2 = bts.try_add(t2)
+        ok3 = bts.try_add(t3)
 
         assert ok1 is True
         assert ok2 is True
         assert ok3 is False
 
-        await asyncio.sleep(0.15)
+        await asyncio.wait({t1, t2}, timeout=2.0)
 
     @pytest.mark.asyncio
     async def test_bounded_task_set_frees_slots_on_completion(self) -> None:
@@ -267,11 +272,42 @@ class TestBoundedBackgroundTasks:
         async def _fast() -> None:
             pass
 
-        t = asyncio.create_task(_fast())
-        ok1 = bts.try_add(t)
+        t1 = asyncio.create_task(_fast())
+        ok1 = bts.try_add(t1)
         assert ok1 is True
-        await asyncio.sleep(0.01)
+        await asyncio.wait({t1}, timeout=2.0)
 
-        ok2 = bts.try_add(asyncio.create_task(_fast()))
+        t2 = asyncio.create_task(_fast())
+        ok2 = bts.try_add(t2)
         assert ok2 is True
-        await asyncio.sleep(0.01)
+        await asyncio.wait({t2}, timeout=2.0)
+
+
+class TestAcquireIngestionLockDistributedPath:
+
+    @pytest.mark.asyncio
+    async def test_acquire_ingestion_lock_delegates_to_distributed_lock(self) -> None:
+        from orchestrator.app.graph_builder import (
+            acquire_ingestion_lock,
+            set_ingestion_lock,
+        )
+
+        redis_mock = AsyncMock()
+        redis_mock.set = AsyncMock(return_value=True)
+        redis_mock.eval = AsyncMock(return_value=1)
+        dist_lock = DistributedLock(redis_conn=redis_mock, key_prefix="test:")
+
+        original_lock = None
+        try:
+            from orchestrator.app import graph_builder
+            original_lock = graph_builder._IngestionLockHolder.value
+            set_ingestion_lock(dist_lock)
+
+            async with acquire_ingestion_lock("tenant-x", "ns-1"):
+                redis_mock.set.assert_awaited_once()
+                call_args = redis_mock.set.call_args
+                assert "tenant-x:ns-1" in call_args[0][0]
+
+            redis_mock.eval.assert_awaited_once()
+        finally:
+            graph_builder._IngestionLockHolder.value = original_lock

@@ -5,11 +5,29 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, Tuple
+from typing import Any, AsyncIterator, Dict, Iterator, Tuple
 
 from orchestrator.app.redis_client import create_async_redis
 
 logger = logging.getLogger(__name__)
+
+_RELEASE_LOCK_LUA = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
+
+_SEMAPHORE_ACQUIRE_LUA = """
+redis.call("zremrangebyscore", KEYS[1], "-inf", ARGV[1])
+local count = redis.call("zcard", KEYS[1])
+if count < tonumber(ARGV[2]) then
+    redis.call("zadd", KEYS[1], ARGV[3], ARGV[4])
+    return 1
+end
+return 0
+"""
 
 _DEFAULT_TTL = 300
 _DEFAULT_RETRY_ATTEMPTS = 10
@@ -51,10 +69,10 @@ class DistributedLock:
         try:
             yield
         finally:
-            stored = await self._redis.get(full_key)
-            if stored == owner:
-                await self._redis.delete(full_key)
-            else:
+            released = await self._redis.eval(
+                _RELEASE_LOCK_LUA, 1, full_key, owner,
+            )
+            if not released:
                 logger.warning(
                     "Lock for %s was overwritten by another owner; skipping delete",
                     full_key,
@@ -78,12 +96,13 @@ class DistributedSemaphore:
         token = uuid.uuid4().hex
         now = time.time()
         cutoff = now - self._ttl
-        await self._redis.zremrangebyscore(self._key, "-inf", cutoff)
-        count = await self._redis.zcard(self._key)
-        if count >= self._max:
-            return False, ""
-        await self._redis.zadd(self._key, {token: now})
-        return True, token
+        result = await self._redis.eval(
+            _SEMAPHORE_ACQUIRE_LUA, 1,
+            self._key, str(cutoff), str(self._max), str(now), token,
+        )
+        if result == 1:
+            return True, token
+        return False, ""
 
     async def release(self, token: str) -> None:
         if token:
@@ -159,7 +178,7 @@ class BoundedTaskSet:
         self._tasks = {t for t in self._tasks if not t.done()}
         return len(self._tasks)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[asyncio.Task[Any]]:
         self._tasks = {t for t in self._tasks if not t.done()}
         return iter(self._tasks)
 
