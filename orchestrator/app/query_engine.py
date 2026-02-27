@@ -38,7 +38,7 @@ from orchestrator.app.graph_embeddings import compute_centroid, rerank_with_stru
 from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.agentic_traversal import run_traversal
 from orchestrator.app.tombstone_filter import filter_tombstoned_results
-from orchestrator.app.lazy_traversal import personalized_pagerank
+from orchestrator.app.lazy_traversal import gds_pagerank_filter
 from orchestrator.app.query_templates import (
     TemplateCatalog,
     match_template,
@@ -455,18 +455,6 @@ async def _fetch_candidates_with_embedding(
         return await session.execute_read(_vector_tx, timeout=timeout)
 
 
-def _filter_by_ppr(
-    hop_records: List[Dict[str, Any]],
-    seed_names: List[str],
-) -> List[Dict[str, Any]]:
-    ranked = personalized_pagerank(hop_records, seed_nodes=seed_names, top_n=50)
-    top_nodes = {node for node, _score in ranked}
-    return [
-        rec for rec in hop_records
-        if rec.get("source") in top_nodes or rec.get("target") in top_nodes
-    ]
-
-
 def _build_single_hop_cypher() -> str:
     return (
         "MATCH (n)-[r]-(m) "
@@ -512,7 +500,10 @@ async def single_hop_retrieve(state: QueryState) -> dict:
 
                 return {
                     "candidates": candidates,
-                    "cypher_results": _filter_by_ppr(hop_records, names),
+                    "cypher_results": await gds_pagerank_filter(
+                        driver, hop_records, names,
+                        state.get("tenant_id", ""),
+                    ),
                 }
         finally:
             QUERY_DURATION.record(
