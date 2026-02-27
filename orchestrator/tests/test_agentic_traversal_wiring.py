@@ -105,6 +105,15 @@ class TestExecuteHop:
 
 
 class TestRunTraversal:
+    @pytest.fixture(autouse=True)
+    def _force_sequential_fallback(self):
+        with patch(
+            "orchestrator.app.agentic_traversal.bounded_path_expansion",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("force sequential BFS in legacy tests"),
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_single_hop_traversal(self) -> None:
         hop_results = [
