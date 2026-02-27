@@ -518,18 +518,25 @@ async def _enqueue_vector_cleanup_durable(
 
 async def drain_vector_outbox() -> int:
     vs = get_vector_store()
-    if _VECTOR_OUTBOX.pending_count > 0:
-        drainer = OutboxDrainer(outbox=_VECTOR_OUTBOX, vector_store=vs)
-        return await drainer.process_once()
+    total = 0
     redis_conn = _get_redis_conn()
     try:
         driver = get_driver()
     except RuntimeError:
         driver = None
-    drainer = create_outbox_drainer(
+    durable_drainer = create_outbox_drainer(
         redis_conn=redis_conn, vector_store=vs, neo4j_driver=driver,
     )
-    return await drainer.process_once()
+    if isinstance(durable_drainer, DurableOutboxDrainer):
+        total += await durable_drainer.process_once()
+    if _VECTOR_OUTBOX.pending_count > 0:
+        inmemory_drainer = OutboxDrainer(
+            outbox=_VECTOR_OUTBOX, vector_store=vs,
+        )
+        total += await inmemory_drainer.process_once()
+    if not isinstance(durable_drainer, DurableOutboxDrainer) and total == 0:
+        total += await durable_drainer.process_once()
+    return total
 
 
 def _get_sink_batch_size() -> int:

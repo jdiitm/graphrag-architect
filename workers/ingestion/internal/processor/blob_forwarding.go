@@ -10,7 +10,7 @@ import (
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
 )
 
-const DefaultBlobThreshold = 256 * 1024
+const DefaultBlobThreshold = 64 * 1024
 
 type blobPayload struct {
 	FilePath    string `json:"file_path"`

@@ -180,7 +180,7 @@ class SemanticQueryCache:
         best_sim = 0.0
 
         for entry in self._entries.values():
-            if tenant_id and entry.tenant_id and entry.tenant_id != tenant_id:
+            if entry.tenant_id != tenant_id:
                 continue
             sim = _vectorized_cosine_similarity(query_embedding, entry.embedding)
             if sim >= self._config.similarity_threshold and sim > best_sim:

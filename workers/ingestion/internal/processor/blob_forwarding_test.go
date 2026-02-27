@@ -11,6 +11,17 @@ import (
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/processor"
 )
 
+func TestDefaultBlobThreshold_Is64KB(t *testing.T) {
+	expected := 64 * 1024
+	if processor.DefaultBlobThreshold != expected {
+		t.Errorf(
+			"DefaultBlobThreshold = %d, want %d (64KB); "+
+				"audit requires lowered threshold to prevent Kafka message.max.bytes breaches",
+			processor.DefaultBlobThreshold, expected,
+		)
+	}
+}
+
 func TestBlobForwardingProcessor_SmallContentInline(t *testing.T) {
 	store := blobstore.NewInMemoryBlobStore()
 	producer := &fakeProducer{}
