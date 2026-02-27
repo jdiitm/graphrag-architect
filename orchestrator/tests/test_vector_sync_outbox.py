@@ -633,7 +633,7 @@ class TestRedisOutboxStoreReleaseExpiredClaims:
 
         await store.claim_pending("worker-1", limit=10, lease_seconds=0.0)
 
-        released = await store.release_expired_claims(lease_seconds=0.0)
+        released = await store.release_expired_claims()
         assert released >= 1
 
         reclaimed = await store.claim_pending("worker-2", limit=10, lease_seconds=60.0)
@@ -647,7 +647,7 @@ class TestRedisOutboxStoreReleaseExpiredClaims:
         await store.write_event(event)
 
         await store.claim_pending("worker-1", limit=10, lease_seconds=300.0)
-        released = await store.release_expired_claims(lease_seconds=300.0)
+        released = await store.release_expired_claims()
         assert released == 0
 
 
@@ -675,6 +675,12 @@ class TestDurableOutboxDrainerWithClaiming:
 
     @pytest.mark.asyncio
     async def test_drainer_prevents_parallel_processing(self) -> None:
+        # NOTE: This test runs drainers sequentially (await d1; await d2),
+        # which validates claim semantics but does NOT exercise true
+        # concurrent interleaving.  RedisOutboxStore.claim_pending uses
+        # non-atomic read-check-set; concurrent coroutines can double-claim.
+        # Production multi-worker deployments should use a Redis Lua script
+        # for atomic claiming — see RedisOutboxStore class docstring.
         redis = ClaimableFakeRedis()
         store = RedisOutboxStore(redis_conn=redis)
         spy_vs_1 = SpyVectorStore()
@@ -698,6 +704,33 @@ class TestDurableOutboxDrainerWithClaiming:
         total_deletes = len(spy_vs_1.delete_calls) + len(spy_vs_2.delete_calls)
         assert total_deletes == 1
         assert p1 + p2 == 1
+
+    @pytest.mark.asyncio
+    async def test_failed_claimed_event_resets_to_pending(self) -> None:
+        redis = ClaimableFakeRedis()
+        store = RedisOutboxStore(redis_conn=redis)
+
+        class FailingVectorStore:
+            async def delete(self, collection: str, ids: list) -> int:
+                raise RuntimeError("transient failure")
+
+        event = VectorSyncEvent(collection="svc", pruned_ids=["a"])
+        await store.write_event(event)
+
+        drainer = DurableOutboxDrainer(
+            store=store, vector_store=FailingVectorStore(), max_retries=5,
+            worker_id="worker-1", lease_seconds=300.0,
+        )
+        await drainer.process_once()
+
+        reclaimed = await store.claim_pending(
+            "worker-2", limit=10, lease_seconds=300.0,
+        )
+        assert len(reclaimed) == 1, (
+            "Failed event should be immediately reclaimable, "
+            "not stuck behind a 300s lease"
+        )
+        assert reclaimed[0].retry_count == 1
 
     @pytest.mark.asyncio
     async def test_drainer_backward_compat_without_claiming(self) -> None:

@@ -56,9 +56,9 @@ class ClaimableOutboxStore(OutboxStore, Protocol):
 
     async def mark_completed(self, event_id: str) -> None: ...
 
-    async def release_expired_claims(
-        self, lease_seconds: float,
-    ) -> int: ...
+    async def release_claim(self, event_id: str) -> None: ...
+
+    async def release_expired_claims(self) -> int: ...
 
 
 class VectorSyncOutbox:
@@ -115,6 +115,17 @@ class OutboxDrainer:
 
 
 class RedisOutboxStore:
+    """Redis-backed outbox store with lease-based claiming.
+
+    Limitation: ``claim_pending`` uses non-atomic read-check-set across
+    multiple Redis round-trips.  In a concurrent async context, two
+    coroutines can interleave at ``await`` boundaries and both claim the
+    same event.  For single-worker deployments this is acceptable.
+    Production multi-worker deployments should replace the claim logic
+    with a Redis Lua script (``EVALSHA``) or ``WATCH``/``MULTI``
+    transaction to make the read-check-claim atomic per event.
+    """
+
     _KEY_PREFIX = "graphrag:vecoutbox:"
     _INDEX_KEY = "graphrag:vecoutbox:pending"
 
@@ -188,7 +199,7 @@ class RedisOutboxStore:
     ) -> List[VectorSyncEvent]:
         event_ids = await self._redis.smembers(self._INDEX_KEY)
         claimed: List[VectorSyncEvent] = []
-        now = time.monotonic()
+        now = time.time()
         for eid in event_ids:
             if len(claimed) >= limit:
                 break
@@ -234,12 +245,18 @@ class RedisOutboxStore:
             self._event_key(event_id), key="status", value="completed",
         )
 
-    async def release_expired_claims(
-        self, lease_seconds: float,
-    ) -> int:
+    async def release_claim(self, event_id: str) -> None:
+        await self._redis.hset(
+            self._event_key(event_id), key="status", value="pending",
+        )
+        await self._redis.hset(
+            self._event_key(event_id), key="lease_expires_at", value="0",
+        )
+
+    async def release_expired_claims(self) -> int:
         event_ids = await self._redis.smembers(self._INDEX_KEY)
         released = 0
-        now = time.monotonic()
+        now = time.time()
         for eid in event_ids:
             data = await self._redis.hgetall(self._event_key(eid))
             if not data:
@@ -384,7 +401,7 @@ class DurableOutboxDrainer:
 
     async def _load_events(self) -> List[VectorSyncEvent]:
         if isinstance(self._store, ClaimableOutboxStore):
-            await self._store.release_expired_claims(self._lease_seconds)
+            await self._store.release_expired_claims()
             return await self._store.claim_pending(
                 self._worker_id,
                 limit=_DEFAULT_CLAIM_LIMIT,
@@ -432,4 +449,6 @@ class DurableOutboxDrainer:
                     await self._store.update_retry_count(
                         event.event_id, new_count,
                     )
+                    if isinstance(self._store, ClaimableOutboxStore):
+                        await self._store.release_claim(event.event_id)
         return processed
