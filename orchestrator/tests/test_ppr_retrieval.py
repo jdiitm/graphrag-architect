@@ -109,6 +109,9 @@ class TestSingleHopPPRIntegration:
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._get_neo4j_write_driver",
+            return_value=mock_driver,
         ):
             result = await single_hop_retrieve(state)
 
@@ -153,6 +156,9 @@ class TestSingleHopPPRIntegration:
 
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._get_neo4j_write_driver",
             return_value=mock_driver,
         ), patch(
             "orchestrator.app.query_engine._get_hop_edge_limit",

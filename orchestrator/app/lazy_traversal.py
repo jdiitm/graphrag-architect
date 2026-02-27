@@ -119,6 +119,13 @@ class LocalPageRankStrategy:
 
 
 class PrecomputedPageRankStrategy:
+    """Uses pre-stored ``pagerank`` edge properties instead of computing on the fly.
+
+    ``seed_nodes`` is accepted to satisfy the ``PageRankStrategy`` protocol
+    but intentionally ignored — rankings are global (precomputed), not
+    personalised per query.
+    """
+
     def rank(
         self,
         edges: List[Dict[str, Any]],

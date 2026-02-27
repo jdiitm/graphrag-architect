@@ -103,3 +103,27 @@ def sanitize_source_content(
     cleaned = _apply_injection_filters(cleaned)
     cleaned = html.escape(cleaned, quote=False)
     return cleaned
+
+
+def sanitize_ingestion_content(
+    content: str,
+    file_path: str,
+    max_chars: int = _DEFAULT_MAX_SOURCE_CHARS,
+) -> str:
+    """Security-sanitize content for ingestion without HTML-escaping.
+
+    Applies the same pipeline as sanitize_source_content (control char
+    stripping, XML boundary removal, delimiter redaction, secret
+    filtering, injection filtering) but omits ``html.escape()`` so that
+    source-code operators (``<``, ``>``, ``&``) are preserved for LLM
+    entity extraction and downstream AST parsing.
+    """
+    if not content:
+        return content
+    cleaned = _strip_control_chars(content)
+    cleaned = cleaned[:max_chars]
+    cleaned = _strip_xml_boundaries(cleaned)
+    cleaned = _strip_delimiter_patterns(cleaned)
+    cleaned = _apply_secret_filters(cleaned)
+    cleaned = _apply_injection_filters(cleaned)
+    return cleaned

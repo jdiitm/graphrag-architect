@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
-from orchestrator.app.prompt_sanitizer import sanitize_source_content
+from orchestrator.app.prompt_sanitizer import sanitize_ingestion_content
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class ExtractionWorker:
                 return {"status": "failed", "error": "staging file not found"}
 
             file_path = event.headers.get("file_path", event.staging_path)
-            content = sanitize_source_content(content, file_path)
+            content = sanitize_ingestion_content(content, file_path)
 
             raw_files = [{
                 "path": file_path,

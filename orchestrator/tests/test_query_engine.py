@@ -140,6 +140,9 @@ class TestSingleHopRetrieve:
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._get_neo4j_write_driver",
+            return_value=mock_driver,
         ):
             result = await single_hop_retrieve(state)
 
@@ -169,6 +172,9 @@ class TestSingleHopRetrieve:
 
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._get_neo4j_write_driver",
             return_value=mock_driver,
         ):
             result = await single_hop_retrieve(state)
@@ -472,6 +478,7 @@ class TestNeo4jReadOnlyAccessPattern:
 
         patches = [
             patch("orchestrator.app.query_engine._get_neo4j_driver", return_value=mock_driver),
+            patch("orchestrator.app.query_engine._get_neo4j_write_driver", return_value=mock_driver),
         ]
         for target, return_val in extra_patches:
             if "resolve_driver_for_tenant" in target:
@@ -845,6 +852,9 @@ class TestHopEdgeLimit:
 
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
+            return_value=mock_driver,
+        ), patch(
+            "orchestrator.app.query_engine._get_neo4j_write_driver",
             return_value=mock_driver,
         ):
             await single_hop_retrieve(state)

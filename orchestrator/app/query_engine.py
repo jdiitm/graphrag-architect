@@ -513,7 +513,7 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                 return {
                     "candidates": candidates,
                     "cypher_results": await gds_pagerank_filter(
-                        driver, hop_records, names,
+                        _get_neo4j_write_driver(), hop_records, names,
                         state.get("tenant_id", ""),
                     ),
                 }

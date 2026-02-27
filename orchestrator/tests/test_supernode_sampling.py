@@ -159,6 +159,13 @@ class TestSemanticPruningSupernodes:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return degree_data
+            mock_tx = AsyncMock()
+            mock_result = AsyncMock()
+            mock_result.data = AsyncMock(return_value=[])
+            mock_tx.run = AsyncMock(return_value=mock_result)
+            await tx_fn(mock_tx)
+            if mock_tx.run.call_args is not None:
+                captured_params.update(mock_tx.run.call_args.kwargs)
             return []
 
         session.execute_read = _execute_read
@@ -173,6 +180,10 @@ class TestSemanticPruningSupernodes:
             acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
             query_embedding=[0.1, 0.2],
             similarity_threshold=0.7,
+        )
+
+        assert captured_params.get("sim_threshold") == 0.7, (
+            f"Expected sim_threshold=0.7, got {captured_params.get('sim_threshold')}"
         )
 
     def test_semantic_template_exists(self) -> None:
