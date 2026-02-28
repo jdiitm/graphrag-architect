@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
@@ -114,9 +115,66 @@ def _vectorized_cosine_similarity(a: List[float], b: List[float]) -> float:
         return _cosine_similarity(a, b)
 
 
-def _embedding_hash(embedding: List[float]) -> str:
-    raw = "|".join(f"{v:.6f}" for v in embedding[:32])
+def _embedding_hash(
+    embedding: List[float],
+    hash_dimensions: Optional[int] = None,
+) -> str:
+    dims = embedding[:hash_dimensions] if hash_dimensions is not None else embedding
+    raw = "|".join(f"{v:.6f}" for v in dims)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+_FILLER_PATTERNS: List[re.Pattern[str]] = [
+    re.compile(r"\bcan you tell me\b", re.IGNORECASE),
+    re.compile(r"\bcould you tell me\b", re.IGNORECASE),
+    re.compile(r"\bplease show me\b", re.IGNORECASE),
+    re.compile(r"\bplease tell me\b", re.IGNORECASE),
+    re.compile(r"\bshow me\b", re.IGNORECASE),
+    re.compile(r"\btell me\b", re.IGNORECASE),
+    re.compile(r"\bi want to know\b", re.IGNORECASE),
+    re.compile(r"\bi would like to know\b", re.IGNORECASE),
+    re.compile(r"\bcan you\b", re.IGNORECASE),
+    re.compile(r"\bcould you\b", re.IGNORECASE),
+    re.compile(r"\bplease\b", re.IGNORECASE),
+]
+
+_QUESTION_SYNONYMS: List[Tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bwhich\b", re.IGNORECASE), "what"),
+    (re.compile(r"\bwhat are the\b", re.IGNORECASE), "what"),
+    (re.compile(r"\bcalls\b", re.IGNORECASE), "call"),
+    (re.compile(r"\bservices\b", re.IGNORECASE), "service"),
+    (re.compile(r"\bdepends\b", re.IGNORECASE), "depend"),
+]
+
+_WHITESPACE_COLLAPSE = re.compile(r"\s+")
+
+
+def normalize_query(query: str) -> str:
+    if not query or not query.strip():
+        return ""
+    text = query.strip().lower()
+    text = re.sub(r"[?!.,;:]+$", "", text)
+    for pattern in _FILLER_PATTERNS:
+        text = pattern.sub("", text)
+    for pattern, replacement in _QUESTION_SYNONYMS:
+        text = pattern.sub(replacement, text)
+    text = _WHITESPACE_COLLAPSE.sub(" ", text).strip()
+    return text
+
+
+@dataclass(frozen=True)
+class CacheMetrics:
+    hits: int
+    misses: int
+    evictions: int
+    size: int
+
+    @property
+    def hit_ratio(self) -> float:
+        total = self.hits + self.misses
+        if total == 0:
+            return 0.0
+        return self.hits / total
 
 
 class _InflightRequest:
@@ -406,6 +464,14 @@ class SemanticQueryCache:
             evictions=self._evictions,
             size=len(self._entries),
             max_size=self._config.max_entries,
+        )
+
+    def metrics(self) -> CacheMetrics:
+        return CacheMetrics(
+            hits=self._hits,
+            misses=self._misses,
+            evictions=self._evictions,
+            size=len(self._entries),
         )
 
     def _evict_expired(self) -> None:
