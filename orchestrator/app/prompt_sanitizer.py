@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import enum
+import hashlib
+import hmac
 import html
 import re
-from typing import List, Tuple
+import secrets
+from dataclasses import dataclass
+from typing import FrozenSet, List, Set, Tuple
 
 _DEFAULT_MAX_QUERY_CHARS = 4_000
 _DEFAULT_MAX_SOURCE_CHARS = 1_000_000
@@ -46,7 +51,9 @@ _XML_BOUNDARY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_DELIMITER_PATTERN = re.compile(r"GRAPHCTX_[A-Za-z0-9]+", re.IGNORECASE)
+_DELIMITER_PATTERN = re.compile(
+    r"GRAPHCTX_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*", re.IGNORECASE,
+)
 
 _CONTROL_CHAR_PATTERN = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]"
@@ -127,3 +134,137 @@ def sanitize_ingestion_content(
     cleaned = _apply_secret_filters(cleaned)
     cleaned = _apply_injection_filters(cleaned)
     return cleaned
+
+
+class ThreatCategory(enum.Enum):
+    INSTRUCTION_OVERRIDE = "instruction_override"
+    SYSTEM_PROMPT_MARKER = "system_prompt_marker"
+    ROLE_INJECTION = "role_injection"
+    TAG_INJECTION = "tag_injection"
+
+
+@dataclass(frozen=True)
+class ScanResult:
+    is_threat: bool
+    categories: FrozenSet[ThreatCategory]
+    matched_patterns: Tuple[str, ...]
+
+
+_FIREWALL_RULES: List[
+    Tuple[re.Pattern[str], ThreatCategory, str]
+] = [
+    (re.compile(
+        r"ignore\s+(all\s+)?(previous|above|prior)"
+        r"\s+(instructions?|rules?|prompts?)",
+        re.IGNORECASE,
+    ), ThreatCategory.INSTRUCTION_OVERRIDE, "[BLOCKED]"),
+    (re.compile(
+        r"disregard\s+(all\s+)?"
+        r"(previous|above|prior)?\s*instructions?",
+        re.IGNORECASE,
+    ), ThreatCategory.INSTRUCTION_OVERRIDE, "[BLOCKED]"),
+    (re.compile(
+        r"you\s+are\s+now\b", re.IGNORECASE,
+    ), ThreatCategory.INSTRUCTION_OVERRIDE, "[BLOCKED]"),
+    (re.compile(
+        r"new\s+instructions?\s*:", re.IGNORECASE,
+    ), ThreatCategory.INSTRUCTION_OVERRIDE, "[BLOCKED]"),
+    (re.compile(
+        r"forget\s+(all\s+)?(your\s+)?instructions?",
+        re.IGNORECASE,
+    ), ThreatCategory.INSTRUCTION_OVERRIDE, "[BLOCKED]"),
+
+    (re.compile(
+        r"<\|im_start\|>",
+    ), ThreatCategory.SYSTEM_PROMPT_MARKER, ""),
+    (re.compile(
+        r"<\|im_end\|>",
+    ), ThreatCategory.SYSTEM_PROMPT_MARKER, ""),
+    (re.compile(
+        r"\[/?INST\]",
+    ), ThreatCategory.SYSTEM_PROMPT_MARKER, ""),
+    (re.compile(
+        r"<{2}/?SYS>{2}",
+    ), ThreatCategory.SYSTEM_PROMPT_MARKER, ""),
+    (re.compile(
+        r"^\s*system\s*:", re.IGNORECASE | re.MULTILINE,
+    ), ThreatCategory.SYSTEM_PROMPT_MARKER, "[BLOCKED]"),
+    (re.compile(
+        r"^#{1,3}\s+System\s*$",
+        re.IGNORECASE | re.MULTILINE,
+    ), ThreatCategory.SYSTEM_PROMPT_MARKER, "[BLOCKED]"),
+
+    (re.compile(
+        r"^\s*assistant\s*:", re.IGNORECASE | re.MULTILINE,
+    ), ThreatCategory.ROLE_INJECTION, "[BLOCKED]"),
+    (re.compile(
+        r"^\s*user\s*:", re.IGNORECASE | re.MULTILINE,
+    ), ThreatCategory.ROLE_INJECTION, "[BLOCKED]"),
+    (re.compile(
+        r"^\s*Human\s*:", re.IGNORECASE | re.MULTILINE,
+    ), ThreatCategory.ROLE_INJECTION, "[BLOCKED]"),
+    (re.compile(
+        r"^\s*AI\s*:", re.IGNORECASE | re.MULTILINE,
+    ), ThreatCategory.ROLE_INJECTION, "[BLOCKED]"),
+
+    (re.compile(
+        r"<\s*/?\s*"
+        r"(?:graph_context|user_query|system|assistant)"
+        r"\s*>",
+        re.IGNORECASE,
+    ), ThreatCategory.TAG_INJECTION, ""),
+]
+
+
+class ContentFirewall:
+    _patterns: List[
+        Tuple[re.Pattern[str], ThreatCategory, str]
+    ]
+
+    def __init__(self) -> None:
+        self._patterns = _FIREWALL_RULES
+
+    def scan(self, content: str) -> ScanResult:
+        detected_categories: Set[ThreatCategory] = set()
+        detected_patterns: List[str] = []
+        for pattern, category, _ in self._patterns:
+            if pattern.search(content):
+                detected_categories.add(category)
+                detected_patterns.append(pattern.pattern)
+        return ScanResult(
+            is_threat=bool(detected_categories),
+            categories=frozenset(detected_categories),
+            matched_patterns=tuple(detected_patterns),
+        )
+
+    def sanitize(self, content: str) -> str:
+        result = content
+        for pattern, _, replacement in self._patterns:
+            result = pattern.sub(replacement, result)
+        return result
+
+
+class HMACDelimiter:
+    _key: bytes
+
+    def __init__(self) -> None:
+        self._key = secrets.token_bytes(32)
+
+    def generate(self) -> str:
+        nonce = secrets.token_hex(12)
+        signature = hmac.new(
+            self._key, nonce.encode(), hashlib.sha256,
+        ).hexdigest()[:16]
+        return f"GRAPHCTX_{nonce}_{signature}"
+
+    def validate(self, delimiter: str) -> bool:
+        parts = delimiter.split("_", 2)
+        if len(parts) != 3 or parts[0] != "GRAPHCTX":
+            return False
+        nonce, candidate_sig = parts[1], parts[2]
+        expected_sig = hmac.new(
+            self._key, nonce.encode(), hashlib.sha256,
+        ).hexdigest()[:16]
+        return hmac.compare_digest(
+            candidate_sig, expected_sig,
+        )
