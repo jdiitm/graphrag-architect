@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Protocol, Set, runtime_checkable
 
 import numpy as np
+from neo4j.exceptions import ClientError as Neo4jClientError
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +174,99 @@ class Node2VecEmbedder:
                     node, walks, self._config.embedding_dim,
                 )
         return result
+
+
+@runtime_checkable
+class GraphEmbeddingBackend(Protocol):
+    def generate_embeddings(
+        self,
+        topology: GraphTopology,
+    ) -> Dict[str, List[float]]:
+        ...
+
+
+class LocalEmbeddingBackend:
+    def __init__(self, config: Optional[Node2VecConfig] = None) -> None:
+        self._embedder = Node2VecEmbedder(config)
+
+    def generate_embeddings(
+        self,
+        topology: GraphTopology,
+    ) -> Dict[str, List[float]]:
+        return self._embedder.embed(topology)
+
+
+_GDS_NODE2VEC_QUERY = (
+    "CALL gds.node2vec.stream($graphName, {"
+    "  embeddingDimension: $embeddingDimension,"
+    "  walkLength: $walkLength,"
+    "  walksPerNode: $walksPerNode,"
+    "  returnFactor: $returnFactor,"
+    "  inOutFactor: $inOutFactor"
+    "}) YIELD nodeId, embedding"
+    " RETURN gds.util.asNode(nodeId).elementId AS nodeId, embedding"
+)
+
+
+class GDSEmbeddingBackend:
+    def __init__(
+        self,
+        driver: Any,
+        config: Optional[Node2VecConfig] = None,
+        graph_name: str = "graphrag",
+    ) -> None:
+        self._driver = driver
+        self._config = config or Node2VecConfig()
+        self._graph_name = graph_name
+
+    async def generate_embeddings_async(
+        self,
+        topology: GraphTopology,
+    ) -> Dict[str, List[float]]:
+        params = {
+            "graphName": self._graph_name,
+            "embeddingDimension": self._config.embedding_dim,
+            "walkLength": self._config.walk_length,
+            "walksPerNode": self._config.num_walks,
+            "returnFactor": self._config.p,
+            "inOutFactor": self._config.q,
+        }
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(_GDS_NODE2VEC_QUERY, **params)
+                embeddings: Dict[str, List[float]] = {}
+                async for record in result:
+                    node_id: str = record["nodeId"]
+                    raw_embedding = record["embedding"]
+                    embeddings[node_id] = [float(v) for v in raw_embedding]
+                return embeddings
+        except Neo4jClientError as exc:
+            raise RuntimeError(
+                "Neo4j GDS plugin is not installed or the "
+                "gds.node2vec.stream procedure is not available. "
+                "Install the GDS plugin to use the GDS embedding backend."
+            ) from exc
+
+    def generate_embeddings(
+        self,
+        topology: GraphTopology,
+    ) -> Dict[str, List[float]]:
+        return asyncio.run(self.generate_embeddings_async(topology))
+
+
+def create_embedding_backend(
+    backend_type: str = "local",
+    driver: Any = None,
+    config: Optional[Node2VecConfig] = None,
+) -> GraphEmbeddingBackend:
+    if backend_type == "local":
+        return LocalEmbeddingBackend(config=config)
+    if backend_type == "gds":
+        return GDSEmbeddingBackend(driver=driver, config=config)
+    raise ValueError(
+        f"Unknown embedding backend: {backend_type!r}. "
+        f"Valid options: 'local', 'gds'"
+    )
 
 
 def compute_centroid(vectors: List[List[float]]) -> List[float]:
