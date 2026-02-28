@@ -6,6 +6,7 @@ import hmac
 import html
 import re
 import secrets
+import unicodedata
 from dataclasses import dataclass
 from typing import FrozenSet, List, Set, Tuple
 
@@ -345,6 +346,7 @@ class PromptInjectionClassifier:
         self._patterns = _CLASSIFIER_RULES
 
     def classify(self, text: str) -> InjectionResult:
+        text = unicodedata.normalize("NFKC", text)
         total_score = 0.0
         detected: List[str] = []
         for pattern, name, weight in self._patterns:

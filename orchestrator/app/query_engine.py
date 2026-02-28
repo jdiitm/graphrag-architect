@@ -313,9 +313,10 @@ async def _raw_llm_synthesize(
         injection_result = _INJECTION_CLASSIFIER.classify(raw_text)
         if injection_result.is_flagged:
             _query_logger.warning(
-                "Prompt injection detected in context: score=%.2f patterns=%s",
+                "Prompt injection detected in context: score=%.2f patterns=%s query=%s",
                 injection_result.score,
                 injection_result.detected_patterns,
+                sanitized,
             )
 
     context_block = format_context_for_prompt(context)
@@ -354,9 +355,10 @@ async def _raw_llm_synthesize_stream(
         injection_result = _INJECTION_CLASSIFIER.classify(raw_text)
         if injection_result.is_flagged:
             _query_logger.warning(
-                "Prompt injection detected in streaming context: score=%.2f patterns=%s",
+                "Prompt injection detected in streaming context: score=%.2f patterns=%s query=%s",
                 injection_result.score,
                 injection_result.detected_patterns,
+                sanitized,
             )
 
     context_block = format_context_for_prompt(context)
