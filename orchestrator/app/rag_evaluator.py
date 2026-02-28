@@ -7,10 +7,30 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
+from pydantic import BaseModel, Field, ValidationError
+
 from orchestrator.app.redis_client import create_async_redis, require_redis
 from orchestrator.app.vector_store import _cosine_similarity
 
 logger = logging.getLogger(__name__)
+
+_JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _extract_json(raw: str) -> Optional[dict]:
+    match = _JSON_OBJECT_PATTERN.search(raw)
+    if match is None:
+        return None
+    try:
+        return json.loads(match.group())
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+class JudgeOutput(BaseModel):
+    faithfulness: float = Field(ge=0.0, le=1.0)
+    groundedness: float = Field(ge=0.0, le=1.0)
+    reasoning: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +106,8 @@ def _extract_entity_names_from_context(
 def _compute_faithfulness(
     answer: str,
     sources: List[Dict[str, Any]],
+    embed_fn: Optional[Callable[[str], List[float]]] = None,
+    similarity_threshold: float = 0.8,
 ) -> tuple:
     if not answer or not sources:
         return 1.0, []
@@ -111,7 +133,23 @@ def _compute_faithfulness(
     if not meaningful_entities:
         return 1.0, []
 
-    ungrounded = [e for e in meaningful_entities if e not in context_entities]
+    if embed_fn is not None:
+        context_embeddings = {entity: embed_fn(entity) for entity in context_entities}
+        ungrounded = []
+        for entity in meaningful_entities:
+            entity_embedding = embed_fn(entity)
+            max_sim = max(
+                (
+                    _cosine_similarity(entity_embedding, ctx_emb)
+                    for ctx_emb in context_embeddings.values()
+                ),
+                default=0.0,
+            )
+            if max_sim < similarity_threshold:
+                ungrounded.append(entity)
+    else:
+        ungrounded = [e for e in meaningful_entities if e not in context_entities]
+
     if not meaningful_entities:
         return 1.0, ungrounded
 
@@ -247,10 +285,13 @@ class LLMEvaluator:
         used_fallback = False
         try:
             raw_response = await self._judge_fn(prompt)
-            scores = json.loads(raw_response)
-            faithfulness = float(scores.get("faithfulness", 0.5))
-            groundedness = float(scores.get("groundedness", 0.5))
-        except (json.JSONDecodeError, ValueError, TypeError, KeyError):
+            extracted = _extract_json(raw_response)
+            if extracted is None:
+                raise ValueError("No JSON object found in LLM response")
+            validated = JudgeOutput(**extracted)
+            faithfulness = validated.faithfulness
+            groundedness = validated.groundedness
+        except (json.JSONDecodeError, ValueError, TypeError, KeyError, ValidationError):
             logger.warning("LLM judge returned unparseable response, using lexical fallback")
             used_fallback = True
             faithfulness_score, _ = _compute_faithfulness(answer, sources)
