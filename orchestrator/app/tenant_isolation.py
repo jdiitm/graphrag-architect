@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 _audit_logger = logging.getLogger("graphrag.tenant_audit")
 
 
+class TenantIsolationViolation(Exception):
+    pass
+
+
 class IsolationMode(Enum):
     LOGICAL = "logical"
     PHYSICAL = "physical"
@@ -140,3 +144,96 @@ class TenantRouter:
     def session_kwargs(self, tenant_id: str) -> Dict[str, Any]:
         db = self.resolve_database(tenant_id)
         return {"database": db}
+
+    def get_connection(
+        self, tenant_id: str, driver: Any,
+    ) -> TenantConnectionWrapper:
+        config = self._registry.get(tenant_id)
+        if config is None:
+            raise LookupError(
+                f"Tenant {tenant_id!r} not registered; "
+                f"cannot issue a bound connection"
+            )
+        return TenantConnectionWrapper(
+            driver=driver,
+            bound_tenant_id=tenant_id,
+            bound_database=config.database_name,
+        )
+
+
+class TenantConnectionWrapper:
+    def __init__(
+        self,
+        driver: Any,
+        bound_tenant_id: str,
+        bound_database: str,
+    ) -> None:
+        self._driver = driver
+        self._bound_tenant_id = bound_tenant_id
+        self._bound_database = bound_database
+
+    @property
+    def bound_tenant_id(self) -> str:
+        return self._bound_tenant_id
+
+    @property
+    def bound_database(self) -> str:
+        return self._bound_database
+
+    @property
+    def driver(self) -> Any:
+        return self._driver
+
+    def validate_query_tenant(self, tenant_id: str) -> None:
+        if tenant_id != self._bound_tenant_id:
+            raise TenantIsolationViolation(
+                f"Connection bound to tenant {self._bound_tenant_id!r} "
+                f"but query targets tenant {tenant_id!r}; "
+                f"cross-tenant data access blocked"
+            )
+
+    def validate_database(self, database: str) -> None:
+        if database != self._bound_database:
+            raise TenantIsolationViolation(
+                f"Connection bound to database {self._bound_database!r} "
+                f"but query targets database {database!r}; "
+                f"cross-database access blocked"
+            )
+
+
+def validate_tenant_binding(
+    connection: Any,
+    tenant_id: str,
+    expected_database: Optional[str] = None,
+) -> None:
+    if not isinstance(connection, TenantConnectionWrapper):
+        raise TypeError(
+            f"Expected TenantConnectionWrapper, got {type(connection).__name__}"
+        )
+    connection.validate_query_tenant(tenant_id)
+    if expected_database is not None:
+        connection.validate_database(expected_database)
+
+
+class OrphanedPoolDetector:
+    def __init__(
+        self,
+        tenant_registry: TenantRegistry,
+        pool_registry: Dict[str, Any],
+    ) -> None:
+        self._tenant_registry = tenant_registry
+        self._pool_registry = pool_registry
+
+    def check(self) -> List[str]:
+        active_tenant_ids = {
+            cfg.tenant_id for cfg in self._tenant_registry.all_tenants()
+        }
+        orphaned: List[str] = []
+        for pool_tenant_id in self._pool_registry:
+            if pool_tenant_id not in active_tenant_ids:
+                orphaned.append(pool_tenant_id)
+                logger.warning(
+                    "Orphaned connection pool detected for tenant %r",
+                    pool_tenant_id,
+                )
+        return sorted(orphaned)
