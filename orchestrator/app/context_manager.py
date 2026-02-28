@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Set, Tuple
@@ -470,3 +471,18 @@ def format_context_for_prompt(
         content=f"<{delimiter}>{body}</{delimiter}>",
         delimiter=delimiter,
     )
+
+
+_CONTEXT_BLOCK_TAG = re.compile(
+    r"\A<(GRAPHCTX_[A-Za-z0-9]+_[A-Za-z0-9]+)>([\s\S]*)</\1>\Z",
+)
+
+
+def parse_context_block(raw: str) -> ContextBlock:
+    match = _CONTEXT_BLOCK_TAG.match(raw)
+    if not match:
+        raise ValueError("No valid context delimiter found")
+    delimiter = match.group(1)
+    if not _HMAC_DELIMITER.validate(delimiter):
+        raise ValueError("Context block delimiter failed HMAC validation")
+    return ContextBlock(content=match.group(2), delimiter=delimiter)

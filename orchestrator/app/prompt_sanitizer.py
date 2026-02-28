@@ -187,7 +187,8 @@ _FIREWALL_RULES: List[
         r"<{2}/?SYS>{2}",
     ), ThreatCategory.SYSTEM_PROMPT_MARKER, ""),
     (re.compile(
-        r"^\s*system\s*:", re.IGNORECASE | re.MULTILINE,
+        r"^\s*system\s*:(?=[ \t]+[^ \t\n]+[ \t]+[^ \t\n]+[ \t]+[^ \t\n])",
+        re.IGNORECASE | re.MULTILINE,
     ), ThreatCategory.SYSTEM_PROMPT_MARKER, "[BLOCKED]"),
     (re.compile(
         r"^#{1,3}\s+System\s*$",
@@ -195,16 +196,20 @@ _FIREWALL_RULES: List[
     ), ThreatCategory.SYSTEM_PROMPT_MARKER, "[BLOCKED]"),
 
     (re.compile(
-        r"^\s*assistant\s*:", re.IGNORECASE | re.MULTILINE,
+        r"^\s*assistant\s*:(?=[ \t]+[^ \t\n]+[ \t]+[^ \t\n]+[ \t]+[^ \t\n])",
+        re.IGNORECASE | re.MULTILINE,
     ), ThreatCategory.ROLE_INJECTION, "[BLOCKED]"),
     (re.compile(
-        r"^\s*user\s*:", re.IGNORECASE | re.MULTILINE,
+        r"^\s*user\s*:(?=[ \t]+[^ \t\n]+[ \t]+[^ \t\n]+[ \t]+[^ \t\n])",
+        re.IGNORECASE | re.MULTILINE,
     ), ThreatCategory.ROLE_INJECTION, "[BLOCKED]"),
     (re.compile(
-        r"^\s*Human\s*:", re.IGNORECASE | re.MULTILINE,
+        r"^\s*Human\s*:(?=[ \t]+[^ \t\n]+[ \t]+[^ \t\n]+[ \t]+[^ \t\n])",
+        re.IGNORECASE | re.MULTILINE,
     ), ThreatCategory.ROLE_INJECTION, "[BLOCKED]"),
     (re.compile(
-        r"^\s*AI\s*:", re.IGNORECASE | re.MULTILINE,
+        r"^\s*AI\s*:(?=[ \t]+[^ \t\n]+[ \t]+[^ \t\n]+[ \t]+[^ \t\n])",
+        re.IGNORECASE | re.MULTILINE,
     ), ThreatCategory.ROLE_INJECTION, "[BLOCKED]"),
 
     (re.compile(
