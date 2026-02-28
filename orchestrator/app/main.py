@@ -18,6 +18,7 @@ from orchestrator.app.access_control import (
     SecurityPrincipal,
 )
 from orchestrator.app.circuit_breaker import CircuitOpenError
+from orchestrator.app.graph_builder import IngestionDegradedError
 from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.config import AuthConfig, JobStoreConfig, KafkaConsumerConfig, RateLimitConfig
 from orchestrator.app.executor import shutdown_pool, shutdown_thread_pool
@@ -274,6 +275,12 @@ async def _ingest_sync(raw_files: List[Dict[str, str]]) -> JSONResponse:
             status_code=504,
             detail=f"Sync ingestion timed out after {_get_sync_ingest_timeout()}s",
         ) from exc
+    except IngestionDegradedError as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": str(exc)},
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
     except CircuitOpenError:
         return JSONResponse(
             status_code=503,
@@ -322,7 +329,7 @@ async def _invoke_ingestion_graph(
         return await ingestion_graph.ainvoke(
             _build_ingestion_initial_state(raw_files)
         )
-    except CircuitOpenError:
+    except (CircuitOpenError, IngestionDegradedError):
         raise
     except Exception as exc:
         logger.exception("Ingestion graph failed")
