@@ -737,6 +737,7 @@ async def cypher_retrieve(state: QueryState) -> dict:
 
                     start_node_id = _extract_start_node(candidates)
                     acl_params = _build_traversal_acl_params(state)
+                    degree_hint = extract_start_node_degree(candidates)
 
                     context = await run_traversal(
                         driver=driver,
@@ -744,6 +745,7 @@ async def cypher_retrieve(state: QueryState) -> dict:
                         tenant_id=tenant_id,
                         acl_params=acl_params,
                         timeout=_get_query_timeout(),
+                        degree_hint=degree_hint,
                     )
 
                     result = {
@@ -777,6 +779,17 @@ def _extract_start_node(candidates: List[Dict[str, Any]]) -> str:
         if node_id:
             return str(node_id)
     return ""
+
+
+def extract_start_node_degree(
+    candidates: List[Dict[str, Any]],
+) -> Optional[int]:
+    if not candidates:
+        return None
+    raw = candidates[0].get("degree")
+    if raw is None:
+        return None
+    return int(raw)
 
 
 async def hybrid_retrieve(state: QueryState) -> dict:

@@ -12,7 +12,6 @@ from orchestrator.app.agentic_traversal import (
     TraversalState,
     TraversalStep,
     TraversalStrategy,
-    _probe_start_degree,
     build_one_hop_cypher,
     run_traversal,
 )
@@ -199,46 +198,71 @@ class TestTraversalConfig:
         assert config.timeout == 10.0
 
 
-class TestProbeStartDegree:
+class TestDegreeHintFallback:
     @pytest.mark.asyncio
-    async def test_probe_start_degree_returns_degree(self) -> None:
-        mock_record = [{"degree": 150}]
-        mock_result = AsyncMock()
-        mock_result.data = AsyncMock(return_value=mock_record)
-        mock_tx = AsyncMock()
-        mock_tx.run = AsyncMock(return_value=mock_result)
-
-        mock_session = AsyncMock()
-
-        async def fake_execute_read(fn: object, **kwargs: object) -> list:
-            return await fn(mock_tx)
-
-        mock_session.execute_read = AsyncMock(side_effect=fake_execute_read)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
-
-        mock_driver = MagicMock()
-        mock_driver.session = MagicMock(return_value=mock_session)
-
-        degree = await _probe_start_degree(mock_driver, "node-1", "tenant-a")
-        assert degree == 150
-
-    @pytest.mark.asyncio
-    async def test_probe_start_degree_returns_zero_on_error(self) -> None:
-        from neo4j.exceptions import Neo4jError
-
-        mock_session = AsyncMock()
-        mock_session.execute_read = AsyncMock(
-            side_effect=Neo4jError("connection lost")
+    async def test_adaptive_with_none_hint_defaults_to_bounded(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.ADAPTIVE,
+            degree_threshold=200,
         )
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=False)
-
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
         mock_driver = MagicMock()
-        mock_driver.session = MagicMock(return_value=mock_session)
+        expected = [{"target_id": "svc-default"}]
 
-        degree = await _probe_start_degree(mock_driver, "node-1", "tenant-a")
-        assert degree == 0
+        with (
+            patch(
+                "orchestrator.app.agentic_traversal.bounded_path_expansion",
+                new_callable=AsyncMock,
+                return_value=expected,
+            ),
+            patch(
+                "orchestrator.app.agentic_traversal._batched_bfs",
+                new_callable=AsyncMock,
+            ) as mock_bfs,
+        ):
+            result = await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                config=config,
+                degree_hint=None,
+            )
+            mock_bfs.assert_not_called()
+            assert result == expected
+
+    @pytest.mark.asyncio
+    async def test_adaptive_with_explicit_degree_routes_correctly(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.ADAPTIVE,
+            degree_threshold=200,
+        )
+        acl_params = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+        mock_driver = MagicMock()
+        expected = [{"target_id": "svc-dense"}]
+
+        with (
+            patch(
+                "orchestrator.app.agentic_traversal.bounded_path_expansion",
+                new_callable=AsyncMock,
+            ) as mock_bounded,
+            patch(
+                "orchestrator.app.agentic_traversal._batched_bfs",
+                new_callable=AsyncMock,
+                return_value=expected,
+            ) as mock_bfs,
+        ):
+            result = await run_traversal(
+                driver=mock_driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=acl_params,
+                config=config,
+                degree_hint=500,
+            )
+            mock_bfs.assert_called_once()
+            mock_bounded.assert_not_called()
+            assert result == expected
 
 
 class TestRunTraversalStrategySelection:
@@ -253,11 +277,6 @@ class TestRunTraversalStrategySelection:
         expected = [{"target_id": "svc-b", "target_name": "svc-b"}]
 
         with (
-            patch(
-                "orchestrator.app.agentic_traversal._probe_start_degree",
-                new_callable=AsyncMock,
-                return_value=50,
-            ) as mock_probe,
             patch(
                 "orchestrator.app.agentic_traversal.bounded_path_expansion",
                 new_callable=AsyncMock,
@@ -274,8 +293,8 @@ class TestRunTraversalStrategySelection:
                 tenant_id="t1",
                 acl_params=acl_params,
                 config=config,
+                degree_hint=50,
             )
-            mock_probe.assert_called_once()
             mock_bounded.assert_called_once()
             mock_bfs.assert_not_called()
             assert result == expected
@@ -292,11 +311,6 @@ class TestRunTraversalStrategySelection:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._probe_start_degree",
-                new_callable=AsyncMock,
-                return_value=500,
-            ) as mock_probe,
-            patch(
                 "orchestrator.app.agentic_traversal.bounded_path_expansion",
                 new_callable=AsyncMock,
             ) as mock_bounded,
@@ -312,8 +326,8 @@ class TestRunTraversalStrategySelection:
                 tenant_id="t1",
                 acl_params=acl_params,
                 config=config,
+                degree_hint=500,
             )
-            mock_probe.assert_called_once()
             mock_bounded.assert_not_called()
             mock_bfs.assert_called_once()
             assert result == expected
@@ -330,10 +344,6 @@ class TestRunTraversalStrategySelection:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._probe_start_degree",
-                new_callable=AsyncMock,
-            ) as mock_probe,
-            patch(
                 "orchestrator.app.agentic_traversal.bounded_path_expansion",
                 new_callable=AsyncMock,
                 return_value=expected,
@@ -350,7 +360,6 @@ class TestRunTraversalStrategySelection:
                 acl_params=acl_params,
                 config=config,
             )
-            mock_probe.assert_not_called()
             mock_bounded.assert_called_once()
             mock_bfs.assert_not_called()
             assert result == expected
@@ -367,10 +376,6 @@ class TestRunTraversalStrategySelection:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._probe_start_degree",
-                new_callable=AsyncMock,
-            ) as mock_probe,
-            patch(
                 "orchestrator.app.agentic_traversal.bounded_path_expansion",
                 new_callable=AsyncMock,
             ) as mock_bounded,
@@ -387,7 +392,6 @@ class TestRunTraversalStrategySelection:
                 acl_params=acl_params,
                 config=config,
             )
-            mock_probe.assert_not_called()
             mock_bounded.assert_not_called()
             mock_bfs.assert_called_once()
             assert result == expected
@@ -540,11 +544,6 @@ class TestRunTraversalStrategySelection:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._probe_start_degree",
-                new_callable=AsyncMock,
-                return_value=50,
-            ),
-            patch(
                 "orchestrator.app.agentic_traversal.bounded_path_expansion",
                 new_callable=AsyncMock,
                 side_effect=Neo4jError("timeout"),
@@ -561,6 +560,7 @@ class TestRunTraversalStrategySelection:
                 tenant_id="t1",
                 acl_params=acl_params,
                 config=config,
+                degree_hint=50,
             )
             mock_bounded.assert_called_once()
             mock_bfs.assert_called_once()

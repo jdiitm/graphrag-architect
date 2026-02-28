@@ -563,32 +563,6 @@ async def _batched_bfs(
     return agent.get_context(state)
 
 
-async def _probe_start_degree(
-    driver: AsyncDriver,
-    start_id: str,
-    tenant_id: str,
-) -> int:
-    params = {"source_id": start_id, "tenant_id": tenant_id}
-
-    async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
-        result = await tx.run(_DEGREE_CHECK_QUERY, **params)
-        return await result.data()
-
-    try:
-        async with driver.session() as session:
-            records = await session.execute_read(_tx, timeout=10.0)
-            if records:
-                return int(records[0].get("degree", 0))
-            return 0
-    except (Neo4jError, asyncio.TimeoutError, OSError):
-        logger.warning(
-            "Degree probe failed for node %s, defaulting to 0",
-            start_id,
-            exc_info=True,
-        )
-        return 0
-
-
 async def _run_bounded_with_fallback(
     driver: AsyncDriver,
     start_node_id: str,
@@ -640,6 +614,7 @@ async def run_traversal(
     timeout: float = 30.0,
     token_budget: Optional[TokenBudget] = None,
     config: Optional[TraversalConfig] = None,
+    degree_hint: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     effective_budget = token_budget or TokenBudget()
 
@@ -687,7 +662,7 @@ async def run_traversal(
     if config.strategy != TraversalStrategy.ADAPTIVE:
         raise ValueError(f"Unknown traversal strategy: {config.strategy}")
 
-    degree = await _probe_start_degree(driver, start_node_id, tenant_id)
+    degree = degree_hint if degree_hint is not None else 0
 
     if degree >= config.degree_threshold:
         logger.info(
