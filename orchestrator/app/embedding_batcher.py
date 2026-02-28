@@ -37,7 +37,7 @@ class _PendingItem:
 class EmbeddingBatcher:
     def __init__(
         self,
-        provider: Any,
+        provider: EmbeddingProvider,
         config: Optional[EmbeddingBatcherConfig] = None,
     ) -> None:
         self._provider = provider
@@ -45,19 +45,18 @@ class EmbeddingBatcher:
         self._queue: asyncio.Queue[_PendingItem] = asyncio.Queue()
         self._flush_task: Optional[asyncio.Task[None]] = None
         self._closed = False
+        self._shutdown_event = asyncio.Event()
 
     async def start(self) -> None:
         self._closed = False
+        self._shutdown_event.clear()
         self._flush_task = asyncio.create_task(self._flush_loop())
 
     async def close(self) -> None:
         self._closed = True
+        self._shutdown_event.set()
         if self._flush_task is not None:
-            self._flush_task.cancel()
-            try:
-                await self._flush_task
-            except asyncio.CancelledError:
-                pass
+            await self._flush_task
             self._flush_task = None
         await self._drain_remaining()
 
@@ -86,22 +85,46 @@ class EmbeddingBatcher:
 
     async def _flush_loop(self) -> None:
         interval_seconds = self._config.flush_interval_ms / 1000.0
-        while True:
-            batch = await self._collect_batch(interval_seconds)
-            if batch:
-                await self._send_batch(batch)
+        while not self._shutdown_event.is_set():
+            try:
+                batch = await self._collect_batch(interval_seconds)
+                if batch:
+                    await self._send_batch(batch)
+            except Exception:
+                logger.exception("Unexpected error in flush loop")
+
+    async def _get_or_shutdown(
+        self, timeout: float,
+    ) -> Optional[_PendingItem]:
+        get_task = asyncio.ensure_future(self._queue.get())
+        shutdown_task = asyncio.ensure_future(self._shutdown_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {get_task, shutdown_task},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if get_task in done:
+                return get_task.result()
+            return None
+        finally:
+            for task in (get_task, shutdown_task):
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
     async def _collect_batch(
         self, timeout: float,
     ) -> List[_PendingItem]:
         batch: List[_PendingItem] = []
-        try:
-            first = await asyncio.wait_for(
-                self._queue.get(), timeout=timeout,
-            )
-            batch.append(first)
-        except asyncio.TimeoutError:
+
+        first = await self._get_or_shutdown(timeout)
+        if first is None:
             return batch
+        batch.append(first)
 
         while len(batch) < self._config.max_batch_size:
             try:
@@ -112,12 +135,9 @@ class EmbeddingBatcher:
         if len(batch) >= self._config.max_batch_size:
             return batch
 
-        try:
-            batch.append(
-                await asyncio.wait_for(self._queue.get(), timeout=timeout),
-            )
-        except asyncio.TimeoutError:
-            pass
+        extra = await self._get_or_shutdown(timeout)
+        if extra is not None:
+            batch.append(extra)
 
         return batch
 
@@ -127,6 +147,11 @@ class EmbeddingBatcher:
         for attempt in range(self._config.max_retries + 1):
             try:
                 embeddings = await self._provider.embed_batch(texts)
+                if len(embeddings) != len(batch):
+                    raise ValueError(
+                        f"Provider returned {len(embeddings)} embeddings "
+                        f"for {len(batch)} texts"
+                    )
                 for item, embedding in zip(batch, embeddings):
                     if not item.future.done():
                         item.future.set_result(embedding)
@@ -142,6 +167,11 @@ class EmbeddingBatcher:
                     await asyncio.sleep((backoff + jitter) / 1000.0)
                     continue
                 break
+            except Exception as exc:
+                for item in batch:
+                    if not item.future.done():
+                        item.future.set_exception(exc)
+                return
 
         if last_error is not None:
             for item in batch:
