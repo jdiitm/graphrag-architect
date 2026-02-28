@@ -1,5 +1,4 @@
 import asyncio
-from collections import deque
 import concurrent.futures
 import logging
 import os
@@ -13,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from neo4j.exceptions import Neo4jError
 from opentelemetry.trace import StatusCode
 
+from orchestrator.app.ast_dlq import ASTDeadLetterQueue, create_ast_dlq
 from orchestrator.app.ast_extraction import GoASTExtractor, PythonASTExtractor
 from orchestrator.app.checkpointing import ExtractionCheckpoint, FileStatus
 from orchestrator.app.config import ExtractionConfig
@@ -106,24 +106,15 @@ _ast_worker_breaker = CircuitBreaker(
     name="ast-worker",
 )
 
-_DEFAULT_DLQ_MAX_SIZE = 10_000
-
-_AST_DLQ: deque = deque(
-    maxlen=int(os.environ.get("AST_DLQ_MAX_SIZE", str(_DEFAULT_DLQ_MAX_SIZE)))
-)
+_AST_DLQ: ASTDeadLetterQueue = create_ast_dlq()
 
 
 def enqueue_ast_dlq(payload: Dict[str, Any]) -> None:
-    if _AST_DLQ.maxlen and len(_AST_DLQ) >= _AST_DLQ.maxlen:
-        logger.warning(
-            "AST DLQ at capacity (%d); oldest entry evicted",
-            _AST_DLQ.maxlen,
-        )
-    _AST_DLQ.append(payload)
+    _AST_DLQ.enqueue(payload)
 
 
 def get_ast_dlq() -> List[Dict[str, Any]]:
-    return list(_AST_DLQ)
+    return _AST_DLQ.peek()
 
 
 def resolve_vector_collection(tenant_id: Optional[str] = None) -> str:

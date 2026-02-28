@@ -296,17 +296,15 @@ class TestDeadLetterQueueForFailedJobs:
         assert dlq[0]["tenant_id"] == "test-tenant"
 
     def test_dlq_is_bounded(self) -> None:
+        from orchestrator.app.ast_dlq import ASTDeadLetterQueue
         import orchestrator.app.graph_builder as gb
 
-        assert hasattr(gb._AST_DLQ, "maxlen"), (
-            "DLQ must be a bounded collection (e.g. collections.deque)"
+        assert isinstance(gb._AST_DLQ, ASTDeadLetterQueue), (
+            "DLQ must implement ASTDeadLetterQueue protocol"
         )
-        assert gb._AST_DLQ.maxlen is not None
-        assert gb._AST_DLQ.maxlen > 0
 
     def test_dlq_evicts_oldest_when_full(self) -> None:
-        from collections import deque
-
+        from orchestrator.app.ast_dlq import InMemoryASTDLQ
         from orchestrator.app.graph_builder import (
             enqueue_ast_dlq,
             get_ast_dlq,
@@ -314,7 +312,7 @@ class TestDeadLetterQueueForFailedJobs:
         import orchestrator.app.graph_builder as gb
 
         original = gb._AST_DLQ
-        gb._AST_DLQ = deque(maxlen=3)
+        gb._AST_DLQ = InMemoryASTDLQ(max_size=3)
         try:
             for i in range(5):
                 enqueue_ast_dlq({"index": i})
