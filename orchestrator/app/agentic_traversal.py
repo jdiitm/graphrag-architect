@@ -16,7 +16,13 @@ from orchestrator.app.context_manager import (
     truncate_context,
     truncate_context_topology,
 )
-from orchestrator.app.query_templates import ALLOWED_RELATIONSHIP_TYPES
+from orchestrator.app.tenant_security import (
+    TenantSecurityProvider,
+    build_traversal_batched_neighbor,
+    build_traversal_neighbor_discovery,
+    build_traversal_one_hop,
+    build_traversal_sampled_neighbor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -187,9 +193,7 @@ _BOUNDED_PATH_TEMPLATE = (
 
 
 def build_one_hop_cypher(rel_type: str) -> str:
-    if rel_type not in ALLOWED_RELATIONSHIP_TYPES:
-        raise ValueError(f"Disallowed relationship type: {rel_type}")
-    return _ONE_HOP_TEMPLATE.format(rel_type=rel_type)
+    return build_traversal_one_hop(rel_type)
 
 
 def compute_node_score(result: Dict[str, Any]) -> float:
@@ -396,19 +400,30 @@ async def execute_hop(
     query_embedding: Optional[List[float]] = None,
     similarity_threshold: float = 0.5,
 ) -> List[Dict[str, Any]]:
+    provider = TenantSecurityProvider()
     degree_params = {"source_id": source_id, "tenant_id": tenant_id}
 
     async def _degree_tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
         result = await tx.run(_DEGREE_CHECK_QUERY, **degree_params)
         return await result.data()
 
-    neighbor_template = (
-        _NEIGHBOR_DISCOVERY_NO_ACL if skip_acl
-        else _NEIGHBOR_DISCOVERY_TEMPLATE
-    )
-    sampled_template = (
-        _SAMPLED_NEIGHBOR_NO_ACL if skip_acl
-        else _SAMPLED_NEIGHBOR_TEMPLATE
+    enforce_acl = not skip_acl
+    if skip_acl:
+        neighbor_query = _NEIGHBOR_DISCOVERY_NO_ACL
+        sampled_query = _SAMPLED_NEIGHBOR_NO_ACL
+    else:
+        neighbor_query = build_traversal_neighbor_discovery()
+        sampled_query = build_traversal_sampled_neighbor()
+
+    validation_params: Dict[str, Any] = {
+        "source_id": source_id,
+        "tenant_id": tenant_id,
+        "limit": limit,
+        "sample_size": sample_size,
+        **acl_params,
+    }
+    provider.validate_query(
+        neighbor_query, validation_params, require_acl=enforce_acl,
     )
 
     async with driver.session() as session:
@@ -433,7 +448,7 @@ async def execute_hop(
                     )
                 return await _run_sampled_query(
                     session, source_id, tenant_id, acl_params,
-                    sample_size, timeout, template=sampled_template,
+                    sample_size, timeout, template=sampled_query,
                 )
 
         params: Dict[str, Any] = {
@@ -444,7 +459,7 @@ async def execute_hop(
         }
 
         async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
-            result = await tx.run(neighbor_template, **params)
+            result = await tx.run(neighbor_query, **params)
             return await result.data()
 
         return await session.execute_read(_tx, timeout=timeout)
@@ -461,15 +476,19 @@ async def execute_batched_hop(
     if not source_ids:
         return []
 
+    provider = TenantSecurityProvider()
+    batched_query = build_traversal_batched_neighbor()
+
     params = {
         "frontier_ids": source_ids,
         "tenant_id": tenant_id,
         "limit": limit,
         **acl_params,
     }
+    provider.validate_query(batched_query, params)
 
     async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
-        result = await tx.run(_BATCHED_NEIGHBOR_TEMPLATE, **params)
+        result = await tx.run(batched_query, **params)
         return await result.data()
 
     async with driver.session() as session:
