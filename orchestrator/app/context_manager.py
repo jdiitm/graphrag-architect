@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
-import uuid
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Set, Tuple
 
 from orchestrator.app.graph_embeddings import GraphTopology
-from orchestrator.app.prompt_sanitizer import sanitize_source_content
+from orchestrator.app.prompt_sanitizer import (
+    ContentFirewall,
+    HMACDelimiter,
+    sanitize_source_content,
+)
 from orchestrator.app.semantic_partitioner import SemanticPartitioner
 from orchestrator.app.token_counter import count_tokens
+
+_CONTENT_FIREWALL = ContentFirewall()
+_HMAC_DELIMITER = HMACDelimiter()
 
 
 @dataclass(frozen=True)
@@ -434,7 +441,7 @@ def _truncate_value(value: Any, max_chars: int) -> str:
 
 
 def _generate_context_delimiter() -> str:
-    return f"GRAPHCTX_{uuid.uuid4().hex[:12]}"
+    return _HMAC_DELIMITER.generate()
 
 
 def format_context_for_prompt(
@@ -448,12 +455,34 @@ def format_context_for_prompt(
     for i, record in enumerate(context, 1):
         lines.append(f"[{i}]")
         for key, value in record.items():
-            sanitized_key = sanitize_source_content(str(key), f"context_key_{i}")
+            sanitized_key = sanitize_source_content(
+                str(key), f"context_key_{i}",
+            )
             truncated = _truncate_value(value, max_chars_per_value)
-            sanitized_value = sanitize_source_content(truncated, f"context_field_{key}")
-            lines.append(f"  {sanitized_key}: {sanitized_value}")
+            firewall_cleaned = _CONTENT_FIREWALL.sanitize(truncated)
+            sanitized_value = sanitize_source_content(
+                firewall_cleaned, f"context_field_{key}",
+            )
+            lines.append(
+                f"  {sanitized_key}: {sanitized_value}",
+            )
     body = "\n".join(lines)
     return ContextBlock(
         content=f"<{delimiter}>{body}</{delimiter}>",
         delimiter=delimiter,
     )
+
+
+_CONTEXT_BLOCK_TAG = re.compile(
+    r"\A<(GRAPHCTX_[A-Za-z0-9]+_[A-Za-z0-9]+)>([\s\S]*)</\1>\Z",
+)
+
+
+def parse_context_block(raw: str) -> ContextBlock:
+    match = _CONTEXT_BLOCK_TAG.match(raw)
+    if not match:
+        raise ValueError("No valid context delimiter found")
+    delimiter = match.group(1)
+    if not _HMAC_DELIMITER.validate(delimiter):
+        raise ValueError("Context block delimiter failed HMAC validation")
+    return ContextBlock(content=match.group(2), delimiter=delimiter)
