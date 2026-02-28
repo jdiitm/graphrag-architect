@@ -79,6 +79,7 @@ class TestRedisASTDLQ:
         redis.llen = AsyncMock(return_value=0)
         redis.lrange = AsyncMock(return_value=[])
         redis.delete = AsyncMock()
+        redis.eval = AsyncMock(return_value=[])
         return redis
 
     def _make_dlq(
@@ -124,24 +125,27 @@ class TestRedisASTDLQ:
             json.dumps({"index": 0}),
             json.dumps({"index": 1}),
         ]
-        mock_redis.lrange = AsyncMock(return_value=entries)
+        mock_redis.eval = AsyncMock(return_value=entries)
 
         dlq = self._make_dlq(mock_redis)
         result = await dlq.async_drain()
         assert len(result) == 2
         assert result[0]["index"] == 0
         assert result[1]["index"] == 1
-        mock_redis.delete.assert_called_once_with("graphrag:ast_dlq")
+        mock_redis.eval.assert_called_once()
+        call_args = mock_redis.eval.call_args
+        assert call_args[0][1] == 1
+        assert call_args[0][2] == "graphrag:ast_dlq"
 
     @pytest.mark.asyncio
     async def test_drain_empty_list(
         self, mock_redis: MagicMock,
     ) -> None:
-        mock_redis.lrange = AsyncMock(return_value=[])
+        mock_redis.eval = AsyncMock(return_value=[])
         dlq = self._make_dlq(mock_redis)
         result = await dlq.async_drain()
         assert result == []
-        mock_redis.delete.assert_not_called()
+        mock_redis.eval.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_size_delegates_to_llen(

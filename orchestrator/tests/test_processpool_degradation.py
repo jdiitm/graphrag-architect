@@ -252,7 +252,7 @@ class TestDeadLetterQueueForFailedJobs:
             "tenant_id": "test-tenant",
         }
 
-        enqueue_ast_dlq(payload)
+        await enqueue_ast_dlq(payload)
         dlq = get_ast_dlq()
         assert len(dlq) == 1
         assert dlq[0]["raw_files"][0]["path"] == "main.go"
@@ -296,14 +296,26 @@ class TestDeadLetterQueueForFailedJobs:
         assert dlq[0]["tenant_id"] == "test-tenant"
 
     def test_dlq_is_bounded(self) -> None:
-        from orchestrator.app.ast_dlq import ASTDeadLetterQueue
+        from orchestrator.app.ast_dlq import ASTDeadLetterQueue, InMemoryASTDLQ
         import orchestrator.app.graph_builder as gb
 
         assert isinstance(gb._AST_DLQ, ASTDeadLetterQueue), (
             "DLQ must implement ASTDeadLetterQueue protocol"
         )
+        assert gb._AST_DLQ._max_size > 0, (
+            "Module-level DLQ must have a positive capacity bound"
+        )
+        small_dlq = InMemoryASTDLQ(max_size=2)
+        small_dlq.enqueue({"a": 1})
+        small_dlq.enqueue({"b": 2})
+        small_dlq.enqueue({"c": 3})
+        assert small_dlq.size() == 2, "DLQ must evict oldest when at capacity"
+        items = small_dlq.peek()
+        assert items[0]["b"] == 2
+        assert items[1]["c"] == 3
 
-    def test_dlq_evicts_oldest_when_full(self) -> None:
+    @pytest.mark.asyncio
+    async def test_dlq_evicts_oldest_when_full(self) -> None:
         from orchestrator.app.ast_dlq import InMemoryASTDLQ
         from orchestrator.app.graph_builder import (
             enqueue_ast_dlq,
@@ -315,7 +327,7 @@ class TestDeadLetterQueueForFailedJobs:
         gb._AST_DLQ = InMemoryASTDLQ(max_size=3)
         try:
             for i in range(5):
-                enqueue_ast_dlq({"index": i})
+                await enqueue_ast_dlq({"index": i})
             dlq = get_ast_dlq()
             assert len(dlq) == 3
             assert dlq[0]["index"] == 2

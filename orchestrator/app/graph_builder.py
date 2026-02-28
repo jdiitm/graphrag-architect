@@ -109,8 +109,11 @@ _ast_worker_breaker = CircuitBreaker(
 _AST_DLQ: ASTDeadLetterQueue = create_ast_dlq()
 
 
-def enqueue_ast_dlq(payload: Dict[str, Any]) -> None:
-    _AST_DLQ.enqueue(payload)
+async def enqueue_ast_dlq(payload: Dict[str, Any]) -> None:
+    if hasattr(_AST_DLQ, "async_enqueue"):
+        await _AST_DLQ.async_enqueue(payload)
+    else:
+        _AST_DLQ.enqueue(payload)
 
 
 def get_ast_dlq() -> List[Dict[str, Any]]:
@@ -395,7 +398,7 @@ async def parse_source_ast(state: IngestionState) -> dict:
                 go_result, py_result = await _run_ast_via_remote(pending)
             except (CircuitOpenError, ConnectionError, OSError) as exc:
                 tenant_id = state.get("tenant_id", "default")
-                enqueue_ast_dlq({
+                await enqueue_ast_dlq({
                     "raw_files": pending,
                     "tenant_id": tenant_id,
                 })

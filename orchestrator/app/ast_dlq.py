@@ -5,7 +5,6 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from collections import deque
-from dataclasses import dataclass
 from typing import Any, Dict, List
 
 from orchestrator.app.redis_client import create_async_redis, require_redis
@@ -34,16 +33,13 @@ class ASTDeadLetterQueue(ABC):
     def clear(self) -> None: ...
 
 
-@dataclass
 class InMemoryASTDLQ(ASTDeadLetterQueue):
-    _max_size: int
-    _buffer: deque[Dict[str, Any]]
 
     def __init__(self, max_size: int = _DEFAULT_MAX_SIZE) -> None:
         if max_size < 1:
             raise ValueError(f"max_size must be >= 1, got {max_size}")
-        object.__setattr__(self, "_max_size", max_size)
-        object.__setattr__(self, "_buffer", deque(maxlen=max_size))
+        self._max_size = max_size
+        self._buffer: deque[Dict[str, Any]] = deque(maxlen=max_size)
 
     def enqueue(self, payload: Dict[str, Any]) -> None:
         if len(self._buffer) >= self._max_size:
@@ -66,6 +62,15 @@ class InMemoryASTDLQ(ASTDeadLetterQueue):
 
     def clear(self) -> None:
         self._buffer.clear()
+
+
+_DRAIN_LUA = """
+local items = redis.call('lrange', KEYS[1], 0, -1)
+if #items > 0 then
+    redis.call('del', KEYS[1])
+end
+return items
+"""
 
 
 class RedisASTDLQ(ASTDeadLetterQueue):
@@ -112,11 +117,10 @@ class RedisASTDLQ(ASTDeadLetterQueue):
         self._local.enqueue(payload)
 
     async def async_drain(self) -> List[Dict[str, Any]]:
-        raw_entries = await self._redis.lrange(self._list_key, 0, -1)
+        raw_entries = await self._redis.eval(_DRAIN_LUA, 1, self._list_key)
+        self._local.clear()
         if not raw_entries:
             return []
-        await self._redis.delete(self._list_key)
-        self._local.clear()
         return [json.loads(entry) for entry in raw_entries]
 
     async def async_peek(self) -> List[Dict[str, Any]]:
