@@ -177,7 +177,7 @@ class RedisOutboxStore:
 
     _KEY_PREFIX = "graphrag:vecoutbox:"
     _INDEX_KEY = "graphrag:vecoutbox:pending"
-    _DEDUP_MAP_KEY = "graphrag:vecoutbox:dedup"
+    _DEDUP_PREFIX = "graphrag:vecoutbox:dedup:"
 
     _CLAIM_LUA_SCRIPT = """
 local index_key = KEYS[1]
@@ -239,18 +239,19 @@ return claimed
             ids = sorted(event.pruned_ids)
         return f"{event.collection}:{','.join(ids)}"
 
-    async def write_dedup_event(self, event: VectorSyncEvent) -> None:
-        dedup_key = self._dedup_key_for(event)
-        dedup_map = await self._redis.hgetall(self._DEDUP_MAP_KEY)
-        existing_eid = dedup_map.get(dedup_key)
-        if existing_eid:
-            await self.delete_event(existing_eid)
-        await self.write_event(event)
-        await self._redis.hset(
-            self._DEDUP_MAP_KEY, key=dedup_key, value=event.event_id,
-        )
+    def _dedup_redis_key(self, event: VectorSyncEvent) -> str:
+        return f"{self._DEDUP_PREFIX}{self._dedup_key_for(event)}"
 
     async def write_event(self, event: VectorSyncEvent) -> None:
+        dedup_rkey = self._dedup_redis_key(event)
+        existing_eid = await self._redis.get(dedup_rkey)
+        if existing_eid is not None:
+            eid_str = (
+                existing_eid.decode()
+                if isinstance(existing_eid, bytes)
+                else str(existing_eid)
+            )
+            await self.delete_event(eid_str)
         mapping = {
             "event_id": event.event_id,
             "collection": event.collection,
@@ -264,6 +265,7 @@ return claimed
             self._event_key(event.event_id), mapping=mapping,
         )
         await self._redis.sadd(self._INDEX_KEY, event.event_id)
+        await self._redis.set(dedup_rkey, event.event_id)
 
     async def load_pending(self) -> List[VectorSyncEvent]:
         event_ids = await self._redis.smembers(self._INDEX_KEY)

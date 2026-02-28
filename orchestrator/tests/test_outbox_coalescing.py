@@ -185,8 +185,8 @@ class TestRedisDeduplication:
         event_2 = VectorSyncEvent(
             collection="services", pruned_ids=["node-a"],
         )
-        await store.write_dedup_event(event_1)
-        await store.write_dedup_event(event_2)
+        await store.write_event(event_1)
+        await store.write_event(event_2)
 
         pending = await store.load_pending()
         assert len(pending) == 1
@@ -205,8 +205,8 @@ class TestRedisDeduplication:
         event_b = VectorSyncEvent(
             collection="services", pruned_ids=["node-b"],
         )
-        await store.write_dedup_event(event_a)
-        await store.write_dedup_event(event_b)
+        await store.write_event(event_a)
+        await store.write_event(event_b)
 
         pending = await store.load_pending()
         assert len(pending) == 2
