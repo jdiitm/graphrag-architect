@@ -128,11 +128,111 @@ class TestCacheMetricsCounters:
 
 class TestNormalizationWiredIntoLookup:
 
-    def test_normalized_query_improves_cache_hit(self) -> None:
+    def test_store_normalizes_query_text(self) -> None:
         cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
         embedding = [1.0, 0.0, 0.0]
-        cache.store("what services call auth?", embedding, {"answer": "gateway"})
+        cache.store(
+            "Can you tell me what services call auth?",
+            embedding,
+            {"answer": "gateway"},
+        )
+        entry = list(cache._entries.values())[0]
+        expected = normalize_query("Can you tell me what services call auth?")
+        assert entry.query == expected
 
-        raw_query = "Can you tell me what services call auth?"
-        stored_query = "what services call auth?"
-        assert normalize_query(raw_query) == normalize_query(stored_query)
+    def test_lookup_returns_hit_for_normalized_store(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store(
+            "Can you tell me which services call auth?",
+            embedding,
+            {"answer": "gw"},
+        )
+        result = cache.lookup(embedding)
+        assert result == {"answer": "gw"}
+        entries = list(cache._entries.values())
+        assert entries[0].query == normalize_query(
+            "Can you tell me which services call auth?"
+        )
+
+    def test_two_variant_phrasings_hit_same_normalized_entry(self) -> None:
+        cache = SemanticQueryCache(CacheConfig(similarity_threshold=0.9))
+        embedding = [1.0, 0.0, 0.0]
+        cache.store(
+            "Can you tell me which services call auth?",
+            embedding,
+            {"answer": "gw"},
+        )
+        cache.store(
+            "Please show me what services call auth?",
+            embedding,
+            {"answer": "gw-v2"},
+        )
+        assert len(cache._entries) == 1
+        entry = list(cache._entries.values())[0]
+        assert entry.query == normalize_query(
+            "Please show me what services call auth?"
+        )
+
+
+class TestHashDimensionsConfig:
+
+    def test_config_accepts_hash_dimensions(self) -> None:
+        config = CacheConfig(hash_dimensions=32)
+        assert config.hash_dimensions == 32
+
+    def test_config_hash_dimensions_defaults_to_none(self) -> None:
+        config = CacheConfig()
+        assert config.hash_dimensions is None
+
+    def test_config_hash_dimensions_threaded_to_store(self) -> None:
+        config = CacheConfig(hash_dimensions=32, similarity_threshold=0.9)
+        cache = SemanticQueryCache(config)
+        vec_a = [0.5] * 32 + [0.1] * 96
+        vec_b = [0.5] * 32 + [0.9] * 96
+        cache.store("q1", vec_a, {"a": 1})
+        cache.store("q2", vec_b, {"a": 2})
+        assert len(cache._entries) == 1
+
+    def test_hash_dimensions_none_uses_full_embedding(self) -> None:
+        config = CacheConfig(hash_dimensions=None, similarity_threshold=0.9)
+        cache = SemanticQueryCache(config)
+        vec_a = [0.5] * 32 + [0.1] * 96
+        vec_b = [0.5] * 32 + [0.9] * 96
+        cache.store("q1", vec_a, {"a": 1})
+        cache.store("q2", vec_b, {"a": 2})
+        assert len(cache._entries) == 2
+
+    def test_backward_compat_key_matches_explicit_hash_call(self) -> None:
+        embedding = [0.1 * i for i in range(128)]
+        expected_key = _embedding_hash(embedding, hash_dimensions=32) + "|"
+        config = CacheConfig(hash_dimensions=32, similarity_threshold=0.9)
+        cache = SemanticQueryCache(config)
+        cache.store("q", embedding, {"a": 1})
+        stored_key = list(cache._entries.keys())[0]
+        assert stored_key == expected_key
+
+
+class TestSynonymEntityCorruption:
+
+    def test_preserves_hyphenated_entity_shared_services(self) -> None:
+        result = normalize_query("What calls shared-services?")
+        assert "shared-services" in result
+
+    def test_preserves_hyphenated_entity_with_calls(self) -> None:
+        result = normalize_query("What depends on system-calls?")
+        assert "system-calls" in result
+
+    def test_preserves_hyphenated_entity_with_depends(self) -> None:
+        result = normalize_query("What calls micro-depends?")
+        assert "micro-depends" in result
+
+    def test_standalone_plural_still_normalized(self) -> None:
+        result = normalize_query("What services call auth?")
+        assert "service" in result
+        assert "services" not in result
+
+    def test_standalone_calls_still_normalized(self) -> None:
+        result = normalize_query("What calls auth?")
+        assert "call" in result
+        assert result.count("call") == 1

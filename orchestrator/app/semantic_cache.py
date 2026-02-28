@@ -40,6 +40,7 @@ class CacheConfig:
     min_threshold: float = 0.85
     max_threshold: float = 0.98
     density_sensitivity: float = 0.15
+    hash_dimensions: Optional[int] = None
 
 
 _NEUTRAL_MARGIN = 0.5
@@ -141,9 +142,9 @@ _FILLER_PATTERNS: List[re.Pattern[str]] = [
 _QUESTION_SYNONYMS: List[Tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bwhich\b", re.IGNORECASE), "what"),
     (re.compile(r"\bwhat are the\b", re.IGNORECASE), "what"),
-    (re.compile(r"\bcalls\b", re.IGNORECASE), "call"),
-    (re.compile(r"\bservices\b", re.IGNORECASE), "service"),
-    (re.compile(r"\bdepends\b", re.IGNORECASE), "depend"),
+    (re.compile(r"(?<!-)\bcalls\b(?!-)", re.IGNORECASE), "call"),
+    (re.compile(r"(?<!-)\bservices\b(?!-)", re.IGNORECASE), "service"),
+    (re.compile(r"(?<!-)\bdepends\b(?!-)", re.IGNORECASE), "depend"),
 ]
 
 _WHITESPACE_COLLAPSE = re.compile(r"\s+")
@@ -237,7 +238,8 @@ class SemanticQueryCache:
         if cached is not None:
             return cached, False
 
-        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+        hdim = self._config.hash_dimensions
+        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
 
         inflight = self.get_inflight(key_hash)
         if inflight is not None:
@@ -259,7 +261,8 @@ class SemanticQueryCache:
         failed: bool = False,
         acl_key: str = "",
     ) -> None:
-        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+        hdim = self._config.hash_dimensions
+        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
         inflight = self._inflight.pop(key_hash, None)
         if inflight is not None:
             inflight.complete(failed=failed)
@@ -332,13 +335,18 @@ class SemanticQueryCache:
         self._evict_expired()
         self._enforce_max_size()
 
+        normalized = normalize_query(query)
+        if normalized:
+            query = normalized
+
         ttl = self._config.default_ttl_seconds
         if complexity and self._config.ttl_by_complexity:
             ttl = self._config.ttl_by_complexity.get(complexity, ttl)
 
         topo_hash = compute_topology_hash(node_ids) if node_ids else ""
 
-        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+        hdim = self._config.hash_dimensions
+        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
         if key_hash in self._entries:
             self._remove_node_tags_for_key(key_hash)
         entry = CacheEntry(
@@ -507,7 +515,8 @@ class RedisSemanticQueryCache:
         self._redis = create_async_redis(redis_url, password=password, db=db)
         self._ttl = ttl_seconds
         self._prefix = key_prefix
-        self._l1 = SemanticQueryCache(config=config)
+        self._cache_config = config or CacheConfig()
+        self._l1 = SemanticQueryCache(config=self._cache_config)
 
     @property
     def generation(self) -> int:
@@ -531,7 +540,8 @@ class RedisSemanticQueryCache:
         acl_key: str = "",
     ) -> Optional[Dict[str, Any]]:
         try:
-            key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+            hdim = self._cache_config.hash_dimensions
+            key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
             redis_key = f"{self._prefix}{key_hash}"
             raw = await self._redis.get(redis_key)
             if raw is None:
@@ -573,7 +583,8 @@ class RedisSemanticQueryCache:
         if redis_hit is not None:
             return redis_hit, False
 
-        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+        hdim = self._cache_config.hash_dimensions
+        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
         inflight = self._l1.get_inflight(key_hash)
         if inflight is not None:
             succeeded = await inflight.wait()
@@ -621,11 +632,15 @@ class RedisSemanticQueryCache:
             result=result, tenant_id=tenant_id, complexity=complexity,
             node_ids=node_ids, acl_key=acl_key,
         )
-        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+        hdim = self._cache_config.hash_dimensions
+        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
+        payload_embedding = (
+            query_embedding[:hdim] if hdim is not None else query_embedding
+        )
         try:
             payload = json.dumps({
                 "query": query,
-                "embedding": query_embedding[:32],
+                "embedding": payload_embedding,
                 "result": result,
                 "tenant_id": tenant_id,
                 "acl_key": acl_key,
