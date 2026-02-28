@@ -118,15 +118,11 @@ func (c *Consumer) Run(ctx context.Context) error {
 
 		for _, job := range batch {
 			if c.maxInflight > 0 {
+			backpressureWait:
 				for int(c.inflightCount.Load()) >= c.maxInflight {
 					select {
 					case <-pollCtx.Done():
-						pollSpan.End()
-						batchCancel()
-						if ctx.Err() != nil {
-							return ctx.Err()
-						}
-						continue
+						break backpressureWait
 					case <-c.acks:
 						c.inflightCount.Add(-1)
 					}

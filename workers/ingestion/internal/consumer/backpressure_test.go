@@ -95,6 +95,43 @@ func TestConsumer_MaxInflightLimitsConcurrentJobs(t *testing.T) {
 	}
 }
 
+func TestConsumer_BackpressureWaitExitsOnBatchTimeout(t *testing.T) {
+	src := &inflightTrackingSource{
+		batches: [][]domain.Job{
+			{sampleJob("j1"), sampleJob("j2")},
+		},
+	}
+	jobs := make(chan domain.Job, 10)
+	acks := make(chan struct{}, 10)
+
+	c := consumer.New(src, jobs, acks,
+		consumer.WithMaxInflight(1),
+		consumer.WithMaxBatchWait(50*time.Millisecond),
+	)
+
+	go func() {
+		for range jobs {
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- c.Run(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal(
+			"consumer did not complete — spin-loop in backpressure " +
+				"wait when maxInflight and maxBatchWait are combined",
+		)
+	}
+}
+
 func TestConsumer_DefaultMaxInflightIsZeroMeansUnlimited(t *testing.T) {
 	src := &stubSource{
 		batches: [][]domain.Job{

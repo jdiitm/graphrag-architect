@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import time
-
 import pytest
 
 from orchestrator.app.semantic_cache import (
