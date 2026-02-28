@@ -116,6 +116,54 @@ def _vectorized_cosine_similarity(a: List[float], b: List[float]) -> float:
         return _cosine_similarity(a, b)
 
 
+def _vectorized_best_match(
+    query_embedding: List[float],
+    entries: List[CacheEntry],
+) -> Tuple[Optional[CacheEntry], float, float]:
+    if not entries:
+        return None, -1.0, -1.0
+    query_dim = len(query_embedding)
+    same_dim_entries = [e for e in entries if len(e.embedding) == query_dim]
+    if not same_dim_entries:
+        return None, -1.0, -1.0
+    try:
+        import numpy as np
+        query_arr = np.asarray(query_embedding, dtype=np.float64)
+        query_norm = float(np.linalg.norm(query_arr))
+        if query_norm == 0.0:
+            return None, -1.0, -1.0
+        embedding_matrix = np.array(
+            [e.embedding for e in same_dim_entries], dtype=np.float64,
+        )
+        entry_norms = np.linalg.norm(embedding_matrix, axis=1)
+        valid_mask = entry_norms > 0
+        similarities = np.zeros(len(same_dim_entries))
+        if valid_mask.any():
+            similarities[valid_mask] = (
+                embedding_matrix[valid_mask] @ query_arr
+            ) / (entry_norms[valid_mask] * query_norm)
+        best_idx = int(np.argmax(similarities))
+        best_sim = float(similarities[best_idx])
+        second_sim = -1.0
+        if len(similarities) >= 2:
+            sorted_sims = np.sort(similarities)[::-1]
+            second_sim = float(sorted_sims[1])
+        return same_dim_entries[best_idx], best_sim, second_sim
+    except ImportError:
+        best_sim_val = -1.0
+        second_sim_val = -1.0
+        best_entry: Optional[CacheEntry] = None
+        for entry in same_dim_entries:
+            sim = _cosine_similarity(query_embedding, entry.embedding)
+            if sim > best_sim_val:
+                second_sim_val = best_sim_val
+                best_sim_val = sim
+                best_entry = entry
+            elif sim > second_sim_val:
+                second_sim_val = sim
+        return best_entry, best_sim_val, second_sim_val
+
+
 def _embedding_hash(
     embedding: List[float],
     hash_dimensions: Optional[int] = None,
@@ -204,6 +252,7 @@ class SemanticQueryCache:
         self._inflight: Dict[str, _InflightRequest] = {}
         self._node_tags: Dict[str, Set[str]] = {}
         self._key_nodes: Dict[str, Set[str]] = {}
+        self._tenant_acl_index: Dict[Tuple[str, str], Set[str]] = {}
 
     @property
     def similarity_threshold(self) -> float:
@@ -274,31 +323,28 @@ class SemanticQueryCache:
         acl_key: str = "",
     ) -> Optional[Dict[str, Any]]:
         self._evict_expired()
-        best_sim = -1.0
-        second_sim = -1.0
-        best_entry: Optional[CacheEntry] = None
-        tenant_entry_count = 0
+        scope_key = (tenant_id, acl_key)
+        matching_hashes = self._tenant_acl_index.get(scope_key)
+        if not matching_hashes:
+            self._misses += 1
+            return None
 
-        for entry in self._entries.values():
-            if entry.tenant_id != tenant_id:
-                continue
-            if entry.acl_key != acl_key:
-                continue
-            tenant_entry_count += 1
-            sim = _vectorized_cosine_similarity(query_embedding, entry.embedding)
-            if sim > best_sim:
-                second_sim = best_sim
-                best_sim = sim
-                best_entry = entry
-            elif sim > second_sim:
-                second_sim = sim
+        scoped_entries = [
+            self._entries[h] for h in matching_hashes if h in self._entries
+        ]
+        if not scoped_entries:
+            self._misses += 1
+            return None
 
+        best_entry, best_sim, second_sim = _vectorized_best_match(
+            query_embedding, scoped_entries,
+        )
         if best_entry is None:
             self._misses += 1
             return None
 
         if self._config.adaptive_threshold:
-            has_second = tenant_entry_count >= 2
+            has_second = len(scoped_entries) >= 2
             effective_threshold = compute_adaptive_threshold(
                 best_sim=best_sim,
                 second_sim=second_sim if has_second else None,
@@ -348,6 +394,7 @@ class SemanticQueryCache:
         hdim = self._config.hash_dimensions
         key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
         if key_hash in self._entries:
+            self._remove_from_tenant_index(key_hash)
             self._remove_node_tags_for_key(key_hash)
         entry = CacheEntry(
             key_hash=key_hash,
@@ -362,12 +409,32 @@ class SemanticQueryCache:
         )
         self._entries[key_hash] = entry
         self._entry_generations[key_hash] = self._generation
+        self._add_to_tenant_index(key_hash, tenant_id, acl_key)
         if node_ids:
             self._key_nodes[key_hash] = set(node_ids)
             for nid in node_ids:
                 if nid not in self._node_tags:
                     self._node_tags[nid] = set()
                 self._node_tags[nid].add(key_hash)
+
+    def _add_to_tenant_index(
+        self, key_hash: str, tenant_id: str, acl_key: str,
+    ) -> None:
+        scope_key = (tenant_id, acl_key)
+        if scope_key not in self._tenant_acl_index:
+            self._tenant_acl_index[scope_key] = set()
+        self._tenant_acl_index[scope_key].add(key_hash)
+
+    def _remove_from_tenant_index(self, key_hash: str) -> None:
+        entry = self._entries.get(key_hash)
+        if entry is None:
+            return
+        scope_key = (entry.tenant_id, entry.acl_key)
+        index_set = self._tenant_acl_index.get(scope_key)
+        if index_set is not None:
+            index_set.discard(key_hash)
+            if not index_set:
+                del self._tenant_acl_index[scope_key]
 
     def _remove_node_tags_for_key(self, key: str) -> None:
         nids = self._key_nodes.pop(key, None)
@@ -385,6 +452,7 @@ class SemanticQueryCache:
             k for k, v in self._entries.items() if v.tenant_id == tenant_id
         ]
         for k in to_remove:
+            self._remove_from_tenant_index(k)
             del self._entries[k]
             self._entry_generations.pop(k, None)
             self._remove_node_tags_for_key(k)
@@ -399,6 +467,7 @@ class SemanticQueryCache:
             if tag_set:
                 keys_to_remove.update(tag_set)
         for k in keys_to_remove:
+            self._remove_from_tenant_index(k)
             self._entries.pop(k, None)
             self._entry_generations.pop(k, None)
             self._remove_node_tags_for_key(k)
@@ -439,6 +508,7 @@ class SemanticQueryCache:
             if not cached_nodes.issubset(current_graph_node_ids):
                 stale_keys.append(key)
         for k in stale_keys:
+            self._remove_from_tenant_index(k)
             self._entries.pop(k, None)
             self._entry_generations.pop(k, None)
             self._remove_node_tags_for_key(k)
@@ -451,6 +521,7 @@ class SemanticQueryCache:
             if gen < self._generation
         ]
         for k in stale:
+            self._remove_from_tenant_index(k)
             self._entries.pop(k, None)
             self._entry_generations.pop(k, None)
             self._remove_node_tags_for_key(k)
@@ -463,6 +534,7 @@ class SemanticQueryCache:
         self._entry_generations.clear()
         self._node_tags.clear()
         self._key_nodes.clear()
+        self._tenant_acl_index.clear()
         return count
 
     def stats(self) -> CacheStats:
@@ -485,6 +557,7 @@ class SemanticQueryCache:
     def _evict_expired(self) -> None:
         expired = [k for k, v in self._entries.items() if v.is_expired]
         for k in expired:
+            self._remove_from_tenant_index(k)
             del self._entries[k]
             self._entry_generations.pop(k, None)
             self._remove_node_tags_for_key(k)
@@ -495,10 +568,31 @@ class SemanticQueryCache:
             oldest_key = min(
                 self._entries, key=lambda k: self._entries[k].created_at,
             )
+            self._remove_from_tenant_index(oldest_key)
             del self._entries[oldest_key]
             self._entry_generations.pop(oldest_key, None)
             self._remove_node_tags_for_key(oldest_key)
             self._evictions += 1
+
+
+_INVALIDATE_NODES_LUA = """
+local count = 0
+local to_delete = {}
+for i = 1, #KEYS do
+    local members = redis.call('smembers', KEYS[i])
+    for _, member in ipairs(members) do
+        to_delete[member] = true
+    end
+end
+for key, _ in pairs(to_delete) do
+    redis.call('del', key)
+    count = count + 1
+end
+for i = 1, #KEYS do
+    redis.call('del', KEYS[i])
+end
+return count
+"""
 
 
 class RedisSemanticQueryCache:
@@ -512,11 +606,18 @@ class RedisSemanticQueryCache:
         db: int = 0,
     ) -> None:
         require_redis("RedisSemanticQueryCache")
-        self._redis = create_async_redis(redis_url, password=password, db=db)
+        self._redis = create_async_redis(
+            redis_url, password=password, db=db,
+        )
         self._ttl = ttl_seconds
         self._prefix = key_prefix
         self._cache_config = config or CacheConfig()
         self._l1 = SemanticQueryCache(config=self._cache_config)
+        self._invalidate_nodes_script = (
+            self._redis.register_script(
+                _INVALIDATE_NODES_LUA,
+            )
+        )
 
     @property
     def generation(self) -> int:
@@ -665,22 +766,24 @@ class RedisSemanticQueryCache:
         except Exception:
             logger.debug("Redis semantic cache store failed (non-fatal)")
 
-    async def invalidate_by_nodes(self, node_ids: Set[str]) -> int:
+    async def invalidate_by_nodes(
+        self, node_ids: Set[str],
+    ) -> int:
         l1_removed = self._l1.invalidate_by_nodes(node_ids)
         try:
-            keys_to_delete: set = set()
-            tag_keys: list = []
-            for nid in node_ids:
-                tag_key = f"{self._prefix}nodetag:{nid}"
-                tag_keys.append(tag_key)
-                members = await self._redis.smembers(tag_key)
-                keys_to_delete.update(members)
-            if keys_to_delete:
-                await self._redis.delete(*keys_to_delete)
+            tag_keys = [
+                f"{self._prefix}nodetag:{nid}"
+                for nid in node_ids
+            ]
             if tag_keys:
-                await self._redis.delete(*tag_keys)
+                await self._invalidate_nodes_script(
+                    keys=tag_keys,
+                )
         except Exception:
-            logger.warning("Redis node-level invalidation failed (non-fatal)")
+            logger.warning(
+                "Redis node-level invalidation "
+                "failed (non-fatal)",
+            )
         return l1_removed
 
     async def invalidate_tenant(self, tenant_id: str) -> int:
