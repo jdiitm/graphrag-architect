@@ -350,18 +350,24 @@ class GraphRepository:
         entities = _sort_entities_for_write(entities)
         entities = compute_hashes(entities)
         nodes, edges = _partition_entities(entities)
-        affected_ids = _collect_affected_node_ids(entities)
-        await self._cb.call(
-            self._commit_and_refresh, nodes, edges, affected_ids,
-        )
+        await self._cb.call(self._execute_batched_commit, nodes, edges)
 
-    async def _commit_and_refresh(
-        self,
-        nodes: List[Any],
-        edges: List[Any],
-        affected_ids: List[str],
+    async def commit_topology_with_affected_ids(
+        self, entities: List[Any],
+    ) -> List[str]:
+        if not entities:
+            return []
+
+        entities = _sort_entities_for_write(entities)
+        entities = compute_hashes(entities)
+        nodes, edges = _partition_entities(entities)
+        affected_ids = _collect_affected_node_ids(entities)
+        await self._cb.call(self._execute_batched_commit, nodes, edges)
+        return affected_ids
+
+    async def refresh_degree_for_ids(
+        self, affected_ids: List[str],
     ) -> None:
-        await self._execute_batched_commit(nodes, edges)
         await self._refresh_degree_property(affected_ids)
 
     async def _execute_batched_commit(

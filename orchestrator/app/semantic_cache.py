@@ -18,6 +18,13 @@ from orchestrator.app.redis_client import (
 logger = logging.getLogger(__name__)
 
 
+def compute_topology_hash(node_ids: Set[str]) -> str:
+    if not node_ids:
+        return hashlib.sha256(b"empty").hexdigest()[:16]
+    canonical = "|".join(sorted(node_ids))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+
 class EmbeddingProvider(Protocol):
     async def embed(self, text: str) -> List[float]: ...
 
@@ -64,6 +71,7 @@ class CacheEntry:
     tenant_id: str = ""
     acl_key: str = ""
     access_count: int = 0
+    topology_hash: str = ""
 
     @property
     def is_expired(self) -> bool:
@@ -270,6 +278,8 @@ class SemanticQueryCache:
         if complexity and self._config.ttl_by_complexity:
             ttl = self._config.ttl_by_complexity.get(complexity, ttl)
 
+        topo_hash = compute_topology_hash(node_ids) if node_ids else ""
+
         key_hash = _embedding_hash(query_embedding) + "|" + acl_key
         if key_hash in self._entries:
             self._remove_node_tags_for_key(key_hash)
@@ -282,6 +292,7 @@ class SemanticQueryCache:
             ttl_seconds=ttl,
             tenant_id=tenant_id,
             acl_key=acl_key,
+            topology_hash=topo_hash,
         )
         self._entries[key_hash] = entry
         self._entry_generations[key_hash] = self._generation
@@ -326,6 +337,47 @@ class SemanticQueryCache:
             self._entry_generations.pop(k, None)
             self._remove_node_tags_for_key(k)
         return len(keys_to_remove)
+
+    def validate_topology(
+        self,
+        query_embedding: List[float],
+        current_node_ids: Set[str],
+        tenant_id: str = "",
+        acl_key: str = "",
+    ) -> bool:
+        best_entry: Optional[CacheEntry] = None
+        best_sim = -1.0
+        for entry in self._entries.values():
+            if tenant_id and entry.tenant_id != tenant_id:
+                continue
+            if entry.acl_key != acl_key:
+                continue
+            sim = _vectorized_cosine_similarity(query_embedding, entry.embedding)
+            if sim > best_sim:
+                best_sim = sim
+                best_entry = entry
+        if best_entry is None or not best_entry.topology_hash:
+            return True
+        return best_entry.topology_hash == compute_topology_hash(current_node_ids)
+
+    def invalidate_stale_topologies(
+        self, current_graph_node_ids: Set[str],
+    ) -> int:
+        stale_keys: List[str] = []
+        for key, entry in self._entries.items():
+            if not entry.topology_hash:
+                continue
+            cached_nodes = self._key_nodes.get(key, set())
+            if not cached_nodes:
+                continue
+            if not cached_nodes.issubset(current_graph_node_ids):
+                stale_keys.append(key)
+        for k in stale_keys:
+            self._entries.pop(k, None)
+            self._entry_generations.pop(k, None)
+            self._remove_node_tags_for_key(k)
+            self._evictions += 1
+        return len(stale_keys)
 
     def invalidate_stale(self) -> int:
         stale = [
