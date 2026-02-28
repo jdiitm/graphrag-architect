@@ -299,8 +299,8 @@ class TestRedisOutboxStore:
         store = RedisOutboxStore(redis_conn=mock_redis)
         event = VectorSyncEvent(collection="svc", pruned_ids=["a", "b"])
         await store.write_event(event)
-        mock_redis.hset.assert_called_once()
-        call_args = mock_redis.hset.call_args
+        mock_redis.eval.assert_called_once()
+        call_args = mock_redis.eval.call_args
         assert event.event_id in str(call_args)
 
     @pytest.mark.asyncio
@@ -352,6 +352,7 @@ class FakeRedis:
         self._hashes: Dict[str, Dict[str, str]] = {}
         self._sets: Dict[str, set] = {}
         self._strings: Dict[str, str] = {}
+        self._ttls: Dict[str, int] = {}
 
     async def hset(
         self,
@@ -384,19 +385,50 @@ class FakeRedis:
 
     async def delete(self, name: str) -> None:
         self._hashes.pop(name, None)
+        self._strings.pop(name, None)
+        self._ttls.pop(name, None)
 
     async def get(self, name: str) -> str | None:
         return self._strings.get(name)
 
-    async def set(self, name: str, value: str) -> None:
+    async def set(self, name: str, value: str, ex: int | None = None) -> None:
         self._strings[name] = value
+        if ex is not None:
+            self._ttls[name] = ex
+
+    def _eval_write_dedup(self, args: tuple) -> int:
+        dedup_key = args[0]
+        index_key = args[1]
+        new_event_key = args[2]
+        key_prefix = args[3]
+        new_event_id = args[4]
+        dedup_ttl = int(args[5])
+        existing_eid = self._strings.get(dedup_key)
+        if existing_eid:
+            old_key = key_prefix + existing_eid
+            self._hashes.pop(old_key, None)
+            if index_key in self._sets:
+                self._sets[index_key].discard(existing_eid)
+        mapping: Dict[str, str] = {}
+        pairs = args[6:]
+        for i in range(0, len(pairs), 2):
+            mapping[pairs[i]] = pairs[i + 1]
+        self._hashes[new_event_key] = mapping
+        if index_key not in self._sets:
+            self._sets[index_key] = set()
+        self._sets[index_key].add(new_event_id)
+        self._strings[dedup_key] = new_event_id
+        self._ttls[dedup_key] = dedup_ttl
+        return 1
 
     async def eval(
         self,
         script: str,
         numkeys: int,
         *args: Any,
-    ) -> list:
+    ) -> list | int:
+        if numkeys == 3:
+            return self._eval_write_dedup(args)
         index_key = args[0]
         worker_id = args[1]
         limit = int(args[2])
@@ -629,7 +661,9 @@ class ClaimableFakeRedis(FakeRedis):
         script: str,
         numkeys: int,
         *args: Any,
-    ) -> list:
+    ) -> list | int:
+        if numkeys == 3:
+            return self._eval_write_dedup(args)
         import time as _time
         index_key = args[0]
         worker_id = args[1]
@@ -832,3 +866,40 @@ class TestDurableOutboxDrainerWithClaiming:
         assert processed == 1
         mock_store.load_pending.assert_called_once()
         mock_store.delete_event.assert_called_once_with(event.event_id)
+
+
+class TestRedisOutboxStoreDedupKeyLifecycle:
+
+    @pytest.mark.asyncio
+    async def test_dedup_key_has_ttl_after_write(self) -> None:
+        fake_redis = FakeRedis()
+        store = RedisOutboxStore(redis_conn=fake_redis)
+        event = VectorSyncEvent(collection="svc", pruned_ids=["a"])
+        await store.write_event(event)
+        dedup_rkey = store._dedup_redis_key(event)
+        assert dedup_rkey in fake_redis._ttls
+        assert fake_redis._ttls[dedup_rkey] > 0
+
+    @pytest.mark.asyncio
+    async def test_delete_event_cleans_own_dedup_key(self) -> None:
+        fake_redis = FakeRedis()
+        store = RedisOutboxStore(redis_conn=fake_redis)
+        event = VectorSyncEvent(collection="svc", pruned_ids=["a"])
+        await store.write_event(event)
+        dedup_rkey = store._dedup_redis_key(event)
+        assert dedup_rkey in fake_redis._strings
+        await store.delete_event(event.event_id)
+        assert dedup_rkey not in fake_redis._strings
+
+    @pytest.mark.asyncio
+    async def test_delete_event_preserves_dedup_key_owned_by_other(self) -> None:
+        fake_redis = FakeRedis()
+        store = RedisOutboxStore(redis_conn=fake_redis)
+        event_old = VectorSyncEvent(collection="svc", pruned_ids=["node-x"])
+        event_new = VectorSyncEvent(collection="svc", pruned_ids=["node-x"])
+        await store.write_event(event_old)
+        await store.write_event(event_new)
+        dedup_rkey = store._dedup_redis_key(event_new)
+        assert fake_redis._strings[dedup_rkey] == event_new.event_id
+        await store.delete_event(event_old.event_id)
+        assert fake_redis._strings.get(dedup_rkey) == event_new.event_id

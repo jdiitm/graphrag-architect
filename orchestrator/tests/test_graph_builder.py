@@ -320,3 +320,50 @@ class TestCompletionTrackerWiredIntoCommit:
             "commit_to_neo4j must call CompletionTracker.mark_committed() "
             "after successful Neo4j commit."
         )
+
+
+class TestCoalescingDrainWiring:
+
+    @pytest.mark.asyncio
+    async def test_coalesced_events_drain_through_vector_outbox(self) -> None:
+        from orchestrator.app.graph_builder import drain_vector_outbox
+        from orchestrator.app.vector_sync_outbox import (
+            CoalescingOutbox,
+            VectorSyncEvent,
+            VectorSyncOutbox,
+        )
+
+        coalescing = CoalescingOutbox(window_seconds=0.0)
+        event = VectorSyncEvent(collection="svc", pruned_ids=["node-a"])
+        coalescing.enqueue(event)
+
+        vector_outbox = VectorSyncOutbox()
+        spy_vs = AsyncMock()
+        spy_vs.delete = AsyncMock(return_value=1)
+
+        with (
+            patch(
+                "orchestrator.app.graph_builder._COALESCING_OUTBOX",
+                coalescing,
+            ),
+            patch(
+                "orchestrator.app.graph_builder._VECTOR_OUTBOX",
+                vector_outbox,
+            ),
+            patch(
+                "orchestrator.app.graph_builder.get_vector_store",
+                return_value=spy_vs,
+            ),
+            patch(
+                "orchestrator.app.graph_builder._get_redis_conn",
+                return_value=None,
+            ),
+            patch(
+                "orchestrator.app.graph_builder.get_driver",
+                side_effect=RuntimeError("no neo4j"),
+            ),
+        ):
+            total = await drain_vector_outbox()
+
+        assert total == 1
+        spy_vs.delete.assert_called_once_with("svc", ["node-a"])
