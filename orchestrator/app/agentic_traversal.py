@@ -35,6 +35,7 @@ class TraversalConfig:
     max_hops: int = MAX_HOPS
     max_visited: int = MAX_VISITED
     timeout: float = 30.0
+    beam_width: int = 50
 
     @classmethod
     def from_env(cls) -> TraversalConfig:
@@ -53,6 +54,7 @@ class TraversalConfig:
                 os.environ.get("TRAVERSAL_MAX_VISITED", str(MAX_VISITED))
             ),
             timeout=float(os.environ.get("TRAVERSAL_TIMEOUT", "30.0")),
+            beam_width=int(os.environ.get("TRAVERSAL_BEAM_WIDTH", "50")),
         )
 
 
@@ -107,7 +109,9 @@ _BATCHED_NEIGHBOR_TEMPLATE = (
     "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
     "RETURN source.id AS source_id, target.id AS target_id, "
     "target.name AS target_name, type(r) AS rel_type, "
-    "labels(target)[0] AS target_label "
+    "labels(target)[0] AS target_label, "
+    "coalesce(target.pagerank, 0) AS pagerank, "
+    "coalesce(target.degree, 0) AS degree "
     "LIMIT $limit"
 )
 
@@ -182,6 +186,12 @@ def build_one_hop_cypher(rel_type: str) -> str:
     return _ONE_HOP_TEMPLATE.format(rel_type=rel_type)
 
 
+def compute_node_score(result: Dict[str, Any]) -> float:
+    pagerank = float(result.get("pagerank", 0.0))
+    degree = float(result.get("degree", 0))
+    return pagerank + degree / 1000.0
+
+
 @dataclass
 class TraversalState:
     visited_nodes: Set[str] = field(default_factory=set)
@@ -219,10 +229,13 @@ class TraversalAgent:
         max_hops: int = MAX_HOPS,
         max_visited: int = MAX_VISITED,
         token_budget: Optional[TokenBudget] = None,
+        beam_width: int = 50,
     ) -> None:
         self._max_hops = min(max_hops, MAX_HOPS)
         self._max_visited = min(max_visited, MAX_VISITED)
         self._token_budget = token_budget or TokenBudget()
+        self._beam_width = beam_width
+        self._frontier_scores: Dict[str, float] = {}
 
     def create_state(self, start_node_id: str) -> TraversalState:
         return TraversalState(
@@ -252,9 +265,32 @@ class TraversalAgent:
                 break
             state.accumulated_context.append(result)
             state.current_tokens += token_count
+
+        score_map: Dict[str, float] = {}
+        for result in step.results:
+            tid = result.get("target_id")
+            if tid:
+                score_map[tid] = compute_node_score(result)
+
         for nid in step.new_frontier:
-            if nid not in state.visited_nodes and len(state.frontier) < self._max_visited:
+            if nid not in state.visited_nodes and nid not in state.frontier:
                 state.frontier.append(nid)
+                if nid in score_map:
+                    self._frontier_scores[nid] = score_map[nid]
+
+        state.frontier = [
+            nid for nid in state.frontier if nid not in state.visited_nodes
+        ]
+
+        state.frontier.sort(
+            key=lambda node_id: self._frontier_scores.get(node_id, 0.0),
+            reverse=True,
+        )
+        if len(state.frontier) > self._beam_width:
+            discarded = state.frontier[self._beam_width:]
+            for nid in discarded:
+                self._frontier_scores.pop(nid, None)
+            state.frontier = state.frontier[:self._beam_width]
 
     def get_context(self, state: TraversalState) -> List[Dict[str, Any]]:
         return truncate_context(
@@ -454,9 +490,13 @@ async def _batched_bfs(
     timeout: float,
     token_budget: TokenBudget,
     max_visited: int = MAX_VISITED,
+    beam_width: int = 50,
 ) -> List[Dict[str, Any]]:
     agent = TraversalAgent(
-        max_hops=max_hops, max_visited=max_visited, token_budget=token_budget
+        max_hops=max_hops,
+        max_visited=max_visited,
+        token_budget=token_budget,
+        beam_width=beam_width,
     )
     state = agent.create_state(start_node_id)
     hop_number = 0
@@ -514,6 +554,7 @@ async def _run_bounded_with_fallback(
     timeout: float,
     effective_budget: TokenBudget,
     max_visited: int = MAX_VISITED,
+    beam_width: int = 50,
 ) -> List[Dict[str, Any]]:
     try:
         raw_results = await bounded_path_expansion(
@@ -542,6 +583,7 @@ async def _run_bounded_with_fallback(
         timeout=timeout,
         token_budget=effective_budget,
         max_visited=max_visited,
+        beam_width=beam_width,
     )
 
 
@@ -582,6 +624,7 @@ async def run_traversal(
             timeout=effective_timeout,
             token_budget=effective_budget,
             max_visited=effective_max_visited,
+            beam_width=config.beam_width,
         )
 
     if config.strategy == TraversalStrategy.BOUNDED_CYPHER:
@@ -594,6 +637,7 @@ async def run_traversal(
             timeout=effective_timeout,
             effective_budget=effective_budget,
             max_visited=effective_max_visited,
+            beam_width=config.beam_width,
         )
 
     if config.strategy != TraversalStrategy.ADAPTIVE:
@@ -617,6 +661,7 @@ async def run_traversal(
             timeout=effective_timeout,
             token_budget=effective_budget,
             max_visited=effective_max_visited,
+            beam_width=config.beam_width,
         )
 
     logger.info(
@@ -634,4 +679,5 @@ async def run_traversal(
         timeout=effective_timeout,
         effective_budget=effective_budget,
         max_visited=effective_max_visited,
+        beam_width=config.beam_width,
     )
