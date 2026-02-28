@@ -6,7 +6,7 @@ import logging
 import time
 import uuid
 from collections import OrderedDict
-from typing import Any, List, Protocol, runtime_checkable
+from typing import Any, Dict, List, Protocol, Tuple, runtime_checkable
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -79,6 +79,70 @@ class VectorSyncOutbox:
         self._pending.pop(event_id, None)
 
 
+_DEFAULT_COALESCE_WINDOW: float = 5.0
+
+
+class CoalescingOutbox:
+    """In-memory outbox that deduplicates events within a time window.
+
+    Events targeting the same ``(collection, node_ids)`` key are
+    coalesced: only the latest event survives.  ``drain_pending``
+    returns events whose age exceeds ``window_seconds`` (default 5 s).
+
+    Because of the window delay, events enqueued during an ingestion
+    call are **not** flushed by that same call's drain.  They remain
+    in-memory until a subsequent ``drain_vector_outbox`` invocation
+    (typically the next ingest or a periodic background sweep).
+    """
+
+    def __init__(
+        self, window_seconds: float = _DEFAULT_COALESCE_WINDOW,
+    ) -> None:
+        self._window_seconds = window_seconds
+        self._entries: Dict[
+            Tuple[str, Tuple[str, ...]], Tuple[VectorSyncEvent, float]
+        ] = {}
+
+    @staticmethod
+    def _dedup_key(
+        event: VectorSyncEvent,
+    ) -> Tuple[str, Tuple[str, ...]]:
+        if event.operation == "upsert" and event.vectors:
+            ids = tuple(sorted(
+                getattr(v, "id", "") for v in event.vectors
+            ))
+        else:
+            ids = tuple(sorted(event.pruned_ids))
+        return (event.collection, ids)
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._entries)
+
+    def enqueue(self, event: VectorSyncEvent) -> None:
+        key = self._dedup_key(event)
+        self._entries[key] = (event, time.monotonic())
+
+    def flush(self) -> List[VectorSyncEvent]:
+        events = [entry[0] for entry in self._entries.values()]
+        self._entries.clear()
+        return events
+
+    def drain_pending(self) -> List[VectorSyncEvent]:
+        now = time.monotonic()
+        ready: List[VectorSyncEvent] = []
+        remaining: Dict[
+            Tuple[str, Tuple[str, ...]], Tuple[VectorSyncEvent, float]
+        ] = {}
+        for key, (event, enqueued_at) in self._entries.items():
+            if now - enqueued_at >= self._window_seconds:
+                ready.append(event)
+            else:
+                remaining[key] = (event, enqueued_at)
+        self._entries = remaining
+        return ready
+
+
 class OutboxDrainer:
     def __init__(
         self,
@@ -114,6 +178,9 @@ class OutboxDrainer:
         return processed
 
 
+_DEDUP_TTL_DEFAULT = 3600
+
+
 class RedisOutboxStore:
     """Redis-backed outbox store with atomic lease-based claiming.
 
@@ -121,10 +188,16 @@ class RedisOutboxStore:
     atomically read, check status, and claim events in a single
     Redis round-trip.  This prevents duplicate claims across
     concurrent workers.
+
+    ``write_event`` uses a Lua script to atomically check for an
+    existing dedup key, replace the prior event if present, and
+    write the new event with a TTL on the dedup key — preventing
+    both TOCTOU races and unbounded key growth.
     """
 
     _KEY_PREFIX = "graphrag:vecoutbox:"
     _INDEX_KEY = "graphrag:vecoutbox:pending"
+    _DEDUP_PREFIX = "graphrag:vecoutbox:dedup:"
 
     _CLAIM_LUA_SCRIPT = """
 local index_key = KEYS[1]
@@ -163,8 +236,36 @@ end
 return claimed
 """
 
-    def __init__(self, redis_conn: Any) -> None:
+    _WRITE_DEDUP_LUA_SCRIPT = """
+local dedup_key = KEYS[1]
+local index_key = KEYS[2]
+local new_event_key = KEYS[3]
+local key_prefix = ARGV[1]
+local new_event_id = ARGV[2]
+local dedup_ttl = tonumber(ARGV[3])
+
+local existing_eid = redis.call('GET', dedup_key)
+if existing_eid then
+    redis.call('DEL', key_prefix .. existing_eid)
+    redis.call('SREM', index_key, existing_eid)
+end
+
+for i = 4, #ARGV, 2 do
+    redis.call('HSET', new_event_key, ARGV[i], ARGV[i + 1])
+end
+
+redis.call('SADD', index_key, new_event_id)
+redis.call('SET', dedup_key, new_event_id, 'EX', dedup_ttl)
+
+return 1
+"""
+
+    def __init__(
+        self, redis_conn: Any,
+        dedup_ttl: int = _DEDUP_TTL_DEFAULT,
+    ) -> None:
         self._redis = redis_conn
+        self._dedup_ttl = dedup_ttl
 
     def _event_key(self, event_id: str) -> str:
         return f"{self._KEY_PREFIX}{event_id}"
@@ -178,7 +279,19 @@ return claimed
             for v in vectors
         ])
 
+    @staticmethod
+    def _dedup_key_for(event: VectorSyncEvent) -> str:
+        if event.operation == "upsert" and event.vectors:
+            ids = sorted(getattr(v, "id", "") for v in event.vectors)
+        else:
+            ids = sorted(event.pruned_ids)
+        return f"{event.collection}:{','.join(ids)}"
+
+    def _dedup_redis_key(self, event: VectorSyncEvent) -> str:
+        return f"{self._DEDUP_PREFIX}{self._dedup_key_for(event)}"
+
     async def write_event(self, event: VectorSyncEvent) -> None:
+        dedup_rkey = self._dedup_redis_key(event)
         mapping = {
             "event_id": event.event_id,
             "collection": event.collection,
@@ -187,11 +300,22 @@ return claimed
             "vectors": self._serialize_vectors(event.vectors),
             "status": event.status,
             "retry_count": str(event.retry_count),
+            "_dedup_rkey": dedup_rkey,
         }
-        await self._redis.hset(
-            self._event_key(event.event_id), mapping=mapping,
+        flat_args: list = []
+        for field, value in mapping.items():
+            flat_args.extend([field, value])
+        await self._redis.eval(
+            self._WRITE_DEDUP_LUA_SCRIPT,
+            3,
+            dedup_rkey,
+            self._INDEX_KEY,
+            self._event_key(event.event_id),
+            self._KEY_PREFIX,
+            event.event_id,
+            str(self._dedup_ttl),
+            *flat_args,
         )
-        await self._redis.sadd(self._INDEX_KEY, event.event_id)
 
     async def load_pending(self) -> List[VectorSyncEvent]:
         event_ids = await self._redis.smembers(self._INDEX_KEY)
@@ -216,8 +340,21 @@ return claimed
         return events
 
     async def delete_event(self, event_id: str) -> None:
-        await self._redis.delete(self._event_key(event_id))
+        event_key = self._event_key(event_id)
+        data = await self._redis.hgetall(event_key)
+        dedup_rkey = data.get("_dedup_rkey", "") if data else ""
+        await self._redis.delete(event_key)
         await self._redis.srem(self._INDEX_KEY, event_id)
+        if dedup_rkey:
+            current = await self._redis.get(dedup_rkey)
+            if current is not None:
+                current_str = (
+                    current.decode()
+                    if isinstance(current, bytes)
+                    else str(current)
+                )
+                if current_str == event_id:
+                    await self._redis.delete(dedup_rkey)
 
     async def update_retry_count(
         self, event_id: str, retry_count: int,

@@ -14,6 +14,7 @@ _ENV_VARS = {
     "NEO4J_PASSWORD": "test",
     "NEO4J_URI": "bolt://localhost:7687",
     "GOOGLE_API_KEY": "test-key",
+    "OUTBOX_COALESCING": "false",
 }
 
 _REDIS_ENV = {**_ENV_VARS, "REDIS_URL": "redis://localhost:6379"}
