@@ -10,7 +10,12 @@ from typing import Any, Dict, List, Optional, Set
 from neo4j import AsyncDriver, AsyncManagedTransaction
 from neo4j.exceptions import Neo4jError
 
-from orchestrator.app.context_manager import TokenBudget, estimate_tokens, truncate_context
+from orchestrator.app.context_manager import (
+    TokenBudget,
+    estimate_tokens,
+    truncate_context,
+    truncate_context_topology,
+)
 from orchestrator.app.query_templates import ALLOWED_RELATIONSHIP_TYPES
 
 logger = logging.getLogger(__name__)
@@ -18,6 +23,7 @@ logger = logging.getLogger(__name__)
 MAX_HOPS = 5
 MAX_VISITED = 50
 MAX_NODE_DEGREE = 500
+COLLECTION_MULTIPLIER = 2.0
 
 _DEFAULT_DEGREE_THRESHOLD = 200
 
@@ -201,6 +207,7 @@ class TraversalState:
     max_visited: int = MAX_VISITED
     token_budget: TokenBudget = field(default_factory=TokenBudget)
     current_tokens: int = 0
+    collection_multiplier: float = COLLECTION_MULTIPLIER
 
     @property
     def should_continue(self) -> bool:
@@ -210,7 +217,10 @@ class TraversalState:
             return False
         if not self.frontier:
             return False
-        if self.current_tokens >= self.token_budget.max_context_tokens:
+        collection_ceiling = int(
+            self.token_budget.max_context_tokens * self.collection_multiplier
+        )
+        if self.current_tokens >= collection_ceiling:
             return False
         return True
 
@@ -230,12 +240,14 @@ class TraversalAgent:
         max_visited: int = MAX_VISITED,
         token_budget: Optional[TokenBudget] = None,
         beam_width: int = 50,
+        collection_multiplier: float = COLLECTION_MULTIPLIER,
     ) -> None:
         self._max_hops = min(max_hops, MAX_HOPS)
         self._max_visited = min(max_visited, MAX_VISITED)
         self._token_budget = token_budget or TokenBudget()
         self._beam_width = beam_width
         self._frontier_scores: Dict[str, float] = {}
+        self._collection_multiplier = collection_multiplier
 
     def create_state(self, start_node_id: str) -> TraversalState:
         return TraversalState(
@@ -243,6 +255,7 @@ class TraversalAgent:
             remaining_hops=self._max_hops,
             max_visited=self._max_visited,
             token_budget=self._token_budget,
+            collection_multiplier=self._collection_multiplier,
         )
 
     def select_next_node(self, state: TraversalState) -> Optional[str]:
@@ -261,8 +274,6 @@ class TraversalAgent:
         state.remaining_hops -= 1
         for result in step.results:
             token_count = estimate_tokens(str(result))
-            if state.current_tokens + token_count > state.token_budget.max_context_tokens:
-                break
             state.accumulated_context.append(result)
             state.current_tokens += token_count
 
@@ -293,10 +304,24 @@ class TraversalAgent:
             state.frontier = state.frontier[:self._beam_width]
 
     def get_context(self, state: TraversalState) -> List[Dict[str, Any]]:
-        return truncate_context(
-            state.accumulated_context,
-            state.token_budget,
-        )
+        normalized = _normalize_for_topology(state.accumulated_context)
+        return truncate_context_topology(normalized, state.token_budget)
+
+
+def _normalize_for_topology(
+    candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for item in candidates:
+        entry = dict(item)
+        if "source" not in entry and "source_id" in entry:
+            entry["source"] = entry["source_id"]
+        if "target" not in entry and "target_id" in entry:
+            entry["target"] = entry["target_id"]
+        if "score" not in entry and "pagerank" in entry:
+            entry["score"] = float(entry["pagerank"])
+        normalized.append(entry)
+    return normalized
 
 
 async def bounded_path_expansion(

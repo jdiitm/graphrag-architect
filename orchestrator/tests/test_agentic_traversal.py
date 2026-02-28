@@ -63,13 +63,13 @@ class TestTraversalState:
         )
         assert state.should_continue is False
 
-    def test_should_continue_false_when_token_budget_exhausted(self) -> None:
+    def test_should_continue_false_when_collection_ceiling_reached(self) -> None:
         budget = TokenBudget(max_context_tokens=10)
         state = TraversalState(
             frontier=["node-1"],
             remaining_hops=3,
             token_budget=budget,
-            current_tokens=10,
+            current_tokens=20,
         )
         assert state.should_continue is False
 
@@ -140,7 +140,7 @@ class TestTraversalAgent:
         assert len(state.accumulated_context) == 1
         assert "svc-a" in state.frontier
 
-    def test_record_step_respects_token_budget(self) -> None:
+    def test_record_step_collects_all_then_get_context_truncates(self) -> None:
         budget = TokenBudget(max_context_tokens=5)
         agent = TraversalAgent(token_budget=budget)
         state = agent.create_state("start")
@@ -152,7 +152,9 @@ class TestTraversalAgent:
             new_frontier=[],
         )
         agent.record_step(state, step)
-        assert len(state.accumulated_context) == 0
+        assert len(state.accumulated_context) == 1
+        context = agent.get_context(state)
+        assert len(context) == 0
 
     def test_get_context_returns_truncated_data(self) -> None:
         agent = TraversalAgent()

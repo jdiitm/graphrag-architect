@@ -245,8 +245,8 @@ class TestRunTraversal:
                 token_budget=TokenBudget(max_context_tokens=30),
             )
 
-        assert mock_session.execute_read.call_count == 1
-        assert len(context) == 3
+        assert mock_session.execute_read.call_count == 2
+        assert len(context) <= 3
 
     @pytest.mark.asyncio
     async def test_traversal_does_not_revisit_nodes(self) -> None:
