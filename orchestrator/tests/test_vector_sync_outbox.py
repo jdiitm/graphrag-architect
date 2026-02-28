@@ -351,6 +351,7 @@ class FakeRedis:
     def __init__(self) -> None:
         self._hashes: Dict[str, Dict[str, str]] = {}
         self._sets: Dict[str, set] = {}
+        self._strings: Dict[str, str] = {}
 
     async def hset(
         self,
@@ -383,6 +384,12 @@ class FakeRedis:
 
     async def delete(self, name: str) -> None:
         self._hashes.pop(name, None)
+
+    async def get(self, name: str) -> str | None:
+        return self._strings.get(name)
+
+    async def set(self, name: str, value: str) -> None:
+        self._strings[name] = value
 
     async def eval(
         self,

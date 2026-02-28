@@ -6,7 +6,7 @@ import logging
 import time
 import uuid
 from collections import OrderedDict
-from typing import Any, List, Protocol, runtime_checkable
+from typing import Any, Dict, List, Protocol, Tuple, runtime_checkable
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -79,6 +79,58 @@ class VectorSyncOutbox:
         self._pending.pop(event_id, None)
 
 
+_DEFAULT_COALESCE_WINDOW: float = 5.0
+
+
+class CoalescingOutbox:
+    def __init__(
+        self, window_seconds: float = _DEFAULT_COALESCE_WINDOW,
+    ) -> None:
+        self._window_seconds = window_seconds
+        self._entries: Dict[
+            Tuple[str, Tuple[str, ...]], Tuple[VectorSyncEvent, float]
+        ] = {}
+
+    @staticmethod
+    def _dedup_key(
+        event: VectorSyncEvent,
+    ) -> Tuple[str, Tuple[str, ...]]:
+        if event.operation == "upsert" and event.vectors:
+            ids = tuple(sorted(
+                getattr(v, "id", "") for v in event.vectors
+            ))
+        else:
+            ids = tuple(sorted(event.pruned_ids))
+        return (event.collection, ids)
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._entries)
+
+    def enqueue(self, event: VectorSyncEvent) -> None:
+        key = self._dedup_key(event)
+        self._entries[key] = (event, time.monotonic())
+
+    def flush(self) -> List[VectorSyncEvent]:
+        events = [entry[0] for entry in self._entries.values()]
+        self._entries.clear()
+        return events
+
+    def drain_pending(self) -> List[VectorSyncEvent]:
+        now = time.monotonic()
+        ready: List[VectorSyncEvent] = []
+        remaining: Dict[
+            Tuple[str, Tuple[str, ...]], Tuple[VectorSyncEvent, float]
+        ] = {}
+        for key, (event, enqueued_at) in self._entries.items():
+            if now - enqueued_at >= self._window_seconds:
+                ready.append(event)
+            else:
+                remaining[key] = (event, enqueued_at)
+        self._entries = remaining
+        return ready
+
+
 class OutboxDrainer:
     def __init__(
         self,
@@ -125,6 +177,7 @@ class RedisOutboxStore:
 
     _KEY_PREFIX = "graphrag:vecoutbox:"
     _INDEX_KEY = "graphrag:vecoutbox:pending"
+    _DEDUP_MAP_KEY = "graphrag:vecoutbox:dedup"
 
     _CLAIM_LUA_SCRIPT = """
 local index_key = KEYS[1]
@@ -177,6 +230,25 @@ return claimed
             else v
             for v in vectors
         ])
+
+    @staticmethod
+    def _dedup_key_for(event: VectorSyncEvent) -> str:
+        if event.operation == "upsert" and event.vectors:
+            ids = sorted(getattr(v, "id", "") for v in event.vectors)
+        else:
+            ids = sorted(event.pruned_ids)
+        return f"{event.collection}:{','.join(ids)}"
+
+    async def write_dedup_event(self, event: VectorSyncEvent) -> None:
+        dedup_key = self._dedup_key_for(event)
+        dedup_map = await self._redis.hgetall(self._DEDUP_MAP_KEY)
+        existing_eid = dedup_map.get(dedup_key)
+        if existing_eid:
+            await self.delete_event(existing_eid)
+        await self.write_event(event)
+        await self._redis.hset(
+            self._DEDUP_MAP_KEY, key=dedup_key, value=event.event_id,
+        )
 
     async def write_event(self, event: VectorSyncEvent) -> None:
         mapping = {

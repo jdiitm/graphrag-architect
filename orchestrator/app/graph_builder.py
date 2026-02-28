@@ -44,6 +44,7 @@ from orchestrator.app.vector_store import create_vector_store, resolve_collectio
 from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.workspace_loader import load_directory_chunked
 from orchestrator.app.vector_sync_outbox import (
+    CoalescingOutbox,
     DurableOutboxDrainer,
     Neo4jOutboxStore,
     OutboxDrainer,
@@ -86,6 +87,13 @@ def resolve_vector_collection(tenant_id: Optional[str] = None) -> str:
     return resolve_collection_name(_VECTOR_COLLECTION, tenant_id)
 
 _VECTOR_OUTBOX = VectorSyncOutbox()
+
+_COALESCING_OUTBOX = CoalescingOutbox()
+
+
+def _coalescing_enabled() -> bool:
+    return os.environ.get("OUTBOX_COALESCING", "true").lower() == "true"
+
 
 _BACKGROUND_TASKS = BoundedTaskSet(max_tasks=50)
 
@@ -518,6 +526,8 @@ async def _enqueue_vector_cleanup(
     if neo4j_driver is not None:
         store = Neo4jOutboxStore(driver=neo4j_driver)
         await store.write_event(event)
+    elif _coalescing_enabled():
+        _COALESCING_OUTBOX.enqueue(event)
     else:
         _VECTOR_OUTBOX.enqueue(event)
     span.set_attribute("vector_sync_events_queued", 1)
@@ -551,6 +561,9 @@ async def drain_vector_outbox() -> int:
     )
     if isinstance(durable_drainer, DurableOutboxDrainer):
         total += await durable_drainer.process_once()
+    coalesced = _COALESCING_OUTBOX.drain_pending()
+    for event in coalesced:
+        _VECTOR_OUTBOX.enqueue(event)
     if _VECTOR_OUTBOX.pending_count > 0:
         inmemory_drainer = OutboxDrainer(
             outbox=_VECTOR_OUTBOX, vector_store=vs,
