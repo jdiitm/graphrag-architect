@@ -94,7 +94,8 @@ func main() {
 	}
 
 	var fp processor.DocumentProcessor
-	if processorMode == "kafka" {
+	switch processorMode {
+	case "kafka":
 		parsedTopic := envOrDefault("KAFKA_PARSED_TOPIC", "graphrag.parsed")
 		blobBucket := envOrDefault("BLOB_BUCKET", "graphrag-ingestion")
 		blobThreshold := envIntOrDefault("BLOB_THRESHOLD", processor.DefaultBlobThreshold)
@@ -115,7 +116,17 @@ func main() {
 		fp = processor.NewBlobForwardingProcessor(producer, store, parsedTopic, blobBucket, blobThreshold)
 		log.Printf("processor mode: kafka with blob offload (topic=%s, bucket=%s, store=%s, threshold=%d)",
 			parsedTopic, blobBucket, blobStoreType, blobThreshold)
-	} else {
+	case "ast":
+		astTopic := envOrDefault("KAFKA_AST_TOPIC", "graphrag.ast-parsed")
+		producer, prodErr := NewKafkaProducerClient(kafkaBrokers, astTopic)
+		if prodErr != nil {
+			log.Printf("FATAL: create kafka producer for ast topic: %v", prodErr)
+			return
+		}
+		defer producer.Close()
+		fp = processor.NewASTForwardingProcessor(producer, astTopic)
+		log.Printf("processor mode: ast extraction (topic=%s)", astTopic)
+	default:
 		var fpOpts []processor.ForwardingOption
 		if authToken := os.Getenv("AUTH_TOKEN"); authToken != "" {
 			fpOpts = append(fpOpts, processor.WithAuthToken(authToken))
