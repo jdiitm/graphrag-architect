@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 import concurrent.futures
 import logging
 import os
@@ -105,10 +106,19 @@ _ast_worker_breaker = CircuitBreaker(
     name="ast-worker",
 )
 
-_AST_DLQ: List[Dict[str, Any]] = []
+_DEFAULT_DLQ_MAX_SIZE = 10_000
+
+_AST_DLQ: deque = deque(
+    maxlen=int(os.environ.get("AST_DLQ_MAX_SIZE", str(_DEFAULT_DLQ_MAX_SIZE)))
+)
 
 
 def enqueue_ast_dlq(payload: Dict[str, Any]) -> None:
+    if _AST_DLQ.maxlen and len(_AST_DLQ) >= _AST_DLQ.maxlen:
+        logger.warning(
+            "AST DLQ at capacity (%d); oldest entry evicted",
+            _AST_DLQ.maxlen,
+        )
     _AST_DLQ.append(payload)
 
 

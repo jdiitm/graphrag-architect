@@ -9,7 +9,6 @@ from orchestrator.app.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitOpenError,
-    CircuitState,
 )
 
 
@@ -133,10 +132,10 @@ class TestDegradedError503WithRetryAfter:
                 return_value=mock_sem,
             ),
             patch(
-                "orchestrator.app.main._invoke_ingestion_graph",
-                side_effect=degraded,
-            ),
+                "orchestrator.app.main.ingestion_graph",
+            ) as mock_graph,
         ):
+            mock_graph.ainvoke = AsyncMock(side_effect=degraded)
             response = await _ingest_sync([])
 
         assert response.status_code == 503
@@ -296,6 +295,36 @@ class TestDeadLetterQueueForFailedJobs:
         assert len(dlq) == 1
         assert dlq[0]["tenant_id"] == "test-tenant"
 
+    def test_dlq_is_bounded(self) -> None:
+        import orchestrator.app.graph_builder as gb
+
+        assert hasattr(gb._AST_DLQ, "maxlen"), (
+            "DLQ must be a bounded collection (e.g. collections.deque)"
+        )
+        assert gb._AST_DLQ.maxlen is not None
+        assert gb._AST_DLQ.maxlen > 0
+
+    def test_dlq_evicts_oldest_when_full(self) -> None:
+        from collections import deque
+
+        from orchestrator.app.graph_builder import (
+            enqueue_ast_dlq,
+            get_ast_dlq,
+        )
+        import orchestrator.app.graph_builder as gb
+
+        original = gb._AST_DLQ
+        gb._AST_DLQ = deque(maxlen=3)
+        try:
+            for i in range(5):
+                enqueue_ast_dlq({"index": i})
+            dlq = get_ast_dlq()
+            assert len(dlq) == 3
+            assert dlq[0]["index"] == 2
+            assert dlq[2]["index"] == 4
+        finally:
+            gb._AST_DLQ = original
+
 
 class TestBackwardCompatLocalMode:
 
@@ -313,8 +342,6 @@ class TestBackwardCompatLocalMode:
         }
 
         pool_was_used = []
-
-        original_get_pool = None
 
         def _tracking_pool():
             pool_was_used.append(True)

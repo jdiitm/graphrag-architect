@@ -329,7 +329,7 @@ async def _invoke_ingestion_graph(
         return await ingestion_graph.ainvoke(
             _build_ingestion_initial_state(raw_files)
         )
-    except CircuitOpenError:
+    except (CircuitOpenError, IngestionDegradedError):
         raise
     except Exception as exc:
         logger.exception("Ingestion graph failed")
