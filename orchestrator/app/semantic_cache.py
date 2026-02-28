@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
@@ -39,6 +40,7 @@ class CacheConfig:
     min_threshold: float = 0.85
     max_threshold: float = 0.98
     density_sensitivity: float = 0.15
+    hash_dimensions: Optional[int] = None
 
 
 _NEUTRAL_MARGIN = 0.5
@@ -114,9 +116,66 @@ def _vectorized_cosine_similarity(a: List[float], b: List[float]) -> float:
         return _cosine_similarity(a, b)
 
 
-def _embedding_hash(embedding: List[float]) -> str:
-    raw = "|".join(f"{v:.6f}" for v in embedding[:32])
+def _embedding_hash(
+    embedding: List[float],
+    hash_dimensions: Optional[int] = None,
+) -> str:
+    dims = embedding[:hash_dimensions] if hash_dimensions is not None else embedding
+    raw = "|".join(f"{v:.6f}" for v in dims)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+_FILLER_PATTERNS: List[re.Pattern[str]] = [
+    re.compile(r"\bcan you tell me\b", re.IGNORECASE),
+    re.compile(r"\bcould you tell me\b", re.IGNORECASE),
+    re.compile(r"\bplease show me\b", re.IGNORECASE),
+    re.compile(r"\bplease tell me\b", re.IGNORECASE),
+    re.compile(r"\bshow me\b", re.IGNORECASE),
+    re.compile(r"\btell me\b", re.IGNORECASE),
+    re.compile(r"\bi want to know\b", re.IGNORECASE),
+    re.compile(r"\bi would like to know\b", re.IGNORECASE),
+    re.compile(r"\bcan you\b", re.IGNORECASE),
+    re.compile(r"\bcould you\b", re.IGNORECASE),
+    re.compile(r"\bplease\b", re.IGNORECASE),
+]
+
+_QUESTION_SYNONYMS: List[Tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bwhich\b", re.IGNORECASE), "what"),
+    (re.compile(r"\bwhat are the\b", re.IGNORECASE), "what"),
+    (re.compile(r"(?<!-)\bcalls\b(?!-)", re.IGNORECASE), "call"),
+    (re.compile(r"(?<!-)\bservices\b(?!-)", re.IGNORECASE), "service"),
+    (re.compile(r"(?<!-)\bdepends\b(?!-)", re.IGNORECASE), "depend"),
+]
+
+_WHITESPACE_COLLAPSE = re.compile(r"\s+")
+
+
+def normalize_query(query: str) -> str:
+    if not query or not query.strip():
+        return ""
+    text = query.strip().lower()
+    text = re.sub(r"[?!.,;:]+$", "", text)
+    for pattern in _FILLER_PATTERNS:
+        text = pattern.sub("", text)
+    for pattern, replacement in _QUESTION_SYNONYMS:
+        text = pattern.sub(replacement, text)
+    text = _WHITESPACE_COLLAPSE.sub(" ", text).strip()
+    return text
+
+
+@dataclass(frozen=True)
+class CacheMetrics:
+    hits: int
+    misses: int
+    evictions: int
+    size: int
+
+    @property
+    def hit_ratio(self) -> float:
+        total = self.hits + self.misses
+        if total == 0:
+            return 0.0
+        return self.hits / total
 
 
 class _InflightRequest:
@@ -179,7 +238,8 @@ class SemanticQueryCache:
         if cached is not None:
             return cached, False
 
-        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+        hdim = self._config.hash_dimensions
+        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
 
         inflight = self.get_inflight(key_hash)
         if inflight is not None:
@@ -201,7 +261,8 @@ class SemanticQueryCache:
         failed: bool = False,
         acl_key: str = "",
     ) -> None:
-        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+        hdim = self._config.hash_dimensions
+        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
         inflight = self._inflight.pop(key_hash, None)
         if inflight is not None:
             inflight.complete(failed=failed)
@@ -274,13 +335,18 @@ class SemanticQueryCache:
         self._evict_expired()
         self._enforce_max_size()
 
+        normalized = normalize_query(query)
+        if normalized:
+            query = normalized
+
         ttl = self._config.default_ttl_seconds
         if complexity and self._config.ttl_by_complexity:
             ttl = self._config.ttl_by_complexity.get(complexity, ttl)
 
         topo_hash = compute_topology_hash(node_ids) if node_ids else ""
 
-        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+        hdim = self._config.hash_dimensions
+        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
         if key_hash in self._entries:
             self._remove_node_tags_for_key(key_hash)
         entry = CacheEntry(
@@ -408,6 +474,14 @@ class SemanticQueryCache:
             max_size=self._config.max_entries,
         )
 
+    def metrics(self) -> CacheMetrics:
+        return CacheMetrics(
+            hits=self._hits,
+            misses=self._misses,
+            evictions=self._evictions,
+            size=len(self._entries),
+        )
+
     def _evict_expired(self) -> None:
         expired = [k for k, v in self._entries.items() if v.is_expired]
         for k in expired:
@@ -441,7 +515,8 @@ class RedisSemanticQueryCache:
         self._redis = create_async_redis(redis_url, password=password, db=db)
         self._ttl = ttl_seconds
         self._prefix = key_prefix
-        self._l1 = SemanticQueryCache(config=config)
+        self._cache_config = config or CacheConfig()
+        self._l1 = SemanticQueryCache(config=self._cache_config)
 
     @property
     def generation(self) -> int:
@@ -465,7 +540,8 @@ class RedisSemanticQueryCache:
         acl_key: str = "",
     ) -> Optional[Dict[str, Any]]:
         try:
-            key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+            hdim = self._cache_config.hash_dimensions
+            key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
             redis_key = f"{self._prefix}{key_hash}"
             raw = await self._redis.get(redis_key)
             if raw is None:
@@ -507,7 +583,8 @@ class RedisSemanticQueryCache:
         if redis_hit is not None:
             return redis_hit, False
 
-        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+        hdim = self._cache_config.hash_dimensions
+        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
         inflight = self._l1.get_inflight(key_hash)
         if inflight is not None:
             succeeded = await inflight.wait()
@@ -555,11 +632,15 @@ class RedisSemanticQueryCache:
             result=result, tenant_id=tenant_id, complexity=complexity,
             node_ids=node_ids, acl_key=acl_key,
         )
-        key_hash = _embedding_hash(query_embedding) + "|" + acl_key
+        hdim = self._cache_config.hash_dimensions
+        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
+        payload_embedding = (
+            query_embedding[:hdim] if hdim is not None else query_embedding
+        )
         try:
             payload = json.dumps({
                 "query": query,
-                "embedding": query_embedding[:32],
+                "embedding": payload_embedding,
                 "result": result,
                 "tenant_id": tenant_id,
                 "acl_key": acl_key,
