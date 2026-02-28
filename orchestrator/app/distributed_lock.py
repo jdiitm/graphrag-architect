@@ -160,13 +160,26 @@ class LocalFallbackSemaphore:
 
 
 class BoundedTaskSet:
-    def __init__(self, max_tasks: int = 50) -> None:
+    def __init__(
+        self,
+        max_tasks: int = 50,
+        on_overflow: Any = None,
+    ) -> None:
         self._max = max_tasks
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._on_overflow = on_overflow
+        self._overflow_count = 0
+
+    @property
+    def overflow_count(self) -> int:
+        return self._overflow_count
 
     def try_add(self, task: asyncio.Task[Any]) -> bool:
         self._tasks = {t for t in self._tasks if not t.done()}
         if len(self._tasks) >= self._max:
+            self._overflow_count += 1
+            if self._on_overflow is not None:
+                self._on_overflow()
             task.cancel()
             return False
         self._tasks.add(task)

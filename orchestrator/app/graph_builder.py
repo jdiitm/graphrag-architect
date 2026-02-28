@@ -131,14 +131,41 @@ def resolve_vector_collection(tenant_id: Optional[str] = None) -> str:
 
 _VECTOR_OUTBOX = VectorSyncOutbox()
 
-_COALESCING_OUTBOX = CoalescingOutbox()
+_DEFAULT_COALESCING_MAX_ENTRIES = 500
+
+
+def _spillover_to_vector_outbox(
+    events: List[VectorSyncEvent],
+) -> None:
+    for event in events:
+        _VECTOR_OUTBOX.enqueue(event)
+
+
+_COALESCING_OUTBOX = CoalescingOutbox(
+    max_entries=_DEFAULT_COALESCING_MAX_ENTRIES,
+    spillover_fn=_spillover_to_vector_outbox,
+)
 
 
 def _coalescing_enabled() -> bool:
     return os.environ.get("OUTBOX_COALESCING", "true").lower() == "true"
 
 
-_BACKGROUND_TASKS = BoundedTaskSet(max_tasks=50)
+def _on_background_task_overflow() -> None:
+    spilled = _COALESCING_OUTBOX.flush()
+    for event in spilled:
+        _VECTOR_OUTBOX.enqueue(event)
+    if spilled:
+        logger.warning(
+            "Flushed %d coalescing events to outbox on task overflow",
+            len(spilled),
+        )
+
+
+_BACKGROUND_TASKS = BoundedTaskSet(
+    max_tasks=50,
+    on_overflow=_on_background_task_overflow,
+)
 
 
 def create_outbox_drainer(
@@ -691,6 +718,43 @@ async def _safe_drain_vector_outbox() -> None:
         await drain_vector_outbox()
     except Exception as exc:
         logger.warning("Background vector drain failed (non-fatal): %s", exc)
+
+
+_DEFAULT_PERIODIC_DRAIN_INTERVAL = 10.0
+
+
+class PeriodicVectorDrainer:
+    def __init__(
+        self,
+        drain_fn: Any = None,
+        interval_seconds: float = _DEFAULT_PERIODIC_DRAIN_INTERVAL,
+    ) -> None:
+        self._drain_fn = drain_fn or _safe_drain_vector_outbox
+        self._interval = interval_seconds
+        self._task: Optional[asyncio.Task[None]] = None
+        self._stopped = False
+
+    def start(self) -> asyncio.Task[None]:
+        self._stopped = False
+        self._task = asyncio.create_task(self._loop())
+        return self._task
+
+    def stop(self) -> None:
+        self._stopped = True
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+
+    async def _loop(self) -> None:
+        while not self._stopped:
+            try:
+                await self._drain_fn()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning(
+                    "Periodic vector drain error (non-fatal): %s", exc,
+                )
+            await asyncio.sleep(self._interval)
 
 
 async def commit_to_neo4j(state: IngestionState) -> dict:
