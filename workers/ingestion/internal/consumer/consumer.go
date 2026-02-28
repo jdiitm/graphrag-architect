@@ -42,7 +42,9 @@ type Consumer struct {
 	ackTimeout          time.Duration
 	maxBatchWait        time.Duration
 	healthThreshold     int
+	maxInflight         int
 	consecutiveTimeouts atomic.Int32
+	inflightCount       atomic.Int32
 }
 
 type ConsumerOption func(*Consumer)
@@ -68,6 +70,12 @@ func WithMaxBatchWait(d time.Duration) ConsumerOption {
 func WithHealthThreshold(n int) ConsumerOption {
 	return func(c *Consumer) {
 		c.healthThreshold = n
+	}
+}
+
+func WithMaxInflight(n int) ConsumerOption {
+	return func(c *Consumer) {
+		c.maxInflight = n
 	}
 }
 
@@ -109,6 +117,17 @@ func (c *Consumer) Run(ctx context.Context) error {
 		pollCtx, pollSpan := telemetry.StartPollSpan(batchCtx, len(batch))
 
 		for _, job := range batch {
+			if c.maxInflight > 0 {
+			backpressureWait:
+				for int(c.inflightCount.Load()) >= c.maxInflight {
+					select {
+					case <-pollCtx.Done():
+						break backpressureWait
+					case <-c.acks:
+						c.inflightCount.Add(-1)
+					}
+				}
+			}
 			select {
 			case <-pollCtx.Done():
 				pollSpan.End()
@@ -118,10 +137,17 @@ func (c *Consumer) Run(ctx context.Context) error {
 				}
 				continue
 			case c.jobs <- job:
+				if c.maxInflight > 0 {
+					c.inflightCount.Add(1)
+				}
 			}
 		}
 
-		if err := c.awaitAcks(pollCtx, len(batch)); err != nil {
+		acksNeeded := len(batch)
+		if c.maxInflight > 0 {
+			acksNeeded = int(c.inflightCount.Load())
+		}
+		if err := c.awaitAcks(pollCtx, acksNeeded); err != nil {
 			batchCancel()
 			if errors.Is(err, ErrAckTimeout) || errors.Is(err, context.DeadlineExceeded) {
 				c.consecutiveTimeouts.Add(1)
@@ -137,6 +163,9 @@ func (c *Consumer) Run(ctx context.Context) error {
 		}
 
 		c.consecutiveTimeouts.Store(0)
+		if c.maxInflight > 0 {
+			c.inflightCount.Store(0)
+		}
 		commitCtx, commitSpan := telemetry.StartCommitSpan(pollCtx)
 		if err := c.source.Commit(commitCtx); err != nil {
 			commitSpan.End()
