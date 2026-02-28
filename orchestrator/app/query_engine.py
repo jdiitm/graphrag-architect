@@ -33,7 +33,10 @@ from orchestrator.app.context_manager import (
     format_context_for_prompt,
     truncate_context_topology,
 )
-from orchestrator.app.prompt_sanitizer import sanitize_query_input
+from orchestrator.app.prompt_sanitizer import (
+    PromptInjectionClassifier,
+    sanitize_query_input,
+)
 from orchestrator.app.graph_embeddings import compute_centroid, rerank_with_structural
 from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.density_reranker import DensityReranker, DensityRerankerConfig
@@ -89,6 +92,7 @@ _TEMPLATE_REGISTRY = TemplateHashRegistry(_TEMPLATE_CATALOG)
 _SANDBOX = SandboxedQueryExecutor(registry=_TEMPLATE_REGISTRY)
 _SUBGRAPH_CACHE = create_subgraph_cache()
 _SEMANTIC_CACHE = create_semantic_cache()
+_INJECTION_CLASSIFIER = PromptInjectionClassifier()
 
 _VS_CFG = VectorStoreConfig.from_env()
 _VECTOR_STORE = create_vector_store(
@@ -285,12 +289,35 @@ def _build_llm_judge_fn() -> Optional[Any]:
     return _judge
 
 
+def _prompt_guardrails_enabled() -> bool:
+    return os.environ.get("PROMPT_GUARDRAILS_ENABLED", "true").lower() != "false"
+
+
+def _serialize_context_for_classification(
+    context: List[Dict[str, Any]],
+) -> str:
+    return " ".join(
+        str(v) for item in context for v in item.values()
+    )
+
+
 async def _raw_llm_synthesize(
     query: str,
     context: List[Dict[str, Any]],
 ) -> str:
     llm = _build_llm()
     sanitized = sanitize_query_input(query)
+
+    if _prompt_guardrails_enabled():
+        raw_text = _serialize_context_for_classification(context)
+        injection_result = _INJECTION_CLASSIFIER.classify(raw_text)
+        if injection_result.is_flagged:
+            _query_logger.warning(
+                "Prompt injection detected in context: score=%.2f patterns=%s",
+                injection_result.score,
+                injection_result.detected_patterns,
+            )
+
     context_block = format_context_for_prompt(context)
     messages = [
         SystemMessage(
@@ -321,6 +348,17 @@ async def _raw_llm_synthesize_stream(
 ) -> AsyncIterator[str]:
     llm = _build_llm()
     sanitized = sanitize_query_input(query)
+
+    if _prompt_guardrails_enabled():
+        raw_text = _serialize_context_for_classification(context)
+        injection_result = _INJECTION_CLASSIFIER.classify(raw_text)
+        if injection_result.is_flagged:
+            _query_logger.warning(
+                "Prompt injection detected in streaming context: score=%.2f patterns=%s",
+                injection_result.score,
+                injection_result.detected_patterns,
+            )
+
     context_block = format_context_for_prompt(context)
     messages = [
         SystemMessage(
