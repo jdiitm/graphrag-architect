@@ -6,6 +6,7 @@ import hmac
 import html
 import re
 import secrets
+import unicodedata
 from dataclasses import dataclass
 from typing import FrozenSet, List, Set, Tuple
 
@@ -247,6 +248,129 @@ class ContentFirewall:
         for pattern, _, replacement in self._patterns:
             result = pattern.sub(replacement, result)
         return result
+
+
+_CLASSIFIER_RULES: List[
+    Tuple[re.Pattern[str], str, float]
+] = [
+    (re.compile(
+        r"ignore\s+(all\s+)?(previous|above|prior)"
+        r"\s+(instructions?|rules?|prompts?)",
+        re.IGNORECASE,
+    ), "instruction_override", 0.4),
+    (re.compile(
+        r"disregard\s+(all\s+)?(previous|above|prior)?\s*instructions?",
+        re.IGNORECASE,
+    ), "instruction_override", 0.4),
+    (re.compile(
+        r"forget\s+(all\s+)?(your\s+)?instructions?",
+        re.IGNORECASE,
+    ), "instruction_override", 0.4),
+    (re.compile(
+        r"new\s+instructions?\s*:",
+        re.IGNORECASE,
+    ), "instruction_override", 0.4),
+
+    (re.compile(
+        r"you\s+are\s+now\b",
+        re.IGNORECASE,
+    ), "role_play", 0.35),
+    (re.compile(
+        r"act\s+as\s+(if\s+)?you\s+(are|were)\s+",
+        re.IGNORECASE,
+    ), "role_play", 0.35),
+    (re.compile(
+        r"pretend\s+(that\s+)?you\s+(are|were)\s+",
+        re.IGNORECASE,
+    ), "role_play", 0.35),
+
+    (re.compile(
+        r"^\s*SYSTEM\s*:",
+        re.IGNORECASE | re.MULTILINE,
+    ), "system_mimicry", 0.35),
+    (re.compile(
+        r"\[SYSTEM\]",
+        re.IGNORECASE,
+    ), "system_mimicry", 0.35),
+    (re.compile(
+        r"^#{1,3}\s+System\s*(Message)?\s*$",
+        re.IGNORECASE | re.MULTILINE,
+    ), "system_mimicry", 0.35),
+    (re.compile(
+        r"<\|im_start\|>",
+    ), "system_mimicry", 0.4),
+    (re.compile(
+        r"<\|im_end\|>",
+    ), "system_mimicry", 0.4),
+    (re.compile(
+        r"\[/?INST\]",
+    ), "system_mimicry", 0.35),
+    (re.compile(
+        r"<{2}/?SYS>{2}",
+    ), "system_mimicry", 0.4),
+
+    (re.compile(
+        r"[A-Za-z0-9+/]{40,}={0,2}",
+    ), "encoding_obfuscation", 0.35),
+    (re.compile(
+        r"(\\x[0-9a-fA-F]{2}){4,}",
+    ), "encoding_obfuscation", 0.35),
+    (re.compile(
+        r"(\\u[0-9a-fA-F]{4}){4,}",
+    ), "encoding_obfuscation", 0.35),
+
+    (re.compile(
+        r"<\s*/?\s*(?:graph_context|user_query|system|assistant)\s*>",
+        re.IGNORECASE,
+    ), "delimiter_escape", 0.4),
+    (re.compile(
+        r"GRAPHCTX_[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*",
+        re.IGNORECASE,
+    ), "delimiter_escape", 0.4),
+]
+
+
+@dataclass(frozen=True)
+class InjectionResult:
+    score: float
+    detected_patterns: List[str]
+    is_flagged: bool
+
+
+class PromptInjectionClassifier:
+    _threshold: float
+    _patterns: List[Tuple[re.Pattern[str], str, float]]
+
+    def __init__(self, threshold: float = 0.3) -> None:
+        self._threshold = threshold
+        self._patterns = _CLASSIFIER_RULES
+
+    def classify(self, text: str) -> InjectionResult:
+        text = unicodedata.normalize("NFKC", text)
+        total_score = 0.0
+        detected: List[str] = []
+        for pattern, name, weight in self._patterns:
+            if pattern.search(text):
+                total_score += weight
+                detected.append(name)
+        capped_score = min(total_score, 1.0)
+        return InjectionResult(
+            score=capped_score,
+            detected_patterns=detected,
+            is_flagged=capped_score > self._threshold,
+        )
+
+    def strip_flagged_content(
+        self, text: str, result: InjectionResult,
+    ) -> str:
+        if not result.is_flagged:
+            return text
+        matched_categories = set(result.detected_patterns)
+        cleaned = text
+        for pattern, name, _ in self._patterns:
+            if name in matched_categories:
+                cleaned = pattern.sub("[BLOCKED]", cleaned)
+        return cleaned
 
 
 class HMACDelimiter:
