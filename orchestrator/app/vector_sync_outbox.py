@@ -82,6 +82,11 @@ class VectorSyncOutbox:
 _DEFAULT_COALESCE_WINDOW: float = 5.0
 
 
+_EntryMap = Dict[
+    Tuple[str, Tuple[str, ...]], Tuple["VectorSyncEvent", float]
+]
+
+
 class CoalescingOutbox:
     """In-memory outbox that deduplicates events within a time window.
 
@@ -89,19 +94,22 @@ class CoalescingOutbox:
     coalesced: only the latest event survives.  ``drain_pending``
     returns events whose age exceeds ``window_seconds`` (default 5 s).
 
-    Because of the window delay, events enqueued during an ingestion
-    call are **not** flushed by that same call's drain.  They remain
-    in-memory until a subsequent ``drain_vector_outbox`` invocation
-    (typically the next ingest or a periodic background sweep).
+    When ``max_entries`` is set and the buffer exceeds that limit after
+    an enqueue, the oldest entries are evicted and forwarded to
+    ``spillover_fn`` so they can be persisted to a durable store
+    instead of being lost on pod restart.
     """
 
     def __init__(
-        self, window_seconds: float = _DEFAULT_COALESCE_WINDOW,
+        self,
+        window_seconds: float = _DEFAULT_COALESCE_WINDOW,
+        max_entries: int = 0,
+        spillover_fn: Any = None,
     ) -> None:
         self._window_seconds = window_seconds
-        self._entries: Dict[
-            Tuple[str, Tuple[str, ...]], Tuple[VectorSyncEvent, float]
-        ] = {}
+        self._max_entries = max_entries
+        self._spillover_fn = spillover_fn
+        self._entries: _EntryMap = {}
 
     @staticmethod
     def _dedup_key(
@@ -122,6 +130,23 @@ class CoalescingOutbox:
     def enqueue(self, event: VectorSyncEvent) -> None:
         key = self._dedup_key(event)
         self._entries[key] = (event, time.monotonic())
+        self._enforce_cap()
+
+    def _enforce_cap(self) -> None:
+        if self._max_entries <= 0 or self._spillover_fn is None:
+            return
+        if len(self._entries) <= self._max_entries:
+            return
+        sorted_keys = sorted(
+            self._entries.keys(),
+            key=lambda k: self._entries[k][1],
+        )
+        excess = len(self._entries) - self._max_entries
+        spilled: List[VectorSyncEvent] = []
+        for key in sorted_keys[:excess]:
+            spilled.append(self._entries.pop(key)[0])
+        if spilled:
+            self._spillover_fn(spilled)
 
     def flush(self) -> List[VectorSyncEvent]:
         events = [entry[0] for entry in self._entries.values()]
@@ -131,9 +156,7 @@ class CoalescingOutbox:
     def drain_pending(self) -> List[VectorSyncEvent]:
         now = time.monotonic()
         ready: List[VectorSyncEvent] = []
-        remaining: Dict[
-            Tuple[str, Tuple[str, ...]], Tuple[VectorSyncEvent, float]
-        ] = {}
+        remaining: _EntryMap = {}
         for key, (event, enqueued_at) in self._entries.items():
             if now - enqueued_at >= self._window_seconds:
                 ready.append(event)
