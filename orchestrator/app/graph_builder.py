@@ -61,12 +61,16 @@ _VECTOR_COLLECTION = "services"
 
 _PROCESS_POOL_MAX_WORKERS = int(os.environ.get("AST_POOL_WORKERS", "4"))
 
+_USE_REMOTE_AST: bool = os.environ.get("USE_REMOTE_AST", "false").lower() == "true"
+
 
 class _ASTPoolHolder:
+    """Deprecated: use Go worker AST extraction via Kafka (USE_REMOTE_AST=true)."""
     instance: Optional[concurrent.futures.ProcessPoolExecutor] = None
 
 
 def _get_process_pool() -> concurrent.futures.ProcessPoolExecutor:
+    """Deprecated: use Go worker AST extraction via Kafka (USE_REMOTE_AST=true)."""
     if _ASTPoolHolder.instance is None:
         _ASTPoolHolder.instance = concurrent.futures.ProcessPoolExecutor(
             max_workers=_PROCESS_POOL_MAX_WORKERS,
