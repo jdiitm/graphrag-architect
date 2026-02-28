@@ -27,7 +27,11 @@ from orchestrator.app.extraction_models import (
 )
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.manifest_parser import parse_all_manifests
-from orchestrator.app.circuit_breaker import CircuitOpenError
+from orchestrator.app.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitOpenError,
+)
 from orchestrator.app.entity_resolver import EntityResolver
 from orchestrator.app.neo4j_client import GraphRepository
 from orchestrator.app.neo4j_pool import get_driver
@@ -66,12 +70,10 @@ _USE_REMOTE_AST: bool = os.environ.get("USE_REMOTE_AST", "false").lower() == "tr
 
 
 class _ASTPoolHolder:
-    """Deprecated: use Go worker AST extraction via Kafka (USE_REMOTE_AST=true)."""
     instance: Optional[concurrent.futures.ProcessPoolExecutor] = None
 
 
 def _get_process_pool() -> concurrent.futures.ProcessPoolExecutor:
-    """Deprecated: use Go worker AST extraction via Kafka (USE_REMOTE_AST=true)."""
     if _ASTPoolHolder.instance is None:
         _ASTPoolHolder.instance = concurrent.futures.ProcessPoolExecutor(
             max_workers=_PROCESS_POOL_MAX_WORKERS,
@@ -79,8 +81,39 @@ def _get_process_pool() -> concurrent.futures.ProcessPoolExecutor:
     return _ASTPoolHolder.instance
 
 
+class IngestionDegradedError(RuntimeError):
+    def __init__(
+        self, message: str, retry_after_seconds: int = 30,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
 class IngestRejectionError(RuntimeError):
     pass
+
+
+_DEFAULT_AST_BREAKER_FAILURE_THRESHOLD = 3
+_DEFAULT_AST_BREAKER_RECOVERY_TIMEOUT = 30.0
+
+_ast_worker_breaker = CircuitBreaker(
+    config=CircuitBreakerConfig(
+        failure_threshold=_DEFAULT_AST_BREAKER_FAILURE_THRESHOLD,
+        recovery_timeout=_DEFAULT_AST_BREAKER_RECOVERY_TIMEOUT,
+        jitter_factor=0.0,
+    ),
+    name="ast-worker",
+)
+
+_AST_DLQ: List[Dict[str, Any]] = []
+
+
+def enqueue_ast_dlq(payload: Dict[str, Any]) -> None:
+    _AST_DLQ.append(payload)
+
+
+def get_ast_dlq() -> List[Dict[str, Any]]:
+    return list(_AST_DLQ)
 
 
 def resolve_vector_collection(tenant_id: Optional[str] = None) -> str:
@@ -309,6 +342,18 @@ def _run_ast_extraction(
     return go_extractor.extract_all(pending), py_extractor.extract_all(pending)
 
 
+async def _run_ast_via_remote(
+    pending: List[Dict[str, str]],
+) -> Tuple[Any, Any]:
+    async def _remote_call() -> Tuple[Any, Any]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, _run_ast_extraction, pending,
+        )
+
+    return await _ast_worker_breaker.call(_remote_call)
+
+
 async def parse_source_ast(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.parse_source_ast"):
@@ -316,10 +361,28 @@ async def parse_source_ast(state: IngestionState) -> dict:
         raw_files = state.get("raw_files", [])
         checkpoint = _load_or_create_checkpoint(state, raw_files)
         pending = checkpoint.filter_files(raw_files, FileStatus.PENDING)
-        loop = asyncio.get_running_loop()
-        go_result, py_result = await loop.run_in_executor(
-            _get_process_pool(), _run_ast_extraction, pending,
-        )
+
+        if _USE_REMOTE_AST:
+            try:
+                go_result, py_result = await _run_ast_via_remote(pending)
+            except (CircuitOpenError, ConnectionError, OSError) as exc:
+                tenant_id = state.get("tenant_id", "default")
+                enqueue_ast_dlq({
+                    "raw_files": pending,
+                    "tenant_id": tenant_id,
+                })
+                raise IngestionDegradedError(
+                    f"Go AST workers unavailable: {exc}",
+                    retry_after_seconds=int(
+                        _DEFAULT_AST_BREAKER_RECOVERY_TIMEOUT
+                    ),
+                ) from exc
+        else:
+            loop = asyncio.get_running_loop()
+            go_result, py_result = await loop.run_in_executor(
+                _get_process_pool(), _run_ast_extraction, pending,
+            )
+
         extracted_paths = (
             [f["path"] for f in pending if f["path"].endswith(".go")]
             + [f["path"] for f in pending if f["path"].endswith(".py")]
