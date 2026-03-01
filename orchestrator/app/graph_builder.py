@@ -63,7 +63,9 @@ from orchestrator.app.distributed_lock import (
     create_ingestion_lock,
 )
 
-from orchestrator.app.config import ASTPoolConfig
+from orchestrator.app.config import ASTPoolConfig, GRPCASTConfig
+from orchestrator.app.ast_grpc_client import GRPCASTClient
+from orchestrator.app.ast_result_consumer import ASTResultConsumer
 
 _VECTOR_COLLECTION = "services"
 
@@ -426,6 +428,62 @@ async def _run_ast_via_remote(
     return await _ast_worker_breaker.call(_remote_call)
 
 
+class _GRPCASTClientHolder:
+    instance: Optional[GRPCASTClient] = None
+
+
+def _get_grpc_ast_client() -> GRPCASTClient:
+    if _GRPCASTClientHolder.instance is None:
+        cfg = GRPCASTConfig.from_env()
+        _GRPCASTClientHolder.instance = GRPCASTClient(config=cfg)
+    return _GRPCASTClientHolder.instance
+
+
+def _grpc_ast_endpoint_configured() -> bool:
+    return bool(GRPCASTConfig.from_env().endpoint)
+
+
+def _build_nodes_from_ast_results(
+    go_result: Any, py_result: Any, tenant_id: str,
+) -> List[Any]:
+    nodes: List[Any] = []
+    for ast_svc in go_result.services + py_result.services:
+        nodes.append(ServiceNode(
+            id=ast_svc.service_id,
+            name=ast_svc.name,
+            language=ast_svc.language,
+            framework=ast_svc.framework,
+            opentelemetry_enabled=ast_svc.opentelemetry_enabled,
+            confidence=1.0,
+            tenant_id=tenant_id,
+        ))
+    for ast_call in go_result.calls + py_result.calls:
+        nodes.append(CallsEdge(
+            source_service_id=ast_call.source_service_id,
+            target_service_id=ast_call.target_hint,
+            protocol=ast_call.protocol,
+            confidence=1.0,
+            tenant_id=tenant_id,
+        ))
+    return nodes
+
+
+async def _extract_via_grpc(
+    pending: List[Dict[str, str]], tenant_id: str,
+) -> List[Any]:
+    client = _get_grpc_ast_client()
+    file_pairs = [(f["path"], f["content"]) for f in pending]
+    ast_results = await client.extract_batch(file_pairs)
+    nodes: List[Any] = []
+    for result in ast_results:
+        extraction = ASTResultConsumer.convert_to_extraction_models(
+            result, tenant_id=tenant_id,
+        )
+        nodes.extend(extraction.services)
+        nodes.extend(extraction.calls)
+    return nodes
+
+
 async def parse_source_ast(state: IngestionState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("ingestion.parse_source_ast"):
@@ -433,12 +491,25 @@ async def parse_source_ast(state: IngestionState) -> dict:
         raw_files = state.get("raw_files", [])
         checkpoint = _load_or_create_checkpoint(state, raw_files)
         pending = checkpoint.filter_files(raw_files, FileStatus.PENDING)
+        tenant_id = state.get("tenant_id", "default")
 
-        if _USE_REMOTE_AST:
+        if _USE_REMOTE_AST and _grpc_ast_endpoint_configured():
+            try:
+                nodes = await _extract_via_grpc(pending, tenant_id)
+            except (CircuitOpenError, ConnectionError, OSError) as exc:
+                await enqueue_ast_dlq({
+                    "raw_files": pending,
+                    "tenant_id": tenant_id,
+                })
+                grpc_cfg = GRPCASTConfig.from_env()
+                raise IngestionDegradedError(
+                    f"gRPC AST service unavailable: {exc}",
+                    retry_after_seconds=int(grpc_cfg.timeout_seconds),
+                ) from exc
+        elif _USE_REMOTE_AST:
             try:
                 go_result, py_result = await _run_ast_via_remote(pending)
             except (CircuitOpenError, ConnectionError, OSError) as exc:
-                tenant_id = state.get("tenant_id", "default")
                 await enqueue_ast_dlq({
                     "raw_files": pending,
                     "tenant_id": tenant_id,
@@ -449,10 +520,16 @@ async def parse_source_ast(state: IngestionState) -> dict:
                         _DEFAULT_AST_BREAKER_RECOVERY_TIMEOUT
                     ),
                 ) from exc
+            nodes = _build_nodes_from_ast_results(
+                go_result, py_result, tenant_id,
+            )
         else:
             loop = asyncio.get_running_loop()
             go_result, py_result = await loop.run_in_executor(
                 _get_process_pool(), _run_ast_extraction, pending,
+            )
+            nodes = _build_nodes_from_ast_results(
+                go_result, py_result, tenant_id,
             )
 
         extracted_paths = (
@@ -460,26 +537,6 @@ async def parse_source_ast(state: IngestionState) -> dict:
             + [f["path"] for f in pending if f["path"].endswith(".py")]
         )
         checkpoint.mark(extracted_paths, FileStatus.EXTRACTED)
-        tenant_id = state.get("tenant_id", "default")
-        nodes: List[Any] = []
-        for ast_svc in go_result.services + py_result.services:
-            nodes.append(ServiceNode(
-                id=ast_svc.service_id,
-                name=ast_svc.name,
-                language=ast_svc.language,
-                framework=ast_svc.framework,
-                opentelemetry_enabled=ast_svc.opentelemetry_enabled,
-                confidence=1.0,
-                tenant_id=tenant_id,
-            ))
-        for ast_call in go_result.calls + py_result.calls:
-            nodes.append(CallsEdge(
-                source_service_id=ast_call.source_service_id,
-                target_service_id=ast_call.target_hint,
-                protocol=ast_call.protocol,
-                confidence=1.0,
-                tenant_id=tenant_id,
-            ))
         INGESTION_DURATION.record(
             (time.monotonic() - start) * 1000, {"node": "parse_source_ast"}
         )
