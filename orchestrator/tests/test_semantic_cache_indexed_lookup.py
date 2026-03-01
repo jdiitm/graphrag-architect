@@ -202,19 +202,13 @@ class TestIndexMaintainedThroughLifecycle:
         assert len(scope_entries) == 3
 
 
-class TestRedisInvalidationUsesLuaScript:
+class TestRedisInvalidationUsesStreamPublish:
 
     @pytest.mark.asyncio
-    async def test_invalidate_by_nodes_uses_lua_not_smembers(
+    async def test_invalidate_by_nodes_publishes_to_stream(
         self,
     ) -> None:
         mock_redis = AsyncMock()
-        mock_redis.smembers = AsyncMock(return_value=set())
-        mock_redis.delete = AsyncMock()
-        mock_lua_script = AsyncMock(return_value=2)
-        mock_redis.register_script = MagicMock(
-            return_value=mock_lua_script,
-        )
 
         with patch(
             "orchestrator.app.semantic_cache"
@@ -233,15 +227,12 @@ class TestRedisInvalidationUsesLuaScript:
             )
             await cache.invalidate_by_nodes({"n1", "n2"})
 
+        mock_redis.xadd.assert_called_once()
         mock_redis.smembers.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_lua_script_registered_at_init(self) -> None:
+    async def test_stream_key_configured_at_init(self) -> None:
         mock_redis = AsyncMock()
-        mock_lua_script = AsyncMock(return_value=0)
-        mock_redis.register_script = MagicMock(
-            return_value=mock_lua_script,
-        )
 
         with patch(
             "orchestrator.app.semantic_cache"
@@ -250,25 +241,23 @@ class TestRedisInvalidationUsesLuaScript:
         ), patch(
             "orchestrator.app.semantic_cache.require_redis",
         ):
-            RedisSemanticQueryCache(
+            cache = RedisSemanticQueryCache(
                 redis_url="redis://fake:6379",
                 config=CacheConfig(similarity_threshold=0.9),
             )
 
-        mock_redis.register_script.assert_called_once()
+        assert hasattr(cache, "_stream_key")
+        assert "invalidation:stream" in cache._stream_key
+        mock_redis.register_script.assert_not_called()
 
 
-class TestRedisInvalidationAtomicity:
+class TestRedisInvalidationStreamPublish:
 
     @pytest.mark.asyncio
-    async def test_single_script_call_for_multiple_nodes(
+    async def test_single_xadd_for_multiple_nodes(
         self,
     ) -> None:
         mock_redis = AsyncMock()
-        mock_lua_script = AsyncMock(return_value=3)
-        mock_redis.register_script = MagicMock(
-            return_value=mock_lua_script,
-        )
 
         with patch(
             "orchestrator.app.semantic_cache"
@@ -295,22 +284,17 @@ class TestRedisInvalidationAtomicity:
             )
             await cache.invalidate_by_nodes({"n1", "n2"})
 
-        assert mock_lua_script.call_count == 1
+        assert mock_redis.xadd.call_count == 1
         mock_redis.smembers.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_partial_deletes_on_script_failure(
+    async def test_l1_invalidation_succeeds_on_stream_failure(
         self,
     ) -> None:
         mock_redis = AsyncMock()
-        mock_redis.smembers = AsyncMock(return_value=set())
-        mock_lua_script = AsyncMock(
+        mock_redis.xadd = AsyncMock(
             side_effect=ConnectionError("redis down"),
         )
-        mock_redis.register_script = MagicMock(
-            return_value=mock_lua_script,
-        )
-        mock_redis.delete = AsyncMock()
 
         with patch(
             "orchestrator.app.semantic_cache"
