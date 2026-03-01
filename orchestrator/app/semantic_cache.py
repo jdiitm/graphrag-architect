@@ -605,8 +605,11 @@ class CacheInvalidationWorker:
                 self._stream_key, self._consumer_group,
                 id="0", mkstream=True,
             )
-        except Exception:
-            logger.debug("Consumer group already exists or creation failed")
+        except Exception as exc:
+            if "BUSYGROUP" in str(exc):
+                logger.debug("Consumer group already exists")
+            else:
+                logger.warning("Consumer group creation failed: %s", exc)
 
     async def process_batch(self) -> int:
         messages = await self._redis.xreadgroup(
@@ -626,8 +629,23 @@ class CacheInvalidationWorker:
                 node_ids_raw = data.get("node_ids", "")
                 if not node_ids_raw:
                     continue
-                node_ids = json.loads(node_ids_raw)
-                total_invalidated += await self._invalidate_node_keys(node_ids)
+                try:
+                    node_ids: list[str] = json.loads(node_ids_raw)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Malformed node_ids JSON in message %s, skipping",
+                        msg_id,
+                    )
+                    continue
+                try:
+                    total_invalidated += await self._invalidate_node_keys(
+                        node_ids,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to invalidate keys for message %s",
+                        msg_id,
+                    )
 
         if message_ids:
             await self._redis.xack(
@@ -636,7 +654,7 @@ class CacheInvalidationWorker:
 
         return total_invalidated
 
-    async def _invalidate_node_keys(self, node_ids: list) -> int:
+    async def _invalidate_node_keys(self, node_ids: list[str]) -> int:
         count = 0
         for nid in node_ids:
             tag_key = f"{self._prefix}nodetag:{nid}"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -237,3 +237,90 @@ class TestWorkerBoundedBatchSize:
 
         xread_call = mock_redis.xreadgroup.call_args
         assert xread_call.kwargs.get("count") == batch_size
+
+
+class TestPoisonMessageResilience:
+
+    @pytest.mark.asyncio
+    async def test_poison_message_does_not_stall_worker(self) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.xreadgroup = AsyncMock(return_value=[
+            ("stream", [
+                ("msg-1", {"node_ids": "not valid json!!!"}),
+                ("msg-2", {"node_ids": json.dumps(["node-A"])}),
+            ]),
+        ])
+        mock_redis.sscan = AsyncMock(return_value=(0, ["key1"]))
+        mock_redis.unlink = AsyncMock()
+        mock_redis.xack = AsyncMock()
+
+        worker = CacheInvalidationWorker(
+            redis_conn=mock_redis,
+            key_prefix="graphrag:semcache:",
+        )
+        invalidated = await worker.process_batch()
+
+        mock_redis.xack.assert_called_once()
+        ack_args = mock_redis.xack.call_args[0]
+        assert "msg-1" in ack_args
+        assert "msg-2" in ack_args
+        assert invalidated >= 1
+
+
+class TestRedisErrorResilience:
+
+    @pytest.mark.asyncio
+    async def test_redis_error_in_invalidation_does_not_stall_worker(
+        self,
+    ) -> None:
+        mock_redis = AsyncMock()
+        mock_redis.xreadgroup = AsyncMock(return_value=[
+            ("stream", [
+                ("msg-1", {"node_ids": json.dumps(["node-bad"])}),
+                ("msg-2", {"node_ids": json.dumps(["node-good"])}),
+            ]),
+        ])
+        mock_redis.sscan = AsyncMock(side_effect=[
+            Exception("WRONGTYPE Operation against a key"),
+            (0, ["key1"]),
+        ])
+        mock_redis.unlink = AsyncMock()
+        mock_redis.xack = AsyncMock()
+
+        worker = CacheInvalidationWorker(
+            redis_conn=mock_redis,
+            key_prefix="graphrag:semcache:",
+        )
+        invalidated = await worker.process_batch()
+
+        mock_redis.xack.assert_called_once()
+        ack_args = mock_redis.xack.call_args[0]
+        assert "msg-1" in ack_args
+        assert "msg-2" in ack_args
+
+
+class TestSscanMultiPageCursor:
+
+    @pytest.mark.asyncio
+    async def test_sscan_multi_page_cursor(self) -> None:
+        mock_redis = AsyncMock()
+        event_data = {"node_ids": json.dumps(["node-P"])}
+        mock_redis.xreadgroup = AsyncMock(return_value=[
+            ("stream", [("msg-1", event_data)]),
+        ])
+        mock_redis.sscan = AsyncMock(side_effect=[
+            (42, ["key1", "key2"]),
+            (0, ["key3"]),
+        ])
+        mock_redis.unlink = AsyncMock()
+        mock_redis.xack = AsyncMock()
+
+        worker = CacheInvalidationWorker(
+            redis_conn=mock_redis,
+            key_prefix="graphrag:semcache:",
+        )
+        invalidated = await worker.process_batch()
+
+        assert mock_redis.sscan.call_count == 2
+        assert invalidated == 3
+        assert mock_redis.unlink.call_count == 3
