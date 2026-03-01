@@ -24,8 +24,8 @@ _DELETE_MUTATIONS = frozenset({"edge_tombstone", "node_delete"})
 class VectorSyncKafkaConsumer:
     def __init__(
         self,
-        transport: Any,
-        vector_deleter: Any,
+        transport: ConsumerTransport,
+        vector_deleter: VectorDeleter,
     ) -> None:
         self._transport = transport
         self._deleter = vector_deleter
