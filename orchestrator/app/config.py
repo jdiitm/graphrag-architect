@@ -374,3 +374,26 @@ class VectorSyncConfig:
                 "VECTOR_SYNC_KAFKA_TOPIC", "graph.mutations",
             ),
         )
+
+
+_VALID_AST_EXTRACTION_MODES = frozenset({"go", "local"})
+
+
+@dataclass(frozen=True)
+class ASTExtractionConfig:
+    mode: str = "go"
+
+    @classmethod
+    def from_env(cls) -> ASTExtractionConfig:
+        raw = os.environ.get("AST_EXTRACTION_MODE", "")
+        if raw:
+            mode = raw.lower()
+        else:
+            deployment = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
+            mode = "go" if deployment == "production" else "local"
+        if mode not in _VALID_AST_EXTRACTION_MODES:
+            raise ValueError(
+                f"AST_EXTRACTION_MODE must be one of "
+                f"{sorted(_VALID_AST_EXTRACTION_MODES)}, got: {mode!r}"
+            )
+        return cls(mode=mode)
