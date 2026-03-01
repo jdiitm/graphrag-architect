@@ -78,6 +78,8 @@ def build_traversal_neighbor_discovery() -> str:
         f"{acl}"
         "RETURN target.id AS target_id, target.name AS target_name, "
         "type(r) AS rel_type, labels(target)[0] AS target_label "
+        "ORDER BY coalesce(target.pagerank, 0) DESC, "
+        "coalesce(target.degree, 0) DESC, target.id "
         "LIMIT $limit"
     )
 
@@ -111,5 +113,6 @@ def build_traversal_batched_neighbor() -> str:
         "labels(target)[0] AS target_label, "
         "coalesce(target.pagerank, 0) AS pagerank, "
         "coalesce(target.degree, 0) AS degree "
+        "ORDER BY pagerank DESC, degree DESC "
         "LIMIT $limit"
     )

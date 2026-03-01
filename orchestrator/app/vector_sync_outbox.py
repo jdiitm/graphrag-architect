@@ -486,6 +486,35 @@ class Neo4jOutboxStore:
         "MATCH (e:OutboxEvent {event_id: $event_id}) "
         "SET e.retry_count = $retry_count"
     )
+    _CLAIM_QUERY = (
+        "MATCH (e:OutboxEvent) "
+        "WHERE e.status = 'pending' "
+        "   OR (e.status = 'claimed' AND e.lease_expires_at < $now) "
+        "WITH e ORDER BY e.retry_count ASC LIMIT $limit "
+        "SET e.status = 'claimed', "
+        "    e.claimed_by = $worker_id, "
+        "    e.lease_expires_at = $lease_expires_at "
+        "RETURN e.event_id AS event_id, e.collection AS collection, "
+        "e.operation AS operation, e.pruned_ids AS pruned_ids, "
+        "e.vectors AS vectors, e.status AS status, "
+        "e.retry_count AS retry_count"
+    )
+    _RELEASE_CLAIM_QUERY = (
+        "MATCH (e:OutboxEvent {event_id: $event_id}) "
+        "SET e.status = 'pending', e.claimed_by = NULL, "
+        "    e.lease_expires_at = NULL"
+    )
+    _MARK_COMPLETED_QUERY = (
+        "MATCH (e:OutboxEvent {event_id: $event_id}) "
+        "DELETE e"
+    )
+    _RELEASE_EXPIRED_QUERY = (
+        "MATCH (e:OutboxEvent {status: 'claimed'}) "
+        "WHERE e.lease_expires_at < $now "
+        "SET e.status = 'pending', e.claimed_by = NULL, "
+        "    e.lease_expires_at = NULL "
+        "RETURN count(e) AS released"
+    )
 
     def __init__(self, driver: Any) -> None:
         self._driver = driver
@@ -559,6 +588,93 @@ class Neo4jOutboxStore:
             Neo4jOutboxStore._UPDATE_RETRY_QUERY,
             event_id=event_id, retry_count=retry_count,
         )
+
+    async def claim_pending(
+        self, worker_id: str, limit: int, lease_seconds: float,
+    ) -> List[VectorSyncEvent]:
+        now = time.time()
+        lease_expires_at = now + lease_seconds
+        async with self._driver.session(default_access_mode="WRITE") as session:
+            records = await session.execute_write(
+                self._claim_tx,
+                worker_id=worker_id,
+                limit=limit,
+                now=now,
+                lease_expires_at=lease_expires_at,
+            )
+        events: List[VectorSyncEvent] = []
+        for data in records:
+            events.append(VectorSyncEvent(
+                event_id=data["event_id"],
+                collection=data["collection"],
+                operation=data.get("operation", "delete"),
+                pruned_ids=json.loads(data["pruned_ids"]),
+                vectors=[
+                    VectorRecord(**v)
+                    for v in json.loads(data.get("vectors", "[]"))
+                ],
+                status="claimed",
+                retry_count=int(data.get("retry_count", 0)),
+            ))
+        return events
+
+    @staticmethod
+    async def _claim_tx(
+        tx: Any,
+        worker_id: str,
+        limit: int,
+        now: float,
+        lease_expires_at: float,
+    ) -> list:
+        result = await tx.run(
+            Neo4jOutboxStore._CLAIM_QUERY,
+            worker_id=worker_id,
+            limit=limit,
+            now=now,
+            lease_expires_at=lease_expires_at,
+        )
+        return [record.data() async for record in result]
+
+    async def mark_completed(self, event_id: str) -> None:
+        async with self._driver.session(default_access_mode="WRITE") as session:
+            await session.execute_write(
+                self._mark_completed_tx, event_id=event_id,
+            )
+
+    @staticmethod
+    async def _mark_completed_tx(tx: Any, event_id: str) -> None:
+        await tx.run(
+            Neo4jOutboxStore._MARK_COMPLETED_QUERY, event_id=event_id,
+        )
+
+    async def release_claim(self, event_id: str) -> None:
+        async with self._driver.session(default_access_mode="WRITE") as session:
+            await session.execute_write(
+                self._release_claim_tx, event_id=event_id,
+            )
+
+    @staticmethod
+    async def _release_claim_tx(tx: Any, event_id: str) -> None:
+        await tx.run(
+            Neo4jOutboxStore._RELEASE_CLAIM_QUERY, event_id=event_id,
+        )
+
+    async def release_expired_claims(self) -> int:
+        now = time.time()
+        async with self._driver.session(default_access_mode="WRITE") as session:
+            records = await session.execute_write(
+                self._release_expired_tx, now=now,
+            )
+        if records:
+            return int(records[0].get("released", 0))
+        return 0
+
+    @staticmethod
+    async def _release_expired_tx(tx: Any, now: float) -> list:
+        result = await tx.run(
+            Neo4jOutboxStore._RELEASE_EXPIRED_QUERY, now=now,
+        )
+        return [record.data() async for record in result]
 
 
 DEFAULT_MAX_RETRIES = 5

@@ -134,6 +134,8 @@ _NEIGHBOR_DISCOVERY_NO_ACL = (
     "AND r.tombstoned_at IS NULL "
     "RETURN target.id AS target_id, target.name AS target_name, "
     "type(r) AS rel_type, labels(target)[0] AS target_label "
+    "ORDER BY coalesce(target.pagerank, 0) DESC, "
+    "coalesce(target.degree, 0) DESC, target.id "
     "LIMIT $limit"
 )
 
