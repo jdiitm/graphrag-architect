@@ -19,7 +19,7 @@ class TestTenantConnectionTrackerQuota:
     async def test_acquire_succeeds_under_quota(self) -> None:
         tracker = TenantConnectionTracker(pool_size=100, max_tenant_fraction=0.2)
         await tracker.acquire("tenant-a")
-        assert tracker.active_count("tenant-a") == 1
+        assert await tracker.active_count("tenant-a") == 1
 
     @pytest.mark.asyncio
     async def test_acquire_fails_at_quota(self) -> None:
@@ -35,15 +35,15 @@ class TestTenantConnectionTrackerQuota:
         await tracker.acquire("tenant-a")
         await tracker.acquire("tenant-a")
         await tracker.release("tenant-a")
-        assert tracker.active_count("tenant-a") == 1
+        assert await tracker.active_count("tenant-a") == 1
         await tracker.acquire("tenant-a")
-        assert tracker.active_count("tenant-a") == 2
+        assert await tracker.active_count("tenant-a") == 2
 
     @pytest.mark.asyncio
     async def test_release_below_zero_clamps(self) -> None:
         tracker = TenantConnectionTracker(pool_size=10, max_tenant_fraction=0.2)
         await tracker.release("nonexistent-tenant")
-        assert tracker.active_count("nonexistent-tenant") == 0
+        assert await tracker.active_count("nonexistent-tenant") == 0
 
     @pytest.mark.asyncio
     async def test_different_tenants_have_independent_quotas(self) -> None:
@@ -51,8 +51,8 @@ class TestTenantConnectionTrackerQuota:
         await tracker.acquire("tenant-a")
         await tracker.acquire("tenant-a")
         await tracker.acquire("tenant-b")
-        assert tracker.active_count("tenant-a") == 2
-        assert tracker.active_count("tenant-b") == 1
+        assert await tracker.active_count("tenant-a") == 2
+        assert await tracker.active_count("tenant-b") == 1
 
 
 class TestTenantConnectionTrackerConfig:

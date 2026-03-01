@@ -60,6 +60,18 @@ func validateDedupStoreForProduction(deploymentMode, dedupStoreType string) erro
 	return nil
 }
 
+func validateInflightForProduction(deploymentMode string, maxInflight int) error {
+	if deploymentMode == "production" && maxInflight <= 0 {
+		return fmt.Errorf(
+			"MAX_INFLIGHT=%d is unsafe for DEPLOYMENT_MODE=production; "+
+				"unlimited in-flight messages disable backpressure; "+
+				"set MAX_INFLIGHT to a positive integer (e.g. 100)",
+			maxInflight,
+		)
+	}
+	return nil
+}
+
 func main() {
 	orchestratorURL := envOrDefault("ORCHESTRATOR_URL", "http://localhost:8000")
 	kafkaBrokers := envOrDefault("KAFKA_BROKERS", "localhost:9092")
@@ -90,6 +102,10 @@ func main() {
 	deploymentMode := envOrDefault("DEPLOYMENT_MODE", "")
 	dedupStoreType := envOrDefault("DEDUP_STORE_TYPE", "noop")
 	if err := validateDedupStoreForProduction(deploymentMode, dedupStoreType); err != nil {
+		log.Fatalf("production safety check failed: %v", err)
+	}
+	maxInflight := envIntOrDefault("MAX_INFLIGHT", 0)
+	if err := validateInflightForProduction(deploymentMode, maxInflight); err != nil {
 		log.Fatalf("production safety check failed: %v", err)
 	}
 
@@ -153,11 +169,15 @@ func main() {
 	defer kafkaSource.Close()
 
 	ackTimeoutSec := envIntOrDefault("ACK_TIMEOUT_SECONDS", 30)
-	log.Printf("consumer ack timeout: %ds", ackTimeoutSec)
-	cons := consumer.New(kafkaSource, disp.Jobs(), disp.Acks(),
+	log.Printf("consumer ack timeout: %ds, max inflight: %d", ackTimeoutSec, maxInflight)
+	consumerOpts := []consumer.ConsumerOption{
 		consumer.WithObserver(m),
-		consumer.WithAckTimeout(time.Duration(ackTimeoutSec)*time.Second),
-	)
+		consumer.WithAckTimeout(time.Duration(ackTimeoutSec) * time.Second),
+	}
+	if maxInflight > 0 {
+		consumerOpts = append(consumerOpts, consumer.WithMaxInflight(maxInflight))
+	}
+	cons := consumer.New(kafkaSource, disp.Jobs(), disp.Acks(), consumerOpts...)
 
 	var sink dlq.DeadLetterSink
 	dlqSinkMode := envOrDefault("DLQ_SINK", "kafka")
