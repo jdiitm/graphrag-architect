@@ -430,3 +430,55 @@ def _has_unwind_in_clauses(clauses: List[Any]) -> bool:
 def validate_query_structure(cypher: str) -> bool:
     ast = CypherParser(cypher).parse()
     return not _has_amplification_in_clauses(ast.clauses)
+
+
+def _extract_limit_value(clause: Any) -> Optional[int]:
+    if not _is_limit_clause(clause):
+        return None
+    for t in clause.tokens:
+        if t.token_type == TokenType.NUMBER:
+            try:
+                return int(t.value)
+            except ValueError:
+                return None
+    return None
+
+
+def _set_limit_value(clause: Any, value: int) -> None:
+    for i, t in enumerate(clause.tokens):
+        if t.token_type == TokenType.NUMBER:
+            clause.tokens[i] = CypherToken(
+                token_type=TokenType.NUMBER,
+                value=str(value),
+                position=t.position,
+                brace_depth=t.brace_depth,
+            )
+            return
+
+
+def _cap_limits_in_clauses(clauses: List[Any], max_results: int) -> bool:
+    found_limit = False
+    for clause in clauses:
+        if isinstance(clause, CallSubquery) and clause.body:
+            _cap_limits_in_clauses(clause.body, max_results)
+
+        if isinstance(clause, UnionQuery):
+            for branch in clause.branches:
+                _cap_limits_in_clauses(branch, max_results)
+
+        current_value = _extract_limit_value(clause)
+        if current_value is not None:
+            found_limit = True
+            if current_value > max_results:
+                _set_limit_value(clause, max_results)
+
+    return found_limit
+
+
+def inject_limit_ast(cypher: str, max_results: int) -> str:
+    ast = CypherParser(cypher).parse()
+    found = _cap_limits_in_clauses(ast.clauses, max_results)
+    if not found:
+        limit_tokens = tokenize_cypher(f" LIMIT {max_results}")
+        ast.clauses.append(GenericClause(tokens=limit_tokens))
+    return reconstruct_from_ast(ast)

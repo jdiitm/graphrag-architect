@@ -426,6 +426,68 @@ func TestDispatcherJobTimeoutRoutesDLQ(t *testing.T) {
 	<-done
 }
 
+func TestDispatcherMixedBatchSlowJobDLQdFastJobSucceeds(t *testing.T) {
+	proc := &spyProcessor{
+		handler: func(ctx context.Context, job domain.Job) error {
+			if string(job.Key) == "slow-poison" {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(5 * time.Second):
+					return nil
+				}
+			}
+			return nil
+		},
+	}
+
+	cfg := dispatcher.Config{
+		NumWorkers: 2,
+		MaxRetries: 1,
+		JobBuffer:  4,
+		DLQBuffer:  2,
+		JobTimeout: 100 * time.Millisecond,
+	}
+	d := dispatcher.New(cfg, proc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	go func() {
+		for result := range d.DLQ() {
+			close(result.Done)
+		}
+	}()
+
+	d.Jobs() <- makeJob("fast-1")
+	d.Jobs() <- makeJob("slow-poison")
+	d.Jobs() <- makeJob("fast-2")
+
+	acksReceived := 0
+	for acksReceived < 3 {
+		select {
+		case <-d.Acks():
+			acksReceived++
+		case <-time.After(3 * time.Second):
+			t.Fatalf(
+				"timed out waiting for acks: got %d/3 — slow job must not block batch",
+				acksReceived,
+			)
+		}
+	}
+
+	cancel()
+	<-done
+
+	if proc.CallCount() != 3 {
+		t.Fatalf("expected 3 process calls (2 fast + 1 slow), got %d", proc.CallCount())
+	}
+}
+
 func TestDispatcherJobTimeoutDoesNotAffectFastJobs(t *testing.T) {
 	proc := &spyProcessor{}
 	cfg := dispatcher.Config{
