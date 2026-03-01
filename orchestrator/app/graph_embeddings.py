@@ -442,11 +442,17 @@ def rerank_with_structural(
     text_weight: float = 0.7,
     structural_weight: float = 0.3,
     complexity: Optional[Any] = None,
+    fusion_strategy: str = "linear",
 ) -> List[Any]:
     if not text_results:
         return []
 
     from orchestrator.app.vector_store import SearchResult
+
+    if fusion_strategy == "rrf":
+        return _rrf_rerank(
+            text_results, structural_embeddings, query_structural,
+        )
 
     if complexity is not None:
         resolved = FusionWeightResolver.resolve(complexity)
@@ -474,4 +480,49 @@ def rerank_with_structural(
     return [
         SearchResult(id=ids[i], score=float(combined[i]), metadata=metadatas[i])
         for i in order
+    ]
+
+
+def _rrf_rerank(
+    text_results: List[Any],
+    structural_embeddings: Dict[str, List[float]],
+    query_structural: List[float],
+) -> List[Any]:
+    from orchestrator.app.reranker import ScoredCandidate, reciprocal_rank_fusion
+    from orchestrator.app.vector_store import SearchResult
+
+    ids = [r.id for r in text_results]
+    text_scores = np.array([r.score for r in text_results], dtype=np.float64)
+    metadatas = {r.id: r.metadata for r in text_results}
+
+    text_order = np.argsort(-text_scores)
+    text_ranked = [
+        ScoredCandidate(
+            data={"id": ids[i]}, score=float(text_scores[i]), candidate_id=ids[i],
+        )
+        for i in text_order
+    ]
+
+    ranked_lists = [text_ranked]
+
+    if query_structural:
+        query_vec = np.asarray(query_structural, dtype=np.float64)
+        struct_sims = _batch_cosine_similarities(
+            ids, structural_embeddings, query_vec, len(query_structural),
+        )
+        struct_order = np.argsort(-struct_sims)
+        struct_ranked = [
+            ScoredCandidate(
+                data={"id": ids[i]}, score=float(struct_sims[i]), candidate_id=ids[i],
+            )
+            for i in struct_order
+        ]
+        ranked_lists.append(struct_ranked)
+
+    fused = reciprocal_rank_fusion(ranked_lists)
+    return [
+        SearchResult(
+            id=c.candidate_id, score=c.score, metadata=metadatas[c.candidate_id],
+        )
+        for c in fused
     ]

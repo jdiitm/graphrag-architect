@@ -3,13 +3,20 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Dict, List, Protocol, runtime_checkable
+
+
+class FusionStrategy(str, Enum):
+    LINEAR = "linear"
+    RRF = "rrf"
 
 
 @dataclass
 class ScoredCandidate:
     data: Dict[str, Any]
     score: float = 0.0
+    candidate_id: str = ""
 
 
 @runtime_checkable
@@ -103,3 +110,23 @@ class BM25Reranker:
             scored.append(ScoredCandidate(data=candidate, score=score))
         scored.sort(key=lambda s: s.score, reverse=True)
         return scored
+
+
+def reciprocal_rank_fusion(
+    ranked_lists: List[List[ScoredCandidate]],
+    k: int = 60,
+) -> List[ScoredCandidate]:
+    rrf_scores: Dict[str, float] = {}
+    data_map: Dict[str, Dict[str, Any]] = {}
+    for ranked_list in ranked_lists:
+        for rank, candidate in enumerate(ranked_list):
+            cid = candidate.candidate_id
+            rrf_scores[cid] = rrf_scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
+            if cid not in data_map:
+                data_map[cid] = candidate.data
+    result = [
+        ScoredCandidate(data=data_map[cid], score=score, candidate_id=cid)
+        for cid, score in rrf_scores.items()
+    ]
+    result.sort(key=lambda s: s.score, reverse=True)
+    return result

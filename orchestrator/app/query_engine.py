@@ -927,6 +927,10 @@ _DEFAULT_TOKEN_BUDGET = TokenBudget()
 _STRUCTURAL_EMBEDDINGS: Dict[str, List[float]] = {}
 
 
+def _get_fusion_strategy() -> str:
+    return os.environ.get("FUSION_STRATEGY", "linear")
+
+
 def set_structural_embeddings(embeddings: Dict[str, List[float]]) -> None:
     _STRUCTURAL_EMBEDDINGS.clear()
     _STRUCTURAL_EMBEDDINGS.update(embeddings)
@@ -957,10 +961,12 @@ def _apply_structural_rerank(
         return candidates
 
     query_structural = compute_centroid(available)
+    fusion_strategy = _get_fusion_strategy()
 
     reranked = rerank_with_structural(
         search_results, _STRUCTURAL_EMBEDDINGS, query_structural,
         complexity=complexity,
+        fusion_strategy=fusion_strategy,
     )
     return [r.metadata for r in reranked]
 
