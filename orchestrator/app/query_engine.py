@@ -934,6 +934,7 @@ def set_structural_embeddings(embeddings: Dict[str, List[float]]) -> None:
 
 def _apply_structural_rerank(
     candidates: List[Dict[str, Any]],
+    complexity: Optional[QueryComplexity] = None,
 ) -> List[Dict[str, Any]]:
     if not _STRUCTURAL_EMBEDDINGS or not candidates:
         return candidates
@@ -959,6 +960,7 @@ def _apply_structural_rerank(
 
     reranked = rerank_with_structural(
         search_results, _STRUCTURAL_EMBEDDINGS, query_structural,
+        complexity=complexity,
     )
     return [r.metadata for r in reranked]
 
@@ -986,6 +988,7 @@ def _sync_density_rerank(
 async def _async_rerank_candidates(
     query: str,
     candidates: List[Dict[str, Any]],
+    complexity: Optional[QueryComplexity] = None,
 ) -> List[Dict[str, Any]]:
     if not candidates:
         return []
@@ -999,7 +1002,7 @@ async def _async_rerank_candidates(
 
     if _STRUCTURAL_EMBEDDINGS:
         ranked = await loop.run_in_executor(
-            pool, _apply_structural_rerank, ranked,
+            pool, _apply_structural_rerank, ranked, complexity,
         )
 
     if _DENSITY_CFG.enable_density_rerank:
@@ -1026,7 +1029,9 @@ async def _do_synthesize(state: QueryState) -> dict:
     if state.get("retrieval_degraded"):
         context.insert(0, {"_degradation_notice": _DEGRADATION_NOTICE})
 
-    ranked_context = await _async_rerank_candidates(state["query"], context)
+    ranked_context = await _async_rerank_candidates(
+        state["query"], context, complexity=state.get("complexity"),
+    )
     truncated = truncate_context_topology(ranked_context, _DEFAULT_TOKEN_BUDGET)
 
     tenant_id = state.get("tenant_id", "")

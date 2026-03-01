@@ -63,12 +63,14 @@ from orchestrator.app.distributed_lock import (
     create_ingestion_lock,
 )
 
+from orchestrator.app.config import ASTPoolConfig
+
 _VECTOR_COLLECTION = "services"
 
-_POOL_CEILING = 8
+_AST_POOL_CFG = ASTPoolConfig.from_env()
 _PROCESS_POOL_MAX_WORKERS = min(
     int(os.environ.get("AST_POOL_WORKERS", "4")),
-    _POOL_CEILING,
+    _AST_POOL_CFG.ceiling,
 )
 
 _USE_REMOTE_AST: bool = os.environ.get("USE_REMOTE_AST", "false").lower() == "true"

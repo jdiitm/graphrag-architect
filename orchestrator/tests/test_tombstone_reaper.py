@@ -96,10 +96,10 @@ class TestReaperReapsExpiredEdges:
 class TestReaperBatchProcessing:
 
     @pytest.mark.asyncio
-    async def test_processes_in_configured_batch_size(self) -> None:
+    async def test_processes_with_adaptive_batch_sizing(self) -> None:
         client = _mock_neo4j_client()
         client.reap_tombstone_batch = AsyncMock(
-            side_effect=[50, 50, 50, 30],
+            side_effect=[50, 100, 30],
         )
         config = TombstoneReaperConfig(batch_size=50)
         reaper = TombstoneReaper(client, config)
@@ -107,9 +107,11 @@ class TestReaperBatchProcessing:
         reaped = await reaper.reap_once()
 
         assert reaped == 180
-        assert client.reap_tombstone_batch.call_count == 4
-        for call in client.reap_tombstone_batch.call_args_list:
-            assert call.kwargs["batch_size"] == 50
+        assert client.reap_tombstone_batch.call_count == 3
+        calls = client.reap_tombstone_batch.call_args_list
+        assert calls[0].kwargs["batch_size"] == 50
+        assert calls[1].kwargs["batch_size"] == 100
+        assert calls[2].kwargs["batch_size"] == 200
 
     @pytest.mark.asyncio
     async def test_stops_when_batch_returns_less_than_batch_size(self) -> None:

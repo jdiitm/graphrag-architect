@@ -175,6 +175,7 @@ class TestAsyncRerankOffload:
 
         def capturing_structural(
             candidates: List[Dict[str, Any]],
+            complexity: Any = None,
         ) -> List[Dict[str, Any]]:
             nonlocal structural_thread
             structural_thread = threading.current_thread()

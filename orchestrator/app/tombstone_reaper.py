@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TTL_DAYS = 7
 _DEFAULT_BATCH_SIZE = 100
 _DEFAULT_REAP_INTERVAL_SECONDS = 3600
+_DEFAULT_MAX_BATCH_SIZE = 2000
 
 
 class TombstoneStore(Protocol):
@@ -37,17 +38,22 @@ class TombstoneReaperConfig:
     ttl_days: int = _DEFAULT_TTL_DAYS
     batch_size: int = _DEFAULT_BATCH_SIZE
     reap_interval_seconds: float = _DEFAULT_REAP_INTERVAL_SECONDS
+    max_batch_size: int = _DEFAULT_MAX_BATCH_SIZE
 
     @classmethod
     def from_env(cls) -> TombstoneReaperConfig:
         raw_ttl = os.environ.get("TOMBSTONE_TTL_DAYS", "")
         raw_batch = os.environ.get("TOMBSTONE_BATCH_SIZE", "")
         raw_interval = os.environ.get("TOMBSTONE_REAP_INTERVAL_SECONDS", "")
+        raw_max_batch = os.environ.get("TOMBSTONE_MAX_BATCH_SIZE", "")
         return cls(
             ttl_days=int(raw_ttl) if raw_ttl else _DEFAULT_TTL_DAYS,
             batch_size=int(raw_batch) if raw_batch else _DEFAULT_BATCH_SIZE,
             reap_interval_seconds=(
                 float(raw_interval) if raw_interval else _DEFAULT_REAP_INTERVAL_SECONDS
+            ),
+            max_batch_size=(
+                int(raw_max_batch) if raw_max_batch else _DEFAULT_MAX_BATCH_SIZE
             ),
         )
 
@@ -65,6 +71,7 @@ class TombstoneReaper:
         self._task: Optional[asyncio.Task[None]] = None
         self._reaped_total = 0
         self._pending = 0
+        self._last_effective_batch = 0
 
     @property
     def running(self) -> bool:
@@ -75,6 +82,7 @@ class TombstoneReaper:
         return {
             "reaped_total": self._reaped_total,
             "pending": self._pending,
+            "last_effective_batch": self._last_effective_batch,
         }
 
     def start(self) -> None:
@@ -99,16 +107,19 @@ class TombstoneReaper:
         ).isoformat()
 
         total_reaped = 0
+        effective_batch = self._config.batch_size
         while True:
             reaped = await self._client.reap_tombstone_batch(
-                batch_size=self._config.batch_size,
+                batch_size=effective_batch,
                 cutoff=cutoff,
                 tenant_id=self._tenant_id,
             )
             total_reaped += reaped
-            if reaped < self._config.batch_size:
+            if reaped < effective_batch:
                 break
+            effective_batch = min(effective_batch * 2, self._config.max_batch_size)
 
+        self._last_effective_batch = effective_batch
         self._reaped_total += total_reaped
 
         self._pending = await self._client.count_pending_tombstones(
@@ -118,8 +129,9 @@ class TombstoneReaper:
 
         if total_reaped > 0:
             logger.info(
-                "Reaped %d tombstoned edges (tenant=%s, pending=%d)",
+                "Reaped %d tombstoned edges (tenant=%s, pending=%d, last_batch=%d)",
                 total_reaped, self._tenant_id or "all", self._pending,
+                self._last_effective_batch,
             )
 
         return total_reaped
