@@ -29,7 +29,9 @@ class GraphWriteStage:
 
     async def healthcheck(self) -> bool:
         try:
-            await self._repository.read_topology()
+            await self._repository.read_topology(
+                label="Service", tenant_id="__healthcheck__",
+            )
             return True
         except Exception:
             return False

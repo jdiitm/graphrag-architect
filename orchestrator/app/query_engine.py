@@ -653,6 +653,8 @@ def _build_single_hop_cypher() -> str:
     return (
         "MATCH (n)-[r]-(m) "
         "WHERE n.name IN $names "
+        "AND n.tenant_id = $tenant_id "
+        "AND m.tenant_id = $tenant_id "
         "AND r.tombstoned_at IS NULL "
         "AND m.degree < $degree_cap "
         "RETURN n.name AS source, type(r) AS rel, "
@@ -683,7 +685,9 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                 async def _hop_tx(tx: AsyncManagedTransaction) -> list:
                     result = await tx.run(
                         hop_cypher, names=names, hop_limit=hop_limit,
-                        degree_cap=degree_cap, **hop_acl,
+                        degree_cap=degree_cap,
+                        tenant_id=state.get("tenant_id", ""),
+                        **hop_acl,
                     )
                     return await result.data()
 
