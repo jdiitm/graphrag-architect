@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
@@ -16,11 +17,19 @@ type KafkaDLQSink struct {
 	topic  string
 }
 
-func NewKafkaDLQSink(brokers, topic string) (*KafkaDLQSink, error) {
-	client, err := kgo.NewClient(
-		kgo.SeedBrokers(brokers),
+func dlqProducerOpts(brokers, topic string) []kgo.Opt {
+	seeds := strings.Split(brokers, ",")
+	return []kgo.Opt{
+		kgo.SeedBrokers(seeds...),
 		kgo.DefaultProduceTopic(topic),
-	)
+		kgo.RequiredAcks(kgo.AllISRAcks()),
+		kgo.RecordRetries(producerRetries),
+		kgo.RecordDeliveryTimeout(producerDeliveryTimeout),
+	}
+}
+
+func NewKafkaDLQSink(brokers, topic string) (*KafkaDLQSink, error) {
+	client, err := kgo.NewClient(dlqProducerOpts(brokers, topic)...)
 	if err != nil {
 		return nil, fmt.Errorf("create dlq producer: %w", err)
 	}

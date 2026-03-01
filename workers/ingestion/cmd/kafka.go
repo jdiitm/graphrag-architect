@@ -77,16 +77,28 @@ func (s *KafkaJobSource) Close() {
 	s.client.Close()
 }
 
+const (
+	producerRetries         = 3
+	producerDeliveryTimeout = 30 * time.Second
+)
+
+func producerOpts(brokers, topic string) []kgo.Opt {
+	seeds := strings.Split(brokers, ",")
+	return []kgo.Opt{
+		kgo.SeedBrokers(seeds...),
+		kgo.DefaultProduceTopic(topic),
+		kgo.RequiredAcks(kgo.AllISRAcks()),
+		kgo.RecordRetries(producerRetries),
+		kgo.RecordDeliveryTimeout(producerDeliveryTimeout),
+	}
+}
+
 type KafkaProducerClient struct {
 	client *kgo.Client
 }
 
 func NewKafkaProducerClient(brokers, topic string) (*KafkaProducerClient, error) {
-	seeds := strings.Split(brokers, ",")
-	client, err := kgo.NewClient(
-		kgo.SeedBrokers(seeds...),
-		kgo.DefaultProduceTopic(topic),
-	)
+	client, err := kgo.NewClient(producerOpts(brokers, topic)...)
 	if err != nil {
 		return nil, fmt.Errorf("create kafka producer: %w", err)
 	}
