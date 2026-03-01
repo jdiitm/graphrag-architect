@@ -281,6 +281,21 @@ class ASTPoolConfig:
 
 
 @dataclass(frozen=True)
+class GRPCASTConfig:
+    endpoint: str = ""
+    timeout_seconds: float = 30.0
+    max_retries: int = 3
+
+    @classmethod
+    def from_env(cls) -> GRPCASTConfig:
+        return cls(
+            endpoint=os.environ.get("AST_GRPC_ENDPOINT", ""),
+            timeout_seconds=float(os.environ.get("AST_GRPC_TIMEOUT", "30")),
+            max_retries=int(os.environ.get("AST_GRPC_MAX_RETRIES", "3")),
+        )
+
+
+@dataclass(frozen=True)
 class HotTargetConfig:
     hot_target_threshold: int = 10
     hot_target_max_concurrent: int = 1
