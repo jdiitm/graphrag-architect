@@ -334,6 +334,21 @@ class SchemaStoreConfig:
 
 
 @dataclass(frozen=True)
+class ContextRankingConfig:
+    rerank_timeout_seconds: float = 5.0
+    truncation_timeout_seconds: float = 3.0
+
+    @classmethod
+    def from_env(cls) -> ContextRankingConfig:
+        raw_rerank = os.environ.get("RERANK_TIMEOUT_SECONDS", "")
+        raw_trunc = os.environ.get("TRUNCATION_TIMEOUT_SECONDS", "")
+        return cls(
+            rerank_timeout_seconds=float(raw_rerank) if raw_rerank else 5.0,
+            truncation_timeout_seconds=float(raw_trunc) if raw_trunc else 3.0,
+        )
+
+
+@dataclass(frozen=True)
 class VectorSyncConfig:
     backend: str = "memory"
     kafka_topic: str = "graph.mutations"

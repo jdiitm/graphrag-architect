@@ -21,7 +21,13 @@ from orchestrator.app.circuit_breaker import (
     GlobalProviderBreaker,
     TenantCircuitBreakerRegistry,
 )
-from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfig, RAGEvalConfig
+from orchestrator.app.config import (
+    AuthConfig,
+    ContextRankingConfig,
+    EmbeddingConfig,
+    ExtractionConfig,
+    RAGEvalConfig,
+)
 from orchestrator.app.llm_provider import LLMError, LLMProvider, create_provider_with_failover
 from orchestrator.app.cypher_sandbox import (
     SandboxedQueryExecutor,
@@ -1035,16 +1041,40 @@ async def _do_synthesize(state: QueryState) -> dict:
     if state.get("retrieval_degraded"):
         context.insert(0, {"_degradation_notice": _DEGRADATION_NOTICE})
 
-    ranked_context = await _async_rerank_candidates(
-        state["query"], context, complexity=state.get("complexity"),
-    )
+    ranking_config = ContextRankingConfig.from_env()
+    rerank_timeout = ranking_config.rerank_timeout_seconds or None
+
+    try:
+        ranked_context = await asyncio.wait_for(
+            _async_rerank_candidates(
+                state["query"], context, complexity=state.get("complexity"),
+            ),
+            timeout=rerank_timeout,
+        )
+    except asyncio.TimeoutError:
+        _query_logger.warning(
+            "Reranking timed out after %.1fs, using unranked context",
+            ranking_config.rerank_timeout_seconds,
+        )
+        ranked_context = context
 
     loop = asyncio.get_running_loop()
     pool = get_thread_pool()
+    truncation_timeout = ranking_config.truncation_timeout_seconds or None
+
     try:
-        truncated = await loop.run_in_executor(
-            pool, truncate_context_topology, ranked_context, _DEFAULT_TOKEN_BUDGET,
+        truncated = await asyncio.wait_for(
+            loop.run_in_executor(
+                pool, truncate_context_topology, ranked_context, _DEFAULT_TOKEN_BUDGET,
+            ),
+            timeout=truncation_timeout,
         )
+    except asyncio.TimeoutError:
+        _query_logger.warning(
+            "Truncation timed out after %.1fs, using ranked context directly",
+            ranking_config.truncation_timeout_seconds,
+        )
+        truncated = ranked_context
     except Exception:
         _query_logger.warning(
             "Context topology truncation failed in executor, using untruncated context",
