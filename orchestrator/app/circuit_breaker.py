@@ -251,10 +251,12 @@ class TenantCircuitBreakerRegistry:
         config: CircuitBreakerConfig,
         name_prefix: str = "default",
         max_tenants: int = 1000,
+        store: StateStore | None = None,
     ) -> None:
         self._config = config
         self._name_prefix = name_prefix
         self._max_tenants = max_tenants
+        self._store = store
         self._breakers: OrderedDict[str, CircuitBreaker] = OrderedDict()
         self._lock: asyncio.Lock | None = None
 
@@ -273,6 +275,7 @@ class TenantCircuitBreakerRegistry:
                 self._breakers.popitem(last=False)
             breaker = CircuitBreaker(
                 config=self._config,
+                store=self._store,
                 name=f"{self._name_prefix}-{tenant_id}",
             )
             self._breakers[tenant_id] = breaker
@@ -284,6 +287,7 @@ class GlobalProviderBreaker:
         self,
         registry: TenantCircuitBreakerRegistry,
         global_config: CircuitBreakerConfig | None = None,
+        store: StateStore | None = None,
     ) -> None:
         self._registry = registry
         cfg = global_config or CircuitBreakerConfig(
@@ -293,6 +297,7 @@ class GlobalProviderBreaker:
         )
         self._global = CircuitBreaker(
             config=cfg,
+            store=store,
             name="global-provider",
             should_trip=is_provider_rate_limit,
         )

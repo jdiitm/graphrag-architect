@@ -105,20 +105,37 @@ _VECTOR_COLLECTION = "service_embeddings"
 _GLOBAL_CB_CFG = CircuitBreakerConfig(
     failure_threshold=5, recovery_timeout=60.0, half_open_max_calls=1,
 )
-_CB_LLM_GLOBAL = GlobalProviderBreaker(
-    registry=TenantCircuitBreakerRegistry(
-        config=CircuitBreakerConfig(failure_threshold=3, recovery_timeout=30.0),
-        name_prefix="llm-synthesize",
-    ),
-    global_config=_GLOBAL_CB_CFG,
-)
-_CB_EMBEDDING_GLOBAL = GlobalProviderBreaker(
-    registry=TenantCircuitBreakerRegistry(
-        config=CircuitBreakerConfig(failure_threshold=5, recovery_timeout=20.0),
-        name_prefix="embedding",
-    ),
-    global_config=_GLOBAL_CB_CFG,
-)
+
+
+def build_query_breakers(
+    store: Optional[Any] = None,
+) -> Tuple[GlobalProviderBreaker, GlobalProviderBreaker]:
+    llm_breaker = GlobalProviderBreaker(
+        registry=TenantCircuitBreakerRegistry(
+            config=CircuitBreakerConfig(
+                failure_threshold=3, recovery_timeout=30.0,
+            ),
+            name_prefix="llm-synthesize",
+            store=store,
+        ),
+        global_config=_GLOBAL_CB_CFG,
+        store=store,
+    )
+    embed_breaker = GlobalProviderBreaker(
+        registry=TenantCircuitBreakerRegistry(
+            config=CircuitBreakerConfig(
+                failure_threshold=5, recovery_timeout=20.0,
+            ),
+            name_prefix="embedding",
+            store=store,
+        ),
+        global_config=_GLOBAL_CB_CFG,
+        store=store,
+    )
+    return llm_breaker, embed_breaker
+
+
+_CB_LLM_GLOBAL, _CB_EMBEDDING_GLOBAL = build_query_breakers()
 
 _DEFAULT_MAX_QUERY_COST = 20
 
