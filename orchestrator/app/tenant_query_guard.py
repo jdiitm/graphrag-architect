@@ -185,7 +185,7 @@ class CypherTenantGuard:
         directory: pathlib.Path,
     ) -> Set[str]:
         cypher_constants: Set[str] = set()
-        for py_file in sorted(directory.glob("*.py")):
+        for py_file in sorted(directory.rglob("*.py")):
             cypher_constants.update(
                 self._extract_from_file(py_file),
             )

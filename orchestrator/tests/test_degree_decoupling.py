@@ -112,7 +112,7 @@ class TestDegreeRefreshDecoupled:
         driver, session, tx = _mock_driver()
         repo = GraphRepository(driver)
 
-        await repo.refresh_degree_for_ids([])
+        await repo.refresh_degree_for_ids([], tenant_id="test-tenant")
 
         tx.run.assert_not_called()
 

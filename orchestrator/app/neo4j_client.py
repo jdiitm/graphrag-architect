@@ -399,7 +399,7 @@ class GraphRepository:
         await self._cb.call(_topology_write)
 
     async def refresh_degree_for_ids(
-        self, affected_ids: List[str], *, tenant_id: str = "",
+        self, affected_ids: List[str], *, tenant_id: str,
     ) -> None:
         await self._refresh_degree_property(
             affected_ids, tenant_id=tenant_id,
