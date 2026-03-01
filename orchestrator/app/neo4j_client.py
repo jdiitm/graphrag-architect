@@ -154,7 +154,7 @@ def _sort_entities_for_write(entities: List[Any]) -> List[Any]:
     return sorted(entities, key=_entity_sort_key)
 
 
-_HOT_TARGET_DEFAULT_THRESHOLD = 50
+_HOT_TARGET_DEFAULT_THRESHOLD = 10
 
 
 def _edge_target_id(edge: Any) -> str:

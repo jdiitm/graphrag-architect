@@ -267,6 +267,16 @@ class HotTargetConfig:
     hot_target_threshold: int = 10
     hot_target_max_concurrent: int = 1
 
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "hot_target_threshold",
+            max(1, self.hot_target_threshold),
+        )
+        object.__setattr__(
+            self, "hot_target_max_concurrent",
+            max(1, self.hot_target_max_concurrent),
+        )
+
     @classmethod
     def from_env(cls) -> HotTargetConfig:
         return cls(

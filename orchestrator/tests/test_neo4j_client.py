@@ -507,6 +507,37 @@ class TestHotTargetConfig:
         with pytest.raises(FrozenInstanceError):
             cfg.hot_target_threshold = 999
 
+    def test_from_env_clamps_zero_max_concurrent(self) -> None:
+        with patch.dict("os.environ", {
+            "HOT_TARGET_MAX_CONCURRENT": "0",
+        }):
+            cfg = HotTargetConfig.from_env()
+            assert cfg.hot_target_max_concurrent >= 1
+
+    def test_from_env_clamps_zero_threshold(self) -> None:
+        with patch.dict("os.environ", {
+            "HOT_TARGET_THRESHOLD": "0",
+        }):
+            cfg = HotTargetConfig.from_env()
+            assert cfg.hot_target_threshold >= 1
+
+    def test_direct_construction_clamps_zero_values(self) -> None:
+        cfg = HotTargetConfig(
+            hot_target_max_concurrent=0,
+            hot_target_threshold=0,
+        )
+        assert cfg.hot_target_max_concurrent >= 1
+        assert cfg.hot_target_threshold >= 1
+
+    def test_from_env_clamps_negative_values(self) -> None:
+        with patch.dict("os.environ", {
+            "HOT_TARGET_MAX_CONCURRENT": "-5",
+            "HOT_TARGET_THRESHOLD": "-10",
+        }):
+            cfg = HotTargetConfig.from_env()
+            assert cfg.hot_target_max_concurrent >= 1
+            assert cfg.hot_target_threshold >= 1
+
 
 class TestSplitHotTargets:
 
@@ -714,8 +745,24 @@ class TestBatchedCommitHotTargetSerialization:
         assert batched_writes[0] == 3
 
     @pytest.mark.asyncio
-    async def test_default_config_used_when_none_provided(self) -> None:
+    async def test_default_config_batches_below_threshold(self) -> None:
         driver, _, tx = _mock_driver()
         repo = GraphRepository(driver)
-        assert repo._hot_target_config.hot_target_threshold == 10
-        assert repo._hot_target_config.hot_target_max_concurrent == 1
+
+        edges = [
+            CallsEdge(
+                source_service_id=f"svc-{i}",
+                target_service_id="shared-hub",
+                protocol="http",
+                tenant_id="test-tenant",
+            )
+            for i in range(9)
+        ]
+
+        await repo.commit_topology(edges)
+
+        edge_calls = [
+            c for c in tx.run.call_args_list if ":CALLS" in c.args[0]
+        ]
+        assert len(edge_calls) == 1
+        assert len(edge_calls[0].kwargs["batch"]) == 9
