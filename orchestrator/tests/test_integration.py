@@ -261,15 +261,15 @@ class TestQueryDAGRouting:
         mock_driver.session = session_ctx
         mock_driver.close = AsyncMock()
 
-        mock_llm = MagicMock()
-        mock_llm.ainvoke = AsyncMock(
-            return_value=MagicMock(content="Auth service is written in Python.")
+        mock_provider = MagicMock()
+        mock_provider.ainvoke_messages = AsyncMock(
+            return_value="Auth service is written in Python."
         )
 
         with (
             patch.dict("os.environ", _ENV_VARS),
             patch("orchestrator.app.query_engine._get_neo4j_driver", return_value=mock_driver),
-            patch("orchestrator.app.query_engine.ChatGoogleGenerativeAI", return_value=mock_llm),
+            patch("orchestrator.app.query_engine._build_synthesis_provider", return_value=mock_provider),
         ):
             result = await query_graph.ainvoke({
                 "query": "What language is auth-service written in?",

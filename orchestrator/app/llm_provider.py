@@ -31,6 +31,8 @@ class LLMProvider(Protocol):
 
     async def ainvoke_structured(self, prompt: str, messages: list) -> Any: ...
 
+    async def ainvoke_messages(self, messages: list) -> str: ...
+
 
 class GeminiProvider:
     def __init__(self, config: ExtractionConfig) -> None:
@@ -45,6 +47,10 @@ class GeminiProvider:
 
     async def ainvoke(self, prompt: str) -> str:
         response = await self._llm.ainvoke(prompt)
+        return str(response.content)
+
+    async def ainvoke_messages(self, messages: list) -> str:
+        response = await self._llm.ainvoke(messages)
         return str(response.content)
 
     async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
@@ -69,6 +75,9 @@ class StubProvider:
         self._ainvoke_structured_response = ainvoke_structured_response
 
     async def ainvoke(self, prompt: str) -> str:
+        return self._ainvoke_response
+
+    async def ainvoke_messages(self, messages: list) -> str:
         return self._ainvoke_response
 
     async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
@@ -120,6 +129,16 @@ class ProviderWithCircuitBreaker:
             self._record_failure(exc)
             raise
 
+    async def ainvoke_messages(self, messages: list) -> str:
+        self._check_state()
+        try:
+            result = await self._inner.ainvoke_messages(messages)
+            self._record_success()
+            return result
+        except Exception as exc:
+            self._record_failure(exc)
+            raise
+
     async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
         self._check_state()
         try:
@@ -140,6 +159,16 @@ class FallbackChain:
         for provider in self._providers:
             try:
                 return await provider.ainvoke(prompt)
+            except Exception as exc:
+                _logger.warning("Provider %s failed: %s", type(provider).__name__, exc)
+                last_error = exc
+        raise LLMError(f"All {len(self._providers)} providers failed") from last_error
+
+    async def ainvoke_messages(self, messages: list) -> str:
+        last_error: Optional[Exception] = None
+        for provider in self._providers:
+            try:
+                return await provider.ainvoke_messages(messages)
             except Exception as exc:
                 _logger.warning("Provider %s failed: %s", type(provider).__name__, exc)
                 last_error = exc
@@ -173,6 +202,10 @@ class ClaudeProvider:
 
     async def ainvoke(self, prompt: str) -> str:
         response = await self._llm.ainvoke(prompt)
+        return str(response.content)
+
+    async def ainvoke_messages(self, messages: list) -> str:
+        response = await self._llm.ainvoke(messages)
         return str(response.content)
 
     async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
