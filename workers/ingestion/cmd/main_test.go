@@ -238,3 +238,31 @@ func TestValidateDedupStoreForProduction_NoopInDevSucceeds(t *testing.T) {
 		t.Fatalf("unexpected error for noop in development: %v", err)
 	}
 }
+
+func TestValidateInflightForProduction_ZeroInProdReturnsError(t *testing.T) {
+	err := validateInflightForProduction("production", 0)
+	if err == nil {
+		t.Fatal("expected error when maxInflight is 0 in production mode")
+	}
+}
+
+func TestValidateInflightForProduction_PositiveInProdSucceeds(t *testing.T) {
+	err := validateInflightForProduction("production", 100)
+	if err != nil {
+		t.Fatalf("unexpected error for maxInflight=100 in production: %v", err)
+	}
+}
+
+func TestValidateInflightForProduction_ZeroInDevSucceeds(t *testing.T) {
+	err := validateInflightForProduction("", 0)
+	if err != nil {
+		t.Fatalf("unexpected error for maxInflight=0 in dev: %v", err)
+	}
+}
+
+func TestValidateInflightForProduction_NegativeInProdReturnsError(t *testing.T) {
+	err := validateInflightForProduction("production", -1)
+	if err == nil {
+		t.Fatal("expected error when maxInflight is negative in production mode")
+	}
+}

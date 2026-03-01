@@ -211,6 +211,84 @@ class TenantConnectionTracker:
                 self._active[tenant_id] = current - 1
 
 
+_LUA_ACQUIRE = """
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local current = tonumber(redis.call('GET', key) or '0')
+if current >= limit then
+    return 0
+end
+redis.call('INCR', key)
+return 1
+"""
+
+_LUA_RELEASE = """
+local key = KEYS[1]
+local current = tonumber(redis.call('GET', key) or '0')
+if current <= 1 then
+    redis.call('DEL', key)
+else
+    redis.call('DECR', key)
+end
+return 0
+"""
+
+
+class RedisTenantConnectionTracker:
+    def __init__(
+        self,
+        redis_conn: Any,
+        pool_size: int,
+        max_tenant_fraction: float = 0.2,
+    ) -> None:
+        self._redis = redis_conn
+        self._pool_size = pool_size
+        self._max_per_tenant = max(1, int(pool_size * max_tenant_fraction))
+
+    @property
+    def max_per_tenant(self) -> int:
+        return self._max_per_tenant
+
+    async def active_count(self, tenant_id: str) -> int:
+        key = f"neo4j:conn:{tenant_id}"
+        raw = await self._redis.get(key)
+        if raw is None:
+            return 0
+        return int(raw)
+
+    async def acquire(self, tenant_id: str) -> None:
+        key = f"neo4j:conn:{tenant_id}"
+        result = await self._redis.eval(
+            _LUA_ACQUIRE, 1, key, self._max_per_tenant,
+        )
+        if result == 0:
+            raise TenantQuotaExceededError(
+                f"Tenant {tenant_id!r} exceeds connection quota "
+                f"(limit {self._max_per_tenant})"
+            )
+
+    async def release(self, tenant_id: str) -> None:
+        key = f"neo4j:conn:{tenant_id}"
+        await self._redis.eval(_LUA_RELEASE, 1, key)
+
+
+def create_connection_tracker(
+    pool_size: int,
+    max_tenant_fraction: float = 0.2,
+    redis_conn: Any = None,
+) -> TenantConnectionTracker | RedisTenantConnectionTracker:
+    if redis_conn is not None:
+        return RedisTenantConnectionTracker(
+            redis_conn=redis_conn,
+            pool_size=pool_size,
+            max_tenant_fraction=max_tenant_fraction,
+        )
+    return TenantConnectionTracker(
+        pool_size=pool_size,
+        max_tenant_fraction=max_tenant_fraction,
+    )
+
+
 _TRACKER_STATE: Dict[str, Optional[TenantConnectionTracker]] = {
     "tracker": None,
 }

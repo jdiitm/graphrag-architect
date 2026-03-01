@@ -162,6 +162,10 @@ _BACKGROUND_TASKS = BoundedTaskSet(
 )
 
 
+def _is_production_mode() -> bool:
+    return os.environ.get("DEPLOYMENT_MODE", "").lower() == "production"
+
+
 def create_outbox_drainer(
     redis_conn: Any,
     vector_store: Any,
@@ -173,6 +177,12 @@ def create_outbox_drainer(
     if redis_conn is not None:
         store = RedisOutboxStore(redis_conn=redis_conn)
         return DurableOutboxDrainer(store=store, vector_store=vector_store)
+    if _is_production_mode():
+        raise SystemExit(
+            "FATAL: DEPLOYMENT_MODE=production but no durable outbox store "
+            "is configured. Set REDIS_URL or provide a Neo4j driver to "
+            "prevent silent vector-sync data loss on pod restart."
+        )
     return OutboxDrainer(outbox=_VECTOR_OUTBOX, vector_store=vector_store)
 
 logger = logging.getLogger(__name__)

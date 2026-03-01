@@ -301,6 +301,10 @@ def _serialize_context_for_classification(
     )
 
 
+async def _classify_async(text: str) -> Any:
+    return await asyncio.to_thread(_INJECTION_CLASSIFIER.classify, text)
+
+
 async def _raw_llm_synthesize(
     query: str,
     context: List[Dict[str, Any]],
@@ -310,7 +314,7 @@ async def _raw_llm_synthesize(
 
     if _prompt_guardrails_enabled():
         raw_text = _serialize_context_for_classification(context)
-        injection_result = _INJECTION_CLASSIFIER.classify(raw_text)
+        injection_result = await _classify_async(raw_text)
         if injection_result.is_flagged:
             _query_logger.warning(
                 "Prompt injection detected in context: score=%.2f patterns=%s query=%s",
@@ -352,7 +356,7 @@ async def _raw_llm_synthesize_stream(
 
     if _prompt_guardrails_enabled():
         raw_text = _serialize_context_for_classification(context)
-        injection_result = _INJECTION_CLASSIFIER.classify(raw_text)
+        injection_result = await _classify_async(raw_text)
         if injection_result.is_flagged:
             _query_logger.warning(
                 "Prompt injection detected in streaming context: score=%.2f patterns=%s query=%s",
