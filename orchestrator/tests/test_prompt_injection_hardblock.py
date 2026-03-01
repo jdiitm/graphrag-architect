@@ -83,7 +83,12 @@ class TestPromptInjectionHardBlock:
         from orchestrator.app.query_engine import _raw_llm_synthesize
 
         provider = _stub_provider()
+        original_value = "PAYLOAD_MARKER_ORIGINAL"
+        stripped_value = "SANITIZED_MARKER_STRIPPED"
         classify_result = _make_injection_result(flagged=True, score=0.8)
+
+        mock_classifier = MagicMock()
+        mock_classifier.strip_flagged_content.return_value = stripped_value
 
         with (
             patch(
@@ -105,11 +110,27 @@ class TestPromptInjectionHardBlock:
             ),
             patch(
                 "orchestrator.app.query_engine._INJECTION_CLASSIFIER",
-            ) as mock_classifier,
+                mock_classifier,
+            ),
         ):
-            mock_classifier.strip_flagged_content.return_value = "cleaned text"
-            await _raw_llm_synthesize("normal query", [{"data": "x"}])
-            mock_classifier.strip_flagged_content.assert_called_once()
+            await _raw_llm_synthesize(
+                "normal query", [{"data": original_value}],
+            )
+
+            mock_classifier.strip_flagged_content.assert_called_once_with(
+                original_value, classify_result,
+            )
+            provider.ainvoke_messages.assert_called_once()
+            messages = provider.ainvoke_messages.call_args[0][0]
+            prompt_text = " ".join(str(m.content) for m in messages)
+            assert stripped_value in prompt_text, (
+                f"Stripped content must reach LLM prompt: "
+                f"{stripped_value!r} not found in prompt"
+            )
+            assert original_value not in prompt_text, (
+                f"Original flagged content must NOT reach LLM prompt: "
+                f"{original_value!r} was found in prompt"
+            )
 
     @pytest.mark.asyncio
     async def test_hard_block_disabled_falls_back_to_warning(self) -> None:
