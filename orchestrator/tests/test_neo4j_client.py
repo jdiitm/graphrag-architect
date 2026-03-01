@@ -402,7 +402,7 @@ class TestReadReplicaRouting:
     async def test_read_operations_use_read_access(self) -> None:
         driver, session, tx = _mock_driver()
         repo = GraphRepository(driver)
-        await repo.read_topology(label="Service")
+        await repo.read_topology(label="Service", tenant_id="test-tenant")
         call_kwargs = driver.session.call_args
         if call_kwargs.kwargs:
             access = call_kwargs.kwargs.get("default_access_mode")

@@ -308,12 +308,18 @@ class GraphRepository:
     def _write_session(self) -> Any:
         return self._session(access_mode=WRITE_ACCESS)
 
-    async def read_topology(self, label: str = "Service") -> List[Dict[str, Any]]:
+    async def read_topology(
+        self, *, label: str = "Service", tenant_id: str,
+    ) -> List[Dict[str, Any]]:
         _validate_cypher_identifier(label)
-        cypher = f"MATCH (n:{label}) RETURN n"
+        cypher = (
+            f"MATCH (n:{label}) "
+            f"WHERE n.tenant_id = $tenant_id "
+            f"RETURN n"
+        )
 
         async def _tx(tx: AsyncManagedTransaction) -> list:
-            result = await tx.run(cypher)
+            result = await tx.run(cypher, tenant_id=tenant_id)
             return await result.data()
 
         async with self._read_session() as session:
@@ -393,9 +399,11 @@ class GraphRepository:
         await self._cb.call(_topology_write)
 
     async def refresh_degree_for_ids(
-        self, affected_ids: List[str],
+        self, affected_ids: List[str], *, tenant_id: str,
     ) -> None:
-        await self._refresh_degree_property(affected_ids)
+        await self._refresh_degree_property(
+            affected_ids, tenant_id=tenant_id,
+        )
 
     async def _execute_batched_commit(
         self, nodes: List[Any], edges: List[Any],
@@ -452,19 +460,20 @@ class GraphRepository:
             await session.execute_write(_batched_hot_commit)
 
     async def _refresh_degree_property(
-        self, affected_ids: List[str],
+        self, affected_ids: List[str], *, tenant_id: str,
     ) -> None:
         if not affected_ids:
             return
         degree_cypher = (
             "MATCH (n) WHERE (n:Service OR n:Database "
             "OR n:KafkaTopic OR n:K8sDeployment) "
+            "AND n.tenant_id = $tenant_id "
             "AND (n.id IN $ids OR n.name IN $ids) "
             "SET n.degree = size((n)--())"
         )
 
         async def _tx(tx: AsyncManagedTransaction) -> None:
-            await tx.run(degree_cypher, ids=affected_ids)
+            await tx.run(degree_cypher, ids=affected_ids, tenant_id=tenant_id)
 
         async with self._write_session() as session:
             await session.execute_write(_tx)

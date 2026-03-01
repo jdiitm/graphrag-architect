@@ -99,7 +99,9 @@ class TestDegreeRefreshDecoupled:
         driver, session, tx = _mock_driver()
         repo = GraphRepository(driver)
 
-        await repo.refresh_degree_for_ids(["order-service", "user-service"])
+        await repo.refresh_degree_for_ids(
+            ["order-service", "user-service"], tenant_id="test-tenant",
+        )
 
         all_cypher = [c.args[0] for c in tx.run.call_args_list]
         degree_calls = [q for q in all_cypher if "n.degree" in q]
@@ -110,7 +112,7 @@ class TestDegreeRefreshDecoupled:
         driver, session, tx = _mock_driver()
         repo = GraphRepository(driver)
 
-        await repo.refresh_degree_for_ids([])
+        await repo.refresh_degree_for_ids([], tenant_id="test-tenant")
 
         tx.run.assert_not_called()
 
