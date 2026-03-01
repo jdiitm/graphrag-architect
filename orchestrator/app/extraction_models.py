@@ -49,6 +49,7 @@ class ServiceNode(BaseModel):
     tenant_id: str = Field(..., min_length=1)
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
+    read_roles: List[str] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     content_hash: str = ""
 
@@ -64,6 +65,7 @@ class DatabaseNode(BaseModel):
     tenant_id: str = Field(..., min_length=1)
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
+    read_roles: List[str] = Field(default_factory=list)
     content_hash: str = ""
 
     @field_validator("id")
@@ -79,6 +81,7 @@ class KafkaTopicNode(BaseModel):
     tenant_id: str = Field(..., min_length=1)
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
+    read_roles: List[str] = Field(default_factory=list)
     content_hash: str = ""
 
     @field_validator("name")
@@ -94,6 +97,7 @@ class K8sDeploymentNode(BaseModel):
     tenant_id: str = Field(..., min_length=1)
     team_owner: Optional[str] = None
     namespace_acl: List[str] = Field(default_factory=list)
+    read_roles: List[str] = Field(default_factory=list)
     content_hash: str = ""
 
     @field_validator("id")

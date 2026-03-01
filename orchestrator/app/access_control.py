@@ -97,6 +97,14 @@ class CypherPermissionFilter:
     def verify_coverage(self) -> bool:
         return self._verify_coverage
 
+    def _acl_clause(
+        self, alias: str, field: str, param: str, use_in: bool = False,
+    ) -> str:
+        op = f"${param} IN {alias}.{field}" if use_in else f"{alias}.{field} = ${param}"
+        if self._deny_untagged:
+            return f"({op})"
+        return f"({op} OR {alias}.{field} IS NULL)"
+
     def node_filter(self, alias: str) -> Tuple[str, Dict[str, str]]:
         if self._principal.is_admin:
             return "", {}
@@ -105,35 +113,23 @@ class CypherPermissionFilter:
         params: Dict[str, str] = {}
 
         if self._principal.team != "*":
-            if self._deny_untagged:
-                clauses.append(f"({alias}.team_owner = $acl_team)")
-            else:
-                clauses.append(
-                    f"({alias}.team_owner = $acl_team "
-                    f"OR {alias}.team_owner IS NULL)"
-                )
+            clauses.append(self._acl_clause(alias, "team_owner", "acl_team"))
             params["acl_team"] = self._principal.team
 
         if self._principal.namespace != "*":
-            if self._deny_untagged:
-                clauses.append(
-                    f"($acl_namespace IN {alias}.namespace_acl)"
-                )
-            else:
-                clauses.append(
-                    f"($acl_namespace IN {alias}.namespace_acl "
-                    f"OR {alias}.namespace_acl IS NULL)"
-                )
+            clauses.append(
+                self._acl_clause(alias, "namespace_acl", "acl_namespace", use_in=True),
+            )
             params["acl_namespace"] = self._principal.namespace
 
+        if self._principal.role not in ("*", "anonymous", "admin"):
+            clauses.append(
+                self._acl_clause(alias, "read_roles", "acl_role", use_in=True),
+            )
+            params["acl_role"] = self._principal.role
+
         if not clauses:
-            if self._deny_untagged:
-                clauses.append(f"({alias}.team_owner = $acl_team)")
-            else:
-                clauses.append(
-                    f"({alias}.team_owner = $acl_team "
-                    f"OR {alias}.team_owner IS NULL)"
-                )
+            clauses.append(self._acl_clause(alias, "team_owner", "acl_team"))
             params["acl_team"] = "public"
 
         return " AND ".join(clauses), params

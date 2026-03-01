@@ -68,7 +68,8 @@ class TestBuildDefaultOntology:
         expected_props = {
             "id", "name", "language", "framework",
             "opentelemetry_enabled", "tenant_id",
-            "team_owner", "namespace_acl", "confidence",
+            "team_owner", "namespace_acl", "read_roles",
+            "confidence",
         }
         assert set(svc.properties.keys()) == expected_props
 
