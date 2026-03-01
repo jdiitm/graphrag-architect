@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -38,8 +39,13 @@ class TestCreateDurableSpilloverFn:
             ),
         ]
         spillover_fn(events)
-        assert store.write_event.call_count == 0, (
-            "Synchronous spillover should schedule writes, not block"
+
+        assert len(spillover_fn.pending) == 2, (
+            "Spillover must buffer events in the pending list"
+        )
+        await asyncio.sleep(0)
+        assert store.write_event.call_count == 2, (
+            "Spillover must schedule a durable write for each event"
         )
 
     def test_spillover_does_not_use_inmemory_outbox(self) -> None:

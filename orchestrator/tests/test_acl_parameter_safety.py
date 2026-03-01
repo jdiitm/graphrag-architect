@@ -21,10 +21,9 @@ class TestACLFragmentParameterSafety:
         assert "$acl_team" in fragment
         assert "$acl_namespaces" in fragment
         non_param_names = re.findall(r"(?<!\$)\bacl_team\b", fragment)
-        assert all(
-            "$" + name.replace("acl_team", "acl_team") for name in non_param_names
-        ), (
-            "ACL fragment must use only $-prefixed parameters, never literals"
+        assert len(non_param_names) == 0, (
+            "ACL fragment must use only $-prefixed parameters, never literals; "
+            f"found bare references: {non_param_names}"
         )
 
     def test_traversal_templates_use_dollar_params(self) -> None:

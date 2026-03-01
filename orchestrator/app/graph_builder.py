@@ -142,7 +142,14 @@ def create_durable_spillover_fn(
 
     def _spillover(events: List[VectorSyncEvent]) -> None:
         pending.extend(events)
+        try:
+            loop = asyncio.get_running_loop()
+            for event in events:
+                loop.create_task(store.write_event(event))
+        except RuntimeError:
+            pass
 
+    _spillover.pending = pending  # type: ignore[attr-defined]
     return _spillover
 
 
