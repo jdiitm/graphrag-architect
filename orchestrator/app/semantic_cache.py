@@ -174,6 +174,43 @@ def _vectorized_best_match(
         return best_entry, best_sim_val, second_sim_val
 
 
+class SimilarityBackend(Protocol):
+    async def find_best_match(
+        self,
+        query_embedding: List[float],
+        entries: List[CacheEntry],
+    ) -> Tuple[Optional[CacheEntry], float, float]: ...
+
+
+class InlineSimilarityBackend:
+    async def find_best_match(
+        self,
+        query_embedding: List[float],
+        entries: List[CacheEntry],
+    ) -> Tuple[Optional[CacheEntry], float, float]:
+        return _vectorized_best_match(query_embedding, entries)
+
+
+class ThreadPoolSimilarityBackend:
+    async def find_best_match(
+        self,
+        query_embedding: List[float],
+        entries: List[CacheEntry],
+    ) -> Tuple[Optional[CacheEntry], float, float]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, _vectorized_best_match, query_embedding, entries,
+        )
+
+
+def _resolve_similarity_backend(
+    backend_name: str,
+) -> SimilarityBackend:
+    if backend_name == "inline":
+        return InlineSimilarityBackend()
+    return ThreadPoolSimilarityBackend()
+
+
 def _embedding_hash(
     embedding: List[float],
     hash_dimensions: Optional[int] = None,
@@ -251,8 +288,13 @@ class _InflightRequest:
 
 
 class SemanticQueryCache:
-    def __init__(self, config: CacheConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: CacheConfig | None = None,
+        similarity_backend: SimilarityBackend | None = None,
+    ) -> None:
         self._config = config or CacheConfig()
+        self._similarity_backend = similarity_backend or ThreadPoolSimilarityBackend()
         self._entries: Dict[str, CacheEntry] = {}
         self._entry_generations: Dict[str, int] = {}
         self._generation = 0
@@ -267,6 +309,10 @@ class SemanticQueryCache:
     @property
     def similarity_threshold(self) -> float:
         return self._config.similarity_threshold
+
+    @property
+    def similarity_backend(self) -> SimilarityBackend:
+        return self._similarity_backend
 
     @property
     def generation(self) -> int:
@@ -293,7 +339,9 @@ class SemanticQueryCache:
         tenant_id: str = "",
         acl_key: str = "",
     ) -> Tuple[Optional[Dict[str, Any]], bool]:
-        cached = self.lookup(query_embedding, tenant_id=tenant_id, acl_key=acl_key)
+        cached = await self.async_lookup(
+            query_embedding, tenant_id=tenant_id, acl_key=acl_key,
+        )
         if cached is not None:
             return cached, False
 
@@ -304,7 +352,7 @@ class SemanticQueryCache:
         if inflight is not None:
             succeeded = await inflight.wait()
             if succeeded:
-                result = self.lookup(
+                result = await self.async_lookup(
                     query_embedding, tenant_id=tenant_id, acl_key=acl_key,
                 )
                 if result is not None:
@@ -326,12 +374,11 @@ class SemanticQueryCache:
         if inflight is not None:
             inflight.complete(failed=failed)
 
-    def lookup(
+    def _prepare_scoped_entries(
         self,
-        query_embedding: List[float],
-        tenant_id: str = "",
-        acl_key: str = "",
-    ) -> Optional[Dict[str, Any]]:
+        tenant_id: str,
+        acl_key: str,
+    ) -> Optional[List[CacheEntry]]:
         self._evict_expired()
         scope_key = (tenant_id, acl_key)
         matching_hashes = self._tenant_acl_index.get(scope_key)
@@ -345,16 +392,21 @@ class SemanticQueryCache:
         if not scoped_entries:
             self._misses += 1
             return None
+        return scoped_entries
 
-        best_entry, best_sim, second_sim = _vectorized_best_match(
-            query_embedding, scoped_entries,
-        )
+    def _apply_match_result(
+        self,
+        best_entry: Optional[CacheEntry],
+        best_sim: float,
+        second_sim: float,
+        scoped_entry_count: int,
+    ) -> Optional[Dict[str, Any]]:
         if best_entry is None:
             self._misses += 1
             return None
 
         if self._config.adaptive_threshold:
-            has_second = len(scoped_entries) >= 2
+            has_second = scoped_entry_count >= 2
             effective_threshold = compute_adaptive_threshold(
                 best_sim=best_sim,
                 second_sim=second_sim if has_second else None,
@@ -377,6 +429,38 @@ class SemanticQueryCache:
 
         self._misses += 1
         return None
+
+    def lookup(
+        self,
+        query_embedding: List[float],
+        tenant_id: str = "",
+        acl_key: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        scoped_entries = self._prepare_scoped_entries(tenant_id, acl_key)
+        if scoped_entries is None:
+            return None
+        best_entry, best_sim, second_sim = _vectorized_best_match(
+            query_embedding, scoped_entries,
+        )
+        return self._apply_match_result(
+            best_entry, best_sim, second_sim, len(scoped_entries),
+        )
+
+    async def async_lookup(
+        self,
+        query_embedding: List[float],
+        tenant_id: str = "",
+        acl_key: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        scoped_entries = self._prepare_scoped_entries(tenant_id, acl_key)
+        if scoped_entries is None:
+            return None
+        best_entry, best_sim, second_sim = await self._similarity_backend.find_best_match(
+            query_embedding, scoped_entries,
+        )
+        return self._apply_match_result(
+            best_entry, best_sim, second_sim, len(scoped_entries),
+        )
 
     def store(
         self,
@@ -694,6 +778,7 @@ class RedisSemanticQueryCache:
         key_prefix: str = "graphrag:semcache:",
         password: str = "",
         db: int = 0,
+        similarity_backend: SimilarityBackend | None = None,
     ) -> None:
         require_redis("RedisSemanticQueryCache")
         self._redis = create_async_redis(
@@ -702,7 +787,10 @@ class RedisSemanticQueryCache:
         self._ttl = ttl_seconds
         self._prefix = key_prefix
         self._cache_config = config or CacheConfig()
-        self._l1 = SemanticQueryCache(config=self._cache_config)
+        self._l1 = SemanticQueryCache(
+            config=self._cache_config,
+            similarity_backend=similarity_backend,
+        )
         self._stream_key = f"{key_prefix}{_STREAM_KEY_SUFFIX}"
 
     @property
@@ -758,7 +846,7 @@ class RedisSemanticQueryCache:
         tenant_id: str = "",
         acl_key: str = "",
     ) -> Tuple[Optional[Dict[str, Any]], bool]:
-        cached = self._l1.lookup(
+        cached = await self._l1.async_lookup(
             query_embedding, tenant_id=tenant_id, acl_key=acl_key,
         )
         if cached is not None:
@@ -776,7 +864,7 @@ class RedisSemanticQueryCache:
         if inflight is not None:
             succeeded = await inflight.wait()
             if succeeded:
-                result = self._l1.lookup(
+                result = await self._l1.async_lookup(
                     query_embedding, tenant_id=tenant_id, acl_key=acl_key,
                 )
                 if result is not None:
@@ -910,13 +998,16 @@ class RedisSemanticQueryCache:
 def create_semantic_cache(
     config: CacheConfig | None = None,
 ) -> Any:
-    from orchestrator.app.config import RedisConfig
+    from orchestrator.app.config import RedisConfig, SemanticCacheBackendConfig
     redis_cfg = RedisConfig.from_env()
+    backend_cfg = SemanticCacheBackendConfig.from_env()
+    backend = _resolve_similarity_backend(backend_cfg.backend)
     if redis_cfg.url:
         return RedisSemanticQueryCache(
             redis_url=redis_cfg.url,
             password=redis_cfg.password,
             db=redis_cfg.db,
             config=config,
+            similarity_backend=backend,
         )
-    return SemanticQueryCache(config=config)
+    return SemanticQueryCache(config=config, similarity_backend=backend)
