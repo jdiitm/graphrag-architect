@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from neo4j.exceptions import ClientError
 
 from orchestrator.app.agentic_traversal import (
     TraversalConfig,
@@ -13,7 +14,7 @@ from orchestrator.app.agentic_traversal import (
 
 class TestAdaptiveDegreeHint:
     @pytest.mark.asyncio
-    async def test_high_degree_hint_routes_to_batched_bfs(self) -> None:
+    async def test_high_degree_hint_skips_apoc_routes_to_bfs(self) -> None:
         config = TraversalConfig(
             strategy=TraversalStrategy.ADAPTIVE,
             degree_threshold=200,
@@ -24,9 +25,9 @@ class TestAdaptiveDegreeHint:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
                 new_callable=AsyncMock,
-            ) as mock_bounded,
+            ) as mock_apoc,
             patch(
                 "orchestrator.app.agentic_traversal._batched_bfs",
                 new_callable=AsyncMock,
@@ -41,12 +42,12 @@ class TestAdaptiveDegreeHint:
                 config=config,
                 degree_hint=500,
             )
+            mock_apoc.assert_not_called()
             mock_bfs.assert_called_once()
-            mock_bounded.assert_not_called()
             assert result == expected
 
     @pytest.mark.asyncio
-    async def test_low_degree_hint_routes_to_bounded_cypher(self) -> None:
+    async def test_low_degree_hint_skips_apoc_routes_to_bounded_cypher(self) -> None:
         config = TraversalConfig(
             strategy=TraversalStrategy.ADAPTIVE,
             degree_threshold=200,
@@ -57,14 +58,14 @@ class TestAdaptiveDegreeHint:
 
         with (
             patch(
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
+                new_callable=AsyncMock,
+            ) as mock_apoc,
+            patch(
                 "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
                 new_callable=AsyncMock,
                 return_value=expected,
             ) as mock_bounded,
-            patch(
-                "orchestrator.app.agentic_traversal._batched_bfs",
-                new_callable=AsyncMock,
-            ) as mock_bfs,
         ):
             result = await run_traversal(
                 driver=mock_driver,
@@ -74,12 +75,12 @@ class TestAdaptiveDegreeHint:
                 config=config,
                 degree_hint=50,
             )
+            mock_apoc.assert_not_called()
             mock_bounded.assert_called_once()
-            mock_bfs.assert_not_called()
             assert result == expected
 
     @pytest.mark.asyncio
-    async def test_no_degree_hint_defaults_to_bounded_cypher(self) -> None:
+    async def test_no_degree_hint_tries_apoc_then_falls_back_to_bfs(self) -> None:
         config = TraversalConfig(
             strategy=TraversalStrategy.ADAPTIVE,
             degree_threshold=200,
@@ -90,13 +91,14 @@ class TestAdaptiveDegreeHint:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
                 new_callable=AsyncMock,
-                return_value=expected,
-            ) as mock_bounded,
+                side_effect=ClientError("not available"),
+            ) as mock_apoc,
             patch(
                 "orchestrator.app.agentic_traversal._batched_bfs",
                 new_callable=AsyncMock,
+                return_value=expected,
             ) as mock_bfs,
         ):
             result = await run_traversal(
@@ -106,12 +108,12 @@ class TestAdaptiveDegreeHint:
                 acl_params=acl_params,
                 config=config,
             )
-            mock_bounded.assert_called_once()
-            mock_bfs.assert_not_called()
+            mock_apoc.assert_called_once()
+            mock_bfs.assert_called_once()
             assert result == expected
 
     @pytest.mark.asyncio
-    async def test_degree_hint_at_threshold_routes_to_batched(self) -> None:
+    async def test_degree_hint_at_threshold_skips_apoc_routes_to_bfs(self) -> None:
         config = TraversalConfig(
             strategy=TraversalStrategy.ADAPTIVE,
             degree_threshold=200,
@@ -122,9 +124,9 @@ class TestAdaptiveDegreeHint:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
                 new_callable=AsyncMock,
-            ) as mock_bounded,
+            ) as mock_apoc,
             patch(
                 "orchestrator.app.agentic_traversal._batched_bfs",
                 new_callable=AsyncMock,
@@ -139,12 +141,12 @@ class TestAdaptiveDegreeHint:
                 config=config,
                 degree_hint=200,
             )
+            mock_apoc.assert_not_called()
             mock_bfs.assert_called_once()
-            mock_bounded.assert_not_called()
             assert result == expected
 
     @pytest.mark.asyncio
-    async def test_degree_hint_zero_routes_to_bounded(self) -> None:
+    async def test_degree_hint_zero_skips_apoc_routes_to_bounded_cypher(self) -> None:
         config = TraversalConfig(
             strategy=TraversalStrategy.ADAPTIVE,
             degree_threshold=200,
@@ -155,14 +157,14 @@ class TestAdaptiveDegreeHint:
 
         with (
             patch(
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
+                new_callable=AsyncMock,
+            ) as mock_apoc,
+            patch(
                 "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
                 new_callable=AsyncMock,
                 return_value=expected,
             ) as mock_bounded,
-            patch(
-                "orchestrator.app.agentic_traversal._batched_bfs",
-                new_callable=AsyncMock,
-            ) as mock_bfs,
         ):
             result = await run_traversal(
                 driver=mock_driver,
@@ -172,8 +174,8 @@ class TestAdaptiveDegreeHint:
                 config=config,
                 degree_hint=0,
             )
+            mock_apoc.assert_not_called()
             mock_bounded.assert_called_once()
-            mock_bfs.assert_not_called()
             assert result == expected
 
 
