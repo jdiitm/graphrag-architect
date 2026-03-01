@@ -50,6 +50,28 @@ def _rank_by_relevance(
     return sorted(candidates, key=lambda c: c.get("score", 0.0), reverse=True)
 
 
+class ContextBudgetExceededError(Exception):
+    pass
+
+
+_CEILING_RATIO = 0.95
+
+
+def enforce_token_ceiling(
+    candidates: List[Dict[str, Any]],
+    budget: TokenBudget,
+) -> None:
+    total = sum(
+        estimate_tokens(_serialize_candidate(c)) for c in candidates
+    )
+    ceiling = int(budget.max_context_tokens * _CEILING_RATIO)
+    if total > ceiling:
+        raise ContextBudgetExceededError(
+            f"Context ({total} tokens) exceeds token budget ceiling "
+            f"({ceiling} tokens, {_CEILING_RATIO:.0%} of {budget.max_context_tokens})"
+        )
+
+
 def truncate_context(
     candidates: List[Dict[str, Any]],
     budget: TokenBudget,

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import re
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Optional
 
@@ -33,9 +32,6 @@ class CypherSandboxConfig:
     max_results: int = 1000
     query_timeout_seconds: float = 30.0
     max_query_cost: int = 20
-
-
-_LIMIT_PATTERN = re.compile(r"\bLIMIT\s+(\d+)", re.IGNORECASE)
 
 
 def _normalize_cypher(cypher: str) -> str:
@@ -89,16 +85,10 @@ class SandboxedQueryExecutor:
         return self._config
 
     def inject_limit(self, cypher: str) -> str:
-        def _cap_limit(match: re.Match) -> str:
-            value = int(match.group(1))
-            if value > self._config.max_results:
-                return f"LIMIT {self._config.max_results}"
-            return match.group(0)
+        from orchestrator.app.cypher_ast import inject_limit_ast
 
         cleaned = _strip_comments(cypher)
-        if _LIMIT_PATTERN.search(cleaned):
-            return _LIMIT_PATTERN.sub(_cap_limit, cleaned)
-        return f"{cleaned.rstrip().rstrip(';')} LIMIT {self._config.max_results}"
+        return inject_limit_ast(cleaned, self._config.max_results)
 
     def validate(self, cypher: str) -> None:
         if self._registry is not None and not self._registry.is_allowed(cypher):

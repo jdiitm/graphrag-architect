@@ -6,7 +6,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple, TypedDict
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set, Tuple, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from neo4j.exceptions import Neo4jError
@@ -133,6 +133,24 @@ def _spillover_to_vector_outbox(
 ) -> None:
     for event in events:
         _VECTOR_OUTBOX.enqueue(event)
+
+
+def create_durable_spillover_fn(
+    store: Any,
+) -> Callable[[List[VectorSyncEvent]], None]:
+    pending: List[VectorSyncEvent] = []
+
+    def _spillover(events: List[VectorSyncEvent]) -> None:
+        pending.extend(events)
+        try:
+            loop = asyncio.get_running_loop()
+            for event in events:
+                loop.create_task(store.write_event(event))
+        except RuntimeError:
+            pass
+
+    _spillover.pending = pending  # type: ignore[attr-defined]
+    return _spillover
 
 
 _COALESCING_OUTBOX = CoalescingOutbox(

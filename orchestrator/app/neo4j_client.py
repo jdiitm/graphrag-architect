@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from neo4j import AsyncDriver, AsyncManagedTransaction, READ_ACCESS, WRITE_ACCESS
 
@@ -170,6 +170,25 @@ def _entity_sort_key(entity: Any) -> Tuple[str, str]:
 
 def _sort_entities_for_write(entities: List[Any]) -> List[Any]:
     return sorted(entities, key=_entity_sort_key)
+
+
+_HOT_TARGET_DEFAULT_THRESHOLD = 50
+
+
+def detect_hot_targets(
+    edges: List[Any],
+    threshold: int = _HOT_TARGET_DEFAULT_THRESHOLD,
+) -> Set[str]:
+    target_counts: Dict[str, int] = {}
+    for edge in edges:
+        target = (
+            getattr(edge, "target_service_id", "")
+            or getattr(edge, "topic_name", "")
+            or getattr(edge, "deployment_id", "")
+        )
+        if target:
+            target_counts[target] = target_counts.get(target, 0) + 1
+    return {tid for tid, count in target_counts.items() if count >= threshold}
 
 
 def _partition_entities(
