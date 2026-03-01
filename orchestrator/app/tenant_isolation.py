@@ -246,6 +246,18 @@ async def validate_physical_isolation_support(
         )
 
 
+def validate_vector_isolation(
+    deployment_mode: str,
+    isolation_mode: str,
+) -> None:
+    if deployment_mode == "production" and isolation_mode == "logical":
+        raise LogicalIsolationInProductionError(
+            "LOGICAL vector isolation is forbidden in production. "
+            "Use PHYSICAL isolation with per-tenant Qdrant collections "
+            "for SOC2/FedRAMP compliance."
+        )
+
+
 class OrphanedPoolDetector:
     def __init__(
         self,
