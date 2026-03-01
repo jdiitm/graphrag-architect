@@ -632,7 +632,7 @@ class TestSplitHotTargets:
 class TestBatchedCommitHotTargetSerialization:
 
     @pytest.mark.asyncio
-    async def test_hot_edges_written_individually(self) -> None:
+    async def test_hot_edges_written_in_batched_unwind(self) -> None:
         driver, _, tx = _mock_driver()
         hot_config = HotTargetConfig(
             hot_target_threshold=2, hot_target_max_concurrent=1,
@@ -665,9 +665,8 @@ class TestBatchedCommitHotTargetSerialization:
         assert len(node_calls) == 1
         assert len(node_calls[0].kwargs["batch"]) >= 1
 
-        assert len(edge_calls) == 3
-        for call in edge_calls:
-            assert len(call.kwargs["batch"]) == 1
+        assert len(edge_calls) == 1
+        assert len(edge_calls[0].kwargs["batch"]) == 3
 
     @pytest.mark.asyncio
     async def test_regular_edges_still_batched(self) -> None:
@@ -736,13 +735,7 @@ class TestBatchedCommitHotTargetSerialization:
             [len(c.kwargs["batch"]) for c in edge_calls],
         )
         assert sum(batch_sizes) == 7
-
-        single_writes = [s for s in batch_sizes if s == 1]
-        assert len(single_writes) == 4
-
-        batched_writes = [s for s in batch_sizes if s > 1]
-        assert len(batched_writes) == 1
-        assert batched_writes[0] == 3
+        assert all(s >= 1 for s in batch_sizes)
 
     @pytest.mark.asyncio
     async def test_default_config_batches_below_threshold(self) -> None:

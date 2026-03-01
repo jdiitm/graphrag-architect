@@ -430,28 +430,23 @@ class GraphRepository:
     async def _write_hot_edges_serialized(
         self, hot_edges: List[Any],
     ) -> None:
-        hot_semaphore = asyncio.Semaphore(
-            self._hot_target_config.hot_target_max_concurrent,
-        )
+        hot_groups = _group_by_type(hot_edges)
 
-        async def _single_merge(edge: Any) -> None:
-            async with hot_semaphore:
-                entity_type = type(edge)
+        async def _batched_hot_commit(
+            tx: AsyncManagedTransaction,
+        ) -> None:
+            for entity_type, records in hot_groups.items():
                 unwind_query = self._unwind_queries.get(entity_type)
                 if unwind_query is None:
                     raise TypeError(
                         f"No UNWIND query registered for "
                         f"{entity_type.__name__}"
                     )
-                async with self._write_session() as session:
-                    await session.execute_write(
-                        self._run_unwind, query=unwind_query,
-                        batch=[edge.model_dump()],
-                    )
+                for chunk in _chunk_list(records, self._batch_size):
+                    await tx.run(unwind_query, batch=chunk)
 
-        await asyncio.gather(*(
-            _single_merge(edge) for edge in hot_edges
-        ))
+        async with self._write_session() as session:
+            await session.execute_write(_batched_hot_commit)
 
     async def _refresh_degree_property(
         self, affected_ids: List[str],

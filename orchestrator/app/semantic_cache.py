@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import random
 import re
 import time
 from dataclasses import dataclass
@@ -74,6 +75,15 @@ class CacheEntry:
     acl_key: str = ""
     access_count: int = 0
     topology_hash: str = ""
+    last_accessed_at: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.last_accessed_at == 0.0:
+            object.__setattr__(self, "last_accessed_at", self.created_at)
+
+    def touch(self) -> None:
+        object.__setattr__(self, "last_accessed_at", time.monotonic())
+        object.__setattr__(self, "access_count", self.access_count + 1)
 
     @property
     def is_expired(self) -> bool:
@@ -357,7 +367,7 @@ class SemanticQueryCache:
             effective_threshold = self._config.similarity_threshold
 
         if best_sim >= effective_threshold:
-            best_entry.access_count += 1
+            best_entry.touch()
             self._hits += 1
             logger.debug(
                 "Cache hit: query=%r similarity=%.4f threshold=%.4f",
@@ -385,9 +395,11 @@ class SemanticQueryCache:
         if normalized:
             query = normalized
 
-        ttl = self._config.default_ttl_seconds
+        base_ttl = self._config.default_ttl_seconds
         if complexity and self._config.ttl_by_complexity:
-            ttl = self._config.ttl_by_complexity.get(complexity, ttl)
+            base_ttl = self._config.ttl_by_complexity.get(complexity, base_ttl)
+        jitter_factor = 1.0 + random.uniform(-0.1, 0.1)
+        ttl = base_ttl * jitter_factor
 
         topo_hash = compute_topology_hash(node_ids) if node_ids else ""
 
@@ -565,13 +577,14 @@ class SemanticQueryCache:
 
     def _enforce_max_size(self) -> None:
         while len(self._entries) >= self._config.max_entries:
-            oldest_key = min(
-                self._entries, key=lambda k: self._entries[k].created_at,
+            lru_key = min(
+                self._entries,
+                key=lambda k: self._entries[k].last_accessed_at,
             )
-            self._remove_from_tenant_index(oldest_key)
-            del self._entries[oldest_key]
-            self._entry_generations.pop(oldest_key, None)
-            self._remove_node_tags_for_key(oldest_key)
+            self._remove_from_tenant_index(lru_key)
+            del self._entries[lru_key]
+            self._entry_generations.pop(lru_key, None)
+            self._remove_node_tags_for_key(lru_key)
             self._evictions += 1
 
 
