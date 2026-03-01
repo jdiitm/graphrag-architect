@@ -189,7 +189,7 @@ class TenantConnectionTracker:
     def max_per_tenant(self) -> int:
         return self._max_per_tenant
 
-    def active_count(self, tenant_id: str) -> int:
+    async def active_count(self, tenant_id: str) -> int:
         return self._active.get(tenant_id, 0)
 
     async def acquire(self, tenant_id: str) -> None:
@@ -289,7 +289,9 @@ def create_connection_tracker(
     )
 
 
-_TRACKER_STATE: Dict[str, Optional[TenantConnectionTracker]] = {
+_TrackerType = TenantConnectionTracker | RedisTenantConnectionTracker
+
+_TRACKER_STATE: Dict[str, Optional[_TrackerType]] = {
     "tracker": None,
 }
 
@@ -297,13 +299,16 @@ _TRACKER_STATE: Dict[str, Optional[TenantConnectionTracker]] = {
 def init_tenant_tracker(
     pool_size: int = 100,
     max_tenant_fraction: float = 0.2,
-) -> TenantConnectionTracker:
-    tracker = TenantConnectionTracker(
-        pool_size=pool_size, max_tenant_fraction=max_tenant_fraction,
+    redis_conn: Any = None,
+) -> _TrackerType:
+    tracker = create_connection_tracker(
+        pool_size=pool_size,
+        max_tenant_fraction=max_tenant_fraction,
+        redis_conn=redis_conn,
     )
     _TRACKER_STATE["tracker"] = tracker
     return tracker
 
 
-def get_tenant_tracker() -> Optional[TenantConnectionTracker]:
+def get_tenant_tracker() -> Optional[_TrackerType]:
     return _TRACKER_STATE.get("tracker")
