@@ -92,6 +92,13 @@ class TestBuildDefaultOntology:
         assert prod.source_type == "Service"
         assert prod.target_type == "KafkaTopic"
 
+    def test_consumes_edge_endpoints(self) -> None:
+        ontology = build_default_ontology()
+        cons = ontology.get_edge_type("CONSUMES")
+        assert cons is not None
+        assert cons.source_type == "Service"
+        assert cons.target_type == "KafkaTopic"
+
     def test_deployed_in_edge_endpoints(self) -> None:
         ontology = build_default_ontology()
         dep = ontology.get_edge_type("DEPLOYED_IN")
@@ -102,62 +109,46 @@ class TestBuildDefaultOntology:
 
 class TestEdgeCypherGeneration:
 
-    def test_edge_merge_cypher_calls(self) -> None:
-        edge_def = EdgeTypeDefinition(
-            source_type="Service",
-            target_type="Service",
-            properties={
-                "protocol": "string", "confidence": "float",
-                "ingestion_id": "string", "last_seen_at": "string",
-            },
-            source_key="id",
-            target_key="id",
-            source_label="Service",
-            target_label="Service",
-        )
-        cypher = generate_edge_merge_cypher("CALLS", edge_def)
-        assert "MATCH" in cypher
-        assert "MERGE" in cypher
+    def test_edge_merge_cypher_calls_from_default_ontology(self) -> None:
+        ontology = build_default_ontology()
+        calls_def = ontology.get_edge_type("CALLS")
+        cypher = generate_edge_merge_cypher("CALLS", calls_def)
+        assert "MATCH (a:Service {id: $source_service_id" in cypher
+        assert "(b:Service {id: $target_service_id" in cypher
         assert ":CALLS" in cypher
         assert "$protocol" in cypher
 
-    def test_edge_unwind_cypher_calls(self) -> None:
-        edge_def = EdgeTypeDefinition(
-            source_type="Service",
-            target_type="Service",
-            properties={
-                "protocol": "string", "confidence": "float",
-                "ingestion_id": "string", "last_seen_at": "string",
-            },
-            source_key="id",
-            target_key="id",
-            source_label="Service",
-            target_label="Service",
-        )
-        cypher = generate_edge_unwind_cypher("CALLS", edge_def)
+    def test_edge_unwind_cypher_calls_from_default_ontology(self) -> None:
+        ontology = build_default_ontology()
+        calls_def = ontology.get_edge_type("CALLS")
+        cypher = generate_edge_unwind_cypher("CALLS", calls_def)
         assert "UNWIND $batch" in cypher
-        assert "MERGE" in cypher
-        assert ":CALLS" in cypher
+        assert "a:Service {id: row.source_service_id" in cypher
+        assert "b:Service {id: row.target_service_id" in cypher
         assert "row.protocol" in cypher
 
-    def test_edge_merge_cypher_produces(self) -> None:
-        edge_def = EdgeTypeDefinition(
-            source_type="Service",
-            target_type="KafkaTopic",
-            properties={
-                "event_schema": "string",
-                "ingestion_id": "string",
-                "last_seen_at": "string",
-            },
-            source_key="id",
-            target_key="name",
-            source_label="Service",
-            target_label="KafkaTopic",
-        )
-        cypher = generate_edge_merge_cypher("PRODUCES", edge_def)
-        assert ":Service" in cypher
-        assert ":KafkaTopic" in cypher
+    def test_edge_merge_cypher_produces_from_default_ontology(self) -> None:
+        ontology = build_default_ontology()
+        prod_def = ontology.get_edge_type("PRODUCES")
+        cypher = generate_edge_merge_cypher("PRODUCES", prod_def)
+        assert "a:Service {id: $service_id" in cypher
+        assert "b:KafkaTopic {name: $topic_name" in cypher
         assert ":PRODUCES" in cypher
+
+    def test_edge_unwind_cypher_deployed_in(self) -> None:
+        ontology = build_default_ontology()
+        dep_def = ontology.get_edge_type("DEPLOYED_IN")
+        cypher = generate_edge_unwind_cypher("DEPLOYED_IN", dep_def)
+        assert "a:Service {id: row.service_id" in cypher
+        assert "b:K8sDeployment {id: row.deployment_id" in cypher
+
+    def test_edge_merge_cypher_consumes(self) -> None:
+        ontology = build_default_ontology()
+        cons_def = ontology.get_edge_type("CONSUMES")
+        cypher = generate_edge_merge_cypher("CONSUMES", cons_def)
+        assert "a:Service {id: $service_id" in cypher
+        assert "b:KafkaTopic {name: $topic_name" in cypher
+        assert ":CONSUMES" in cypher
 
 
 class TestOntologyAllEdgeTypes:

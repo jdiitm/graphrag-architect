@@ -20,6 +20,8 @@ class EdgeTypeDefinition:
     properties: Dict[str, str] = field(default_factory=dict)
     source_key: str = "id"
     target_key: str = "id"
+    source_param: str = ""
+    target_param: str = ""
     source_label: str = ""
     target_label: str = ""
 
@@ -72,6 +74,8 @@ class OntologyLoader:
                 properties=definition.get("properties", {}),
                 source_key=definition.get("source_key", "id"),
                 target_key=definition.get("target_key", "id"),
+                source_param=definition.get("source_param", ""),
+                target_param=definition.get("target_param", ""),
                 source_label=definition.get("source_label", ""),
                 target_label=definition.get("target_label", ""),
             )
@@ -117,16 +121,18 @@ def generate_edge_merge_cypher(
 ) -> str:
     src_label = edge_def.source_label or edge_def.source_type
     tgt_label = edge_def.target_label or edge_def.target_type
-    src_key = edge_def.source_key
-    tgt_key = edge_def.target_key
+    src_node_prop = edge_def.source_key
+    tgt_node_prop = edge_def.target_key
+    src_param = edge_def.source_param or edge_def.source_key
+    tgt_param = edge_def.target_param or edge_def.target_key
     set_parts = [
         f"r.{prop} = ${prop}"
         for prop in edge_def.properties
     ]
     set_clause = ", ".join(set_parts)
     query = (
-        f"MATCH (a:{src_label} {{{src_key}: ${src_key}, tenant_id: $tenant_id}}), "
-        f"(b:{tgt_label} {{{tgt_key}: ${tgt_key}, tenant_id: $tenant_id}}) "
+        f"MATCH (a:{src_label} {{{src_node_prop}: ${src_param}, tenant_id: $tenant_id}}), "
+        f"(b:{tgt_label} {{{tgt_node_prop}: ${tgt_param}, tenant_id: $tenant_id}}) "
         f"MERGE (a)-[r:{rel_type}]->(b)"
     )
     if set_clause:
@@ -139,8 +145,10 @@ def generate_edge_unwind_cypher(
 ) -> str:
     src_label = edge_def.source_label or edge_def.source_type
     tgt_label = edge_def.target_label or edge_def.target_type
-    src_key = edge_def.source_key
-    tgt_key = edge_def.target_key
+    src_node_prop = edge_def.source_key
+    tgt_node_prop = edge_def.target_key
+    src_param = edge_def.source_param or edge_def.source_key
+    tgt_param = edge_def.target_param or edge_def.target_key
     set_parts = [
         f"r.{prop} = row.{prop}"
         for prop in edge_def.properties
@@ -148,8 +156,8 @@ def generate_edge_unwind_cypher(
     set_clause = ", ".join(set_parts)
     query = (
         f"UNWIND $batch AS row "
-        f"MATCH (a:{src_label} {{{src_key}: row.{src_key}, tenant_id: row.tenant_id}}), "
-        f"(b:{tgt_label} {{{tgt_key}: row.{tgt_key}, tenant_id: row.tenant_id}}) "
+        f"MATCH (a:{src_label} {{{src_node_prop}: row.{src_param}, tenant_id: row.tenant_id}}), "
+        f"(b:{tgt_label} {{{tgt_node_prop}: row.{tgt_param}, tenant_id: row.tenant_id}}) "
         f"MERGE (a)-[r:{rel_type}]->(b)"
     )
     if set_clause:
@@ -175,6 +183,8 @@ def _edge_def(
     props: Dict[str, str],
     src_key: str = "id",
     tgt_key: str = "id",
+    src_param: str = "",
+    tgt_param: str = "",
     src_label: str = "",
     tgt_label: str = "",
 ) -> EdgeTypeDefinition:
@@ -184,6 +194,8 @@ def _edge_def(
         properties=props,
         source_key=src_key,
         target_key=tgt_key,
+        source_param=src_param or src_key,
+        target_param=tgt_param or tgt_key,
         source_label=src_label or src_type,
         target_label=tgt_label or tgt_type,
     )
@@ -240,8 +252,8 @@ def build_default_ontology() -> Ontology:
                 "protocol": "string", "confidence": "float",
                 "ingestion_id": "string", "last_seen_at": "string",
             },
-            src_key="source_service_id",
-            tgt_key="target_service_id",
+            src_key="id", src_param="source_service_id",
+            tgt_key="id", tgt_param="target_service_id",
         ),
         "PRODUCES": _edge_def(
             "Service", "KafkaTopic",
@@ -249,8 +261,8 @@ def build_default_ontology() -> Ontology:
                 "event_schema": "string",
                 "ingestion_id": "string", "last_seen_at": "string",
             },
-            src_key="service_id",
-            tgt_key="topic_name",
+            src_key="id", src_param="service_id",
+            tgt_key="name", tgt_param="topic_name",
         ),
         "CONSUMES": _edge_def(
             "Service", "KafkaTopic",
@@ -258,16 +270,16 @@ def build_default_ontology() -> Ontology:
                 "consumer_group": "string",
                 "ingestion_id": "string", "last_seen_at": "string",
             },
-            src_key="service_id",
-            tgt_key="topic_name",
+            src_key="id", src_param="service_id",
+            tgt_key="name", tgt_param="topic_name",
         ),
         "DEPLOYED_IN": _edge_def(
             "Service", "K8sDeployment",
             {
                 "ingestion_id": "string", "last_seen_at": "string",
             },
-            src_key="service_id",
-            tgt_key="deployment_id",
+            src_key="id", src_param="service_id",
+            tgt_key="id", tgt_param="deployment_id",
         ),
     }
 

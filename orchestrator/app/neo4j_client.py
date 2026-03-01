@@ -381,35 +381,40 @@ class GraphRepository:
 
         nodes, edges = _partition_entities(entities) if entities else ([], [])
 
-        async def _atomic_commit(
-            tx: AsyncManagedTransaction,
-        ) -> None:
-            node_groups = _group_by_type(nodes)
-            for entity_type, records in node_groups.items():
-                unwind_query = _UNWIND_QUERIES.get(entity_type)
-                if unwind_query is None:
-                    raise TypeError(
-                        f"No UNWIND query for {entity_type.__name__}"
-                    )
-                for chunk in _chunk_list(records, self._batch_size):
-                    await tx.run(unwind_query, batch=chunk)
+        async def _atomic_write() -> None:
+            async def _atomic_commit(
+                tx: AsyncManagedTransaction,
+            ) -> None:
+                node_groups = _group_by_type(nodes)
+                for entity_type, records in node_groups.items():
+                    unwind_query = _UNWIND_QUERIES.get(entity_type)
+                    if unwind_query is None:
+                        raise TypeError(
+                            f"No UNWIND query for {entity_type.__name__}"
+                        )
+                    for chunk in _chunk_list(records, self._batch_size):
+                        await tx.run(unwind_query, batch=chunk)
 
-            edge_groups = _group_by_type(edges)
-            for entity_type, records in edge_groups.items():
-                unwind_query = _UNWIND_QUERIES.get(entity_type)
-                if unwind_query is None:
-                    raise TypeError(
-                        f"No UNWIND query for {entity_type.__name__}"
-                    )
-                for chunk in _chunk_list(records, self._batch_size):
-                    await tx.run(unwind_query, batch=chunk)
+                edge_groups = _group_by_type(edges)
+                for entity_type, records in edge_groups.items():
+                    unwind_query = _UNWIND_QUERIES.get(entity_type)
+                    if unwind_query is None:
+                        raise TypeError(
+                            f"No UNWIND query for {entity_type.__name__}"
+                        )
+                    for chunk in _chunk_list(records, self._batch_size):
+                        await tx.run(unwind_query, batch=chunk)
 
-            if self._outbox_store and outbox_events:
-                for event in outbox_events:
-                    await self._outbox_store.write_in_tx(tx, event=event)
+                if self._outbox_store and outbox_events:
+                    for event in outbox_events:
+                        await self._outbox_store.write_in_tx(
+                            tx, event=event,
+                        )
 
-        async with self._write_session() as session:
-            await session.execute_write(_atomic_commit)
+            async with self._write_session() as session:
+                await session.execute_write(_atomic_commit)
+
+        await self._cb.call(_atomic_write)
 
     async def refresh_degree_for_ids(
         self, affected_ids: List[str],
