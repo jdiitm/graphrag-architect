@@ -8,6 +8,7 @@ import pytest
 
 INFRA_DIR = Path(__file__).resolve().parents[2] / "infrastructure"
 CONFIGMAP_PATH = INFRA_DIR / "k8s" / "configmap.yaml"
+SECRETS_PATH = INFRA_DIR / "k8s" / "secrets.yaml"
 DEPLOYMENT_PATH = INFRA_DIR / "k8s" / "ingestion-worker-deployment.yaml"
 
 
@@ -16,6 +17,13 @@ def _configmap_data() -> dict[str, str]:
     content = CONFIGMAP_PATH.read_text(encoding="utf-8")
     doc = yaml.safe_load(content)
     return doc.get("data", {})
+
+
+@pytest.fixture(name="secrets_string_data")
+def _secrets_string_data() -> dict[str, str]:
+    content = SECRETS_PATH.read_text(encoding="utf-8")
+    doc = yaml.safe_load(content)
+    return doc.get("stringData", {})
 
 
 def _load_deployment_docs() -> list[dict]:
@@ -102,10 +110,30 @@ class TestConfigMapProductionEnvVars:
             "main.go validateDLQFallbackForProduction rejects it"
         )
 
+    def test_ack_timeout_seconds_present(
+        self, configmap_data: dict[str, str],
+    ) -> None:
+        assert "ACK_TIMEOUT_SECONDS" in configmap_data, (
+            "ACK_TIMEOUT_SECONDS missing from ConfigMap; "
+            "worker needs an explicit ack timeout for production Kafka consumers"
+        )
+
     def test_deployment_mode_is_production(
         self, configmap_data: dict[str, str],
     ) -> None:
         assert configmap_data.get("DEPLOYMENT_MODE") == "production"
+
+
+class TestSecretsCompleteness:
+
+    def test_dedup_redis_url_present(
+        self, secrets_string_data: dict[str, str],
+    ) -> None:
+        assert "DEDUP_REDIS_URL" in secrets_string_data, (
+            "DEDUP_REDIS_URL missing from secrets.yaml; "
+            "dedup factory calls log.Fatal when DEDUP_STORE_TYPE=redis "
+            "and this URL is empty — worker will crash at startup"
+        )
 
 
 class TestIngestionWorkerDeploymentConfig:
