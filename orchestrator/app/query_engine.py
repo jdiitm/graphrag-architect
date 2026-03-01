@@ -40,6 +40,7 @@ from orchestrator.app.context_manager import (
     truncate_context_topology,
 )
 from orchestrator.app.prompt_sanitizer import (
+    InjectionResult,
     PromptInjectionClassifier,
     sanitize_query_input,
 )
@@ -155,6 +156,18 @@ def _get_max_query_cost() -> int:
 
 def _sandbox_inject_limit(cypher: str) -> str:
     return _SANDBOX.inject_limit(cypher)
+
+
+class PromptInjectionBlockedError(Exception):
+    def __init__(
+        self, query: str, score: float, patterns: list,
+    ) -> None:
+        self.query = query
+        self.score = score
+        self.patterns = patterns
+        super().__init__(
+            f"Prompt injection blocked: score={score:.2f} patterns={patterns}"
+        )
 
 
 class FulltextTenantRequired(Exception):
@@ -343,12 +356,35 @@ def _prompt_guardrails_enabled() -> bool:
     return os.environ.get("PROMPT_GUARDRAILS_ENABLED", "true").lower() != "false"
 
 
+def _injection_hard_block_enabled() -> bool:
+    return os.environ.get("INJECTION_HARD_BLOCK_ENABLED", "true").lower() != "false"
+
+
 def _serialize_context_for_classification(
     context: List[Dict[str, Any]],
 ) -> str:
     return " ".join(
         str(v) for item in context for v in item.values()
     )
+
+
+def _strip_context_values(
+    context: List[Dict[str, Any]],
+    result: InjectionResult,
+) -> List[Dict[str, Any]]:
+    if not result.is_flagged:
+        return context
+    return [
+        {
+            k: (
+                _INJECTION_CLASSIFIER.strip_flagged_content(v, result)
+                if isinstance(v, str)
+                else v
+            )
+            for k, v in record.items()
+        }
+        for record in context
+    ]
 
 
 async def _classify_async(text: str) -> Any:
@@ -365,6 +401,18 @@ async def _raw_llm_synthesize(
     if _prompt_guardrails_enabled():
         raw_text = _serialize_context_for_classification(context)
         injection_result = await _classify_async(raw_text)
+        if injection_result.is_flagged and _injection_hard_block_enabled():
+            _query_logger.warning(
+                "Prompt injection BLOCKED: score=%.2f patterns=%s query=%s",
+                injection_result.score,
+                injection_result.detected_patterns,
+                sanitized,
+            )
+            raise PromptInjectionBlockedError(
+                query=sanitized,
+                score=injection_result.score,
+                patterns=injection_result.detected_patterns,
+            )
         if injection_result.is_flagged:
             _query_logger.warning(
                 "Prompt injection detected in context: score=%.2f patterns=%s query=%s",
@@ -372,6 +420,7 @@ async def _raw_llm_synthesize(
                 injection_result.detected_patterns,
                 sanitized,
             )
+        context = _strip_context_values(context, injection_result)
 
     context_block = format_context_for_prompt(context)
     messages = [
@@ -401,18 +450,23 @@ async def _raw_llm_synthesize_stream(
     query: str,
     context: List[Dict[str, Any]],
 ) -> AsyncIterator[str]:
-    from langchain_google_genai import ChatGoogleGenerativeAI
-
-    config = ExtractionConfig.from_env()
-    llm = ChatGoogleGenerativeAI(
-        model=config.model_name,
-        google_api_key=config.google_api_key,
-    )
     sanitized = sanitize_query_input(query)
 
     if _prompt_guardrails_enabled():
         raw_text = _serialize_context_for_classification(context)
         injection_result = await _classify_async(raw_text)
+        if injection_result.is_flagged and _injection_hard_block_enabled():
+            _query_logger.warning(
+                "Prompt injection BLOCKED (stream): score=%.2f patterns=%s query=%s",
+                injection_result.score,
+                injection_result.detected_patterns,
+                sanitized,
+            )
+            raise PromptInjectionBlockedError(
+                query=sanitized,
+                score=injection_result.score,
+                patterns=injection_result.detected_patterns,
+            )
         if injection_result.is_flagged:
             _query_logger.warning(
                 "Prompt injection detected in streaming context: score=%.2f patterns=%s query=%s",
@@ -420,6 +474,15 @@ async def _raw_llm_synthesize_stream(
                 injection_result.detected_patterns,
                 sanitized,
             )
+        context = _strip_context_values(context, injection_result)
+
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    config = ExtractionConfig.from_env()
+    llm = ChatGoogleGenerativeAI(
+        model=config.model_name,
+        google_api_key=config.google_api_key,
+    )
 
     context_block = format_context_for_prompt(context)
     messages = [

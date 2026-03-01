@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from orchestrator.app.graph_embeddings import GraphTopology
 from orchestrator.app.prompt_sanitizer import (
@@ -14,6 +15,8 @@ from orchestrator.app.prompt_sanitizer import (
 )
 from orchestrator.app.semantic_partitioner import SemanticPartitioner
 from orchestrator.app.token_counter import count_tokens
+
+_context_logger = logging.getLogger(__name__)
 
 _CONTENT_FIREWALL = ContentFirewall()
 _HMAC_DELIMITER = HMACDelimiter()
@@ -554,33 +557,85 @@ def _generate_context_delimiter() -> str:
     return _HMAC_DELIMITER.generate()
 
 
+def _serialize_record(
+    record: Dict[str, Any],
+    index: int,
+    max_chars_per_value: int,
+) -> str:
+    parts: List[str] = [f"[{index}]"]
+    for key, value in record.items():
+        sanitized_key = sanitize_source_content(
+            str(key), f"context_key_{index}",
+        )
+        truncated = _truncate_value(value, max_chars_per_value)
+        firewall_cleaned = _CONTENT_FIREWALL.sanitize(truncated)
+        sanitized_value = sanitize_source_content(
+            firewall_cleaned, f"context_field_{key}",
+        )
+        parts.append(f"  {sanitized_key}: {sanitized_value}")
+    return "\n".join(parts)
+
+
 def format_context_for_prompt(
     context: List[Dict[str, Any]],
     max_chars_per_value: int = 500,
+    budget: Optional[TokenBudget] = None,
 ) -> ContextBlock:
     if not context:
         return ContextBlock(content="", delimiter="")
+
     delimiter = _generate_context_delimiter()
-    lines: List[str] = []
+
+    serialized_records: List[str] = []
     for i, record in enumerate(context, 1):
-        lines.append(f"[{i}]")
-        for key, value in record.items():
-            sanitized_key = sanitize_source_content(
-                str(key), f"context_key_{i}",
-            )
-            truncated = _truncate_value(value, max_chars_per_value)
-            firewall_cleaned = _CONTENT_FIREWALL.sanitize(truncated)
-            sanitized_value = sanitize_source_content(
-                firewall_cleaned, f"context_field_{key}",
-            )
-            lines.append(
-                f"  {sanitized_key}: {sanitized_value}",
-            )
-    body = "\n".join(lines)
+        serialized_records.append(
+            _serialize_record(record, i, max_chars_per_value),
+        )
+
+    if budget is not None:
+        serialized_records = _enforce_budget_on_serialized(
+            serialized_records, delimiter, budget, len(context),
+        )
+
+    body = "\n".join(serialized_records)
     return ContextBlock(
         content=f"<{delimiter}>{body}</{delimiter}>",
         delimiter=delimiter,
     )
+
+
+def _enforce_budget_on_serialized(
+    records: List[str],
+    delimiter: str,
+    budget: TokenBudget,
+    original_count: int,
+) -> List[str]:
+    def _assembled_tokens(blocks: List[str]) -> int:
+        body = "\n".join(blocks)
+        return estimate_tokens(f"<{delimiter}>{body}</{delimiter}>")
+
+    total = _assembled_tokens(records)
+    if total <= budget.max_context_tokens:
+        return records
+
+    if len(records) == 1:
+        raise ContextBudgetExceededError(
+            f"Single record ({total} tokens) exceeds "
+            f"token budget ({budget.max_context_tokens} tokens)"
+        )
+
+    while len(records) > 1 and _assembled_tokens(records) > budget.max_context_tokens:
+        records.pop()
+
+    dropped = original_count - len(records)
+    _context_logger.warning(
+        "format_context_for_prompt dropped %d records to fit token budget "
+        "(%d tokens, limit %d)",
+        dropped,
+        _assembled_tokens(records),
+        budget.max_context_tokens,
+    )
+    return records
 
 
 _CONTEXT_BLOCK_TAG = re.compile(
