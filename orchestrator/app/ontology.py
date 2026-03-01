@@ -212,7 +212,7 @@ def _edge_def(
     )
 
 
-_ACL_FIELDS = ["team_owner", "namespace_acl"]
+_ACL_FIELDS = ["team_owner", "namespace_acl", "read_roles"]
 
 
 def build_default_ontology() -> Ontology:
@@ -222,7 +222,8 @@ def build_default_ontology() -> Ontology:
                 "id": "string", "name": "string", "language": "string",
                 "framework": "string", "opentelemetry_enabled": "bool",
                 "tenant_id": "string", "team_owner": "string",
-                "namespace_acl": "list", "confidence": "float",
+                "namespace_acl": "list", "read_roles": "list",
+                "confidence": "float",
             },
             unique_key="id",
             merge_keys=["id", "tenant_id"],
@@ -232,7 +233,7 @@ def build_default_ontology() -> Ontology:
             {
                 "id": "string", "type": "string",
                 "tenant_id": "string", "team_owner": "string",
-                "namespace_acl": "list",
+                "namespace_acl": "list", "read_roles": "list",
             },
             unique_key="id",
             merge_keys=["id", "tenant_id"],
@@ -243,6 +244,7 @@ def build_default_ontology() -> Ontology:
                 "name": "string", "partitions": "int",
                 "retention_ms": "int", "tenant_id": "string",
                 "team_owner": "string", "namespace_acl": "list",
+                "read_roles": "list",
             },
             unique_key="name",
             merge_keys=["name", "tenant_id"],
@@ -253,6 +255,7 @@ def build_default_ontology() -> Ontology:
                 "id": "string", "namespace": "string",
                 "replicas": "int", "tenant_id": "string",
                 "team_owner": "string", "namespace_acl": "list",
+                "read_roles": "list",
             },
             unique_key="id",
             merge_keys=["id", "tenant_id"],
