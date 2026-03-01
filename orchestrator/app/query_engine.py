@@ -40,6 +40,7 @@ from orchestrator.app.context_manager import (
     truncate_context_topology,
 )
 from orchestrator.app.prompt_sanitizer import (
+    InjectionResult,
     PromptInjectionClassifier,
     sanitize_query_input,
 )
@@ -367,6 +368,25 @@ def _serialize_context_for_classification(
     )
 
 
+def _strip_context_values(
+    context: List[Dict[str, Any]],
+    result: InjectionResult,
+) -> List[Dict[str, Any]]:
+    if not result.is_flagged:
+        return context
+    return [
+        {
+            k: (
+                _INJECTION_CLASSIFIER.strip_flagged_content(v, result)
+                if isinstance(v, str)
+                else v
+            )
+            for k, v in record.items()
+        }
+        for record in context
+    ]
+
+
 async def _classify_async(text: str) -> Any:
     return await asyncio.to_thread(_INJECTION_CLASSIFIER.classify, text)
 
@@ -400,9 +420,7 @@ async def _raw_llm_synthesize(
                 injection_result.detected_patterns,
                 sanitized,
             )
-        raw_text = _INJECTION_CLASSIFIER.strip_flagged_content(
-            raw_text, injection_result,
-        )
+        context = _strip_context_values(context, injection_result)
 
     context_block = format_context_for_prompt(context)
     messages = [
@@ -456,9 +474,7 @@ async def _raw_llm_synthesize_stream(
                 injection_result.detected_patterns,
                 sanitized,
             )
-        raw_text = _INJECTION_CLASSIFIER.strip_flagged_content(
-            raw_text, injection_result,
-        )
+        context = _strip_context_values(context, injection_result)
 
     from langchain_google_genai import ChatGoogleGenerativeAI
 

@@ -83,12 +83,16 @@ class TestPromptInjectionHardBlock:
         from orchestrator.app.query_engine import _raw_llm_synthesize
 
         provider = _stub_provider()
-        classify_result = _make_injection_result(flagged=False, score=0.2)
+        classify_result = _make_injection_result(flagged=True, score=0.8)
 
         with (
             patch(
                 "orchestrator.app.query_engine._prompt_guardrails_enabled",
                 return_value=True,
+            ),
+            patch(
+                "orchestrator.app.query_engine._injection_hard_block_enabled",
+                return_value=False,
             ),
             patch(
                 "orchestrator.app.query_engine._classify_async",
