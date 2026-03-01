@@ -84,7 +84,7 @@ class TestGlobalProviderBreaker:
         )
         assert result == "ok"
 
-    async def test_trips_globally_on_provider_rate_limit(self) -> None:
+    async def test_trips_globally_on_network_failure(self) -> None:
         registry = TenantCircuitBreakerRegistry(
             config=CircuitBreakerConfig(failure_threshold=10),
         )
@@ -95,11 +95,11 @@ class TestGlobalProviderBreaker:
             ),
         )
 
-        rate_limit_error = Exception("HTTP 429 Too Many Requests")
         for _ in range(2):
-            with pytest.raises(Exception, match="429"):
+            with pytest.raises(ConnectionError):
                 await global_breaker.call(
-                    "tenant-1", AsyncMock(side_effect=rate_limit_error),
+                    "tenant-1",
+                    AsyncMock(side_effect=ConnectionError("network down")),
                 )
 
         assert global_breaker.global_state == CircuitState.OPEN
@@ -115,10 +115,10 @@ class TestGlobalProviderBreaker:
             ),
         )
 
-        with pytest.raises(Exception, match="429"):
+        with pytest.raises(ConnectionError):
             await global_breaker.call(
                 "tenant-1",
-                AsyncMock(side_effect=Exception("HTTP 429")),
+                AsyncMock(side_effect=ConnectionError("network down")),
             )
 
         with pytest.raises(CircuitOpenError):
@@ -131,7 +131,7 @@ class TestGlobalProviderBreaker:
                 "tenant-3", AsyncMock(return_value="ok"),
             )
 
-    async def test_non_provider_errors_do_not_trip_global(self) -> None:
+    async def test_non_network_errors_do_not_trip_global(self) -> None:
         registry = TenantCircuitBreakerRegistry(
             config=CircuitBreakerConfig(failure_threshold=10),
         )
@@ -143,10 +143,10 @@ class TestGlobalProviderBreaker:
         )
 
         for _ in range(5):
-            with pytest.raises(ConnectionError):
+            with pytest.raises(ValueError):
                 await global_breaker.call(
                     "tenant-1",
-                    AsyncMock(side_effect=ConnectionError("refused")),
+                    AsyncMock(side_effect=ValueError("invalid input")),
                 )
 
         assert global_breaker.global_state == CircuitState.CLOSED
@@ -162,10 +162,10 @@ class TestGlobalProviderBreaker:
             ),
         )
 
-        with pytest.raises(Exception, match="429"):
+        with pytest.raises(ConnectionError):
             await global_breaker.call(
                 "tenant-1",
-                AsyncMock(side_effect=Exception("HTTP 429")),
+                AsyncMock(side_effect=ConnectionError("network down")),
             )
         assert global_breaker.global_state == CircuitState.OPEN
 
@@ -189,19 +189,19 @@ class TestGlobalProviderBreaker:
             ),
         )
 
-        with pytest.raises(Exception, match="429"):
+        with pytest.raises(ConnectionError):
             await global_breaker.call(
                 "tenant-1",
-                AsyncMock(side_effect=Exception("HTTP 429")),
+                AsyncMock(side_effect=ConnectionError("network down")),
             )
 
         await asyncio.sleep(0.06)
         assert global_breaker.global_state == CircuitState.HALF_OPEN
 
-        with pytest.raises(Exception, match="rate limit"):
+        with pytest.raises(ConnectionError):
             await global_breaker.call(
                 "tenant-1",
-                AsyncMock(side_effect=Exception("rate limit exceeded")),
+                AsyncMock(side_effect=ConnectionError("still down")),
             )
         assert global_breaker.global_state == CircuitState.OPEN
 
@@ -216,10 +216,10 @@ class TestGlobalProviderBreaker:
             ),
         )
 
-        with pytest.raises(ConnectionError):
+        with pytest.raises(ValueError):
             await global_breaker.call(
                 "tenant-1",
-                AsyncMock(side_effect=ConnectionError("down")),
+                AsyncMock(side_effect=ValueError("invalid input")),
             )
 
         with pytest.raises(CircuitOpenError):
