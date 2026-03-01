@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -210,6 +211,13 @@ def _edge_def(
         source_label=src_label or src_type,
         target_label=tgt_label or tgt_type,
     )
+
+
+def load_ontology(path: Optional[str] = None) -> Ontology:
+    resolved_path = path or os.environ.get("ONTOLOGY_FILE")
+    if resolved_path:
+        return OntologyLoader.from_file(resolved_path)
+    return build_default_ontology()
 
 
 _ACL_FIELDS = ["team_owner", "namespace_acl", "read_roles"]

@@ -5,14 +5,17 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from neo4j import AsyncDriver, AsyncManagedTransaction, READ_ACCESS, WRITE_ACCESS
 
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from orchestrator.app.ontology import (
+    Ontology,
     build_default_ontology,
+    generate_edge_merge_cypher,
     generate_edge_unwind_cypher,
+    generate_merge_cypher,
     generate_unwind_cypher,
 )
 from orchestrator.app.extraction_models import (
@@ -47,100 +50,73 @@ CypherOp = Tuple[str, Dict[str, Any]]
 _NODE_TYPES = (ServiceNode, DatabaseNode, KafkaTopicNode, K8sDeploymentNode)
 _EDGE_TYPES = (CallsEdge, ProducesEdge, ConsumesEdge, DeployedInEdge)
 
-
-def _service_cypher(entity: ServiceNode) -> CypherOp:
-    query = (
-        "MERGE (n:Service {id: $id, tenant_id: $tenant_id}) "
-        "SET n.name = $name, n.language = $language, "
-        "n.framework = $framework, n.opentelemetry_enabled = $opentelemetry_enabled, "
-        "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl, "
-        "n.confidence = $confidence"
-    )
-    return query, entity.model_dump()
-
-
-def _database_cypher(entity: DatabaseNode) -> CypherOp:
-    query = (
-        "MERGE (n:Database {id: $id, tenant_id: $tenant_id}) "
-        "SET n.type = $type, "
-        "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
-    )
-    return query, entity.model_dump()
-
-
-def _kafka_topic_cypher(entity: KafkaTopicNode) -> CypherOp:
-    query = (
-        "MERGE (n:KafkaTopic {name: $name, tenant_id: $tenant_id}) "
-        "SET n.partitions = $partitions, n.retention_ms = $retention_ms, "
-        "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
-    )
-    return query, entity.model_dump()
-
-
-def _k8s_deployment_cypher(entity: K8sDeploymentNode) -> CypherOp:
-    query = (
-        "MERGE (n:K8sDeployment {id: $id, tenant_id: $tenant_id}) "
-        "SET n.namespace = $namespace, n.replicas = $replicas, "
-        "n.team_owner = $team_owner, n.namespace_acl = $namespace_acl"
-    )
-    return query, entity.model_dump()
-
-
-def _calls_cypher(entity: CallsEdge) -> CypherOp:
-    query = (
-        "MATCH (a:Service {id: $source_service_id, tenant_id: $tenant_id}), "
-        "(b:Service {id: $target_service_id, tenant_id: $tenant_id}) "
-        "MERGE (a)-[r:CALLS]->(b) SET r.protocol = $protocol, "
-        "r.confidence = $confidence, "
-        "r.ingestion_id = $ingestion_id, "
-        "r.last_seen_at = $last_seen_at"
-    )
-    return query, entity.model_dump()
-
-
-def _produces_cypher(entity: ProducesEdge) -> CypherOp:
-    query = (
-        "MATCH (s:Service {id: $service_id, tenant_id: $tenant_id}), "
-        "(t:KafkaTopic {name: $topic_name, tenant_id: $tenant_id}) "
-        "MERGE (s)-[r:PRODUCES]->(t) SET r.event_schema = $event_schema, "
-        "r.ingestion_id = $ingestion_id, "
-        "r.last_seen_at = $last_seen_at"
-    )
-    return query, entity.model_dump()
-
-
-def _consumes_cypher(entity: ConsumesEdge) -> CypherOp:
-    query = (
-        "MATCH (s:Service {id: $service_id, tenant_id: $tenant_id}), "
-        "(t:KafkaTopic {name: $topic_name, tenant_id: $tenant_id}) "
-        "MERGE (s)-[r:CONSUMES]->(t) SET r.consumer_group = $consumer_group, "
-        "r.ingestion_id = $ingestion_id, "
-        "r.last_seen_at = $last_seen_at"
-    )
-    return query, entity.model_dump()
-
-
-def _deployed_in_cypher(entity: DeployedInEdge) -> CypherOp:
-    query = (
-        "MATCH (s:Service {id: $service_id, tenant_id: $tenant_id}), "
-        "(k:K8sDeployment {id: $deployment_id, tenant_id: $tenant_id}) "
-        "MERGE (s)-[r:DEPLOYED_IN]->(k) "
-        "SET r.ingestion_id = $ingestion_id, "
-        "r.last_seen_at = $last_seen_at"
-    )
-    return query, entity.model_dump()
-
-
-_CYPHER_DISPATCH = {
-    ServiceNode: _service_cypher,
-    DatabaseNode: _database_cypher,
-    KafkaTopicNode: _kafka_topic_cypher,
-    K8sDeploymentNode: _k8s_deployment_cypher,
-    CallsEdge: _calls_cypher,
-    ProducesEdge: _produces_cypher,
-    ConsumesEdge: _consumes_cypher,
-    DeployedInEdge: _deployed_in_cypher,
+_MODEL_TO_NODE_LABEL: Dict[type, str] = {
+    ServiceNode: "Service",
+    DatabaseNode: "Database",
+    KafkaTopicNode: "KafkaTopic",
+    K8sDeploymentNode: "K8sDeployment",
 }
+
+_MODEL_TO_EDGE_TYPE: Dict[type, str] = {
+    CallsEdge: "CALLS",
+    ProducesEdge: "PRODUCES",
+    ConsumesEdge: "CONSUMES",
+    DeployedInEdge: "DEPLOYED_IN",
+}
+
+
+def _make_node_cypher_fn(
+    label: str, ontology: Ontology,
+) -> Callable[[Any], CypherOp]:
+    node_def = ontology.get_node_type(label)
+    if node_def is None:
+        raise ValueError(f"Ontology has no node type: {label!r}")
+    query = generate_merge_cypher(label, node_def)
+
+    def _cypher_fn(entity: Any) -> CypherOp:
+        return query, entity.model_dump()
+
+    return _cypher_fn
+
+
+def _make_edge_cypher_fn(
+    rel_type: str, ontology: Ontology,
+) -> Callable[[Any], CypherOp]:
+    edge_def = ontology.get_edge_type(rel_type)
+    if edge_def is None:
+        raise ValueError(f"Ontology has no edge type: {rel_type!r}")
+    query = generate_edge_merge_cypher(rel_type, edge_def)
+
+    def _cypher_fn(entity: Any) -> CypherOp:
+        return query, entity.model_dump()
+
+    return _cypher_fn
+
+
+def build_cypher_dispatch(
+    ontology: Optional[Ontology] = None,
+) -> Dict[type, Callable[[Any], CypherOp]]:
+    resolved = ontology or build_default_ontology()
+    dispatch: Dict[type, Callable[[Any], CypherOp]] = {}
+    for model_type, label in _MODEL_TO_NODE_LABEL.items():
+        if resolved.get_node_type(label) is not None:
+            dispatch[model_type] = _make_node_cypher_fn(label, resolved)
+    for model_type, rel_type in _MODEL_TO_EDGE_TYPE.items():
+        if resolved.get_edge_type(rel_type) is not None:
+            dispatch[model_type] = _make_edge_cypher_fn(rel_type, resolved)
+    return dispatch
+
+
+_CYPHER_DISPATCH: Dict[type, Callable[[Any], CypherOp]] = build_cypher_dispatch()
+
+_service_cypher = _CYPHER_DISPATCH[ServiceNode]
+_database_cypher = _CYPHER_DISPATCH[DatabaseNode]
+_kafka_topic_cypher = _CYPHER_DISPATCH[KafkaTopicNode]
+_k8s_deployment_cypher = _CYPHER_DISPATCH[K8sDeploymentNode]
+_calls_cypher = _CYPHER_DISPATCH[CallsEdge]
+_produces_cypher = _CYPHER_DISPATCH[ProducesEdge]
+_consumes_cypher = _CYPHER_DISPATCH[ConsumesEdge]
+_deployed_in_cypher = _CYPHER_DISPATCH[DeployedInEdge]
 
 
 def compute_hashes(entities: List[Any]) -> List[Any]:
@@ -223,30 +199,17 @@ def _group_by_type(
     return groups
 
 
-_MODEL_TO_NODE_LABEL: Dict[type, str] = {
-    ServiceNode: "Service",
-    DatabaseNode: "Database",
-    KafkaTopicNode: "KafkaTopic",
-    K8sDeploymentNode: "K8sDeployment",
-}
-
-_MODEL_TO_EDGE_TYPE: Dict[type, str] = {
-    CallsEdge: "CALLS",
-    ProducesEdge: "PRODUCES",
-    ConsumesEdge: "CONSUMES",
-    DeployedInEdge: "DEPLOYED_IN",
-}
-
-
-def build_unwind_queries() -> Dict[type, str]:
-    ontology = build_default_ontology()
+def build_unwind_queries(
+    ontology: Optional[Ontology] = None,
+) -> Dict[type, str]:
+    resolved = ontology or build_default_ontology()
     queries: Dict[type, str] = {}
     for model_type, label in _MODEL_TO_NODE_LABEL.items():
-        node_def = ontology.get_node_type(label)
+        node_def = resolved.get_node_type(label)
         if node_def is not None:
             queries[model_type] = generate_unwind_cypher(label, node_def)
     for model_type, rel_type in _MODEL_TO_EDGE_TYPE.items():
-        edge_def = ontology.get_edge_type(rel_type)
+        edge_def = resolved.get_edge_type(rel_type)
         if edge_def is not None:
             queries[model_type] = generate_edge_unwind_cypher(rel_type, edge_def)
     return queries
@@ -288,12 +251,15 @@ class GraphRepository:
         database: Optional[str] = None,
         write_concurrency: Optional[int] = None,
         outbox_store: Optional[Any] = None,
+        ontology: Optional[Ontology] = None,
     ) -> None:
         self._driver = driver
         self._cb = circuit_breaker or CircuitBreaker(CircuitBreakerConfig())
         self._batch_size = batch_size
         self._database = database
         self._outbox_store = outbox_store
+        self._ontology = ontology or build_default_ontology()
+        self._unwind_queries = build_unwind_queries(ontology=self._ontology)
         resolved = (
             write_concurrency
             if write_concurrency is not None
@@ -364,13 +330,15 @@ class GraphRepository:
 
         nodes, edges = _partition_entities(entities) if entities else ([], [])
 
+        instance_unwind = self._unwind_queries
+
         async def _topology_write() -> None:
             async def _topology_commit(
                 tx: AsyncManagedTransaction,
             ) -> None:
                 node_groups = _group_by_type(nodes)
                 for entity_type, records in node_groups.items():
-                    unwind_query = _UNWIND_QUERIES.get(entity_type)
+                    unwind_query = instance_unwind.get(entity_type)
                     if unwind_query is None:
                         raise TypeError(
                             f"No UNWIND query for {entity_type.__name__}"
@@ -380,7 +348,7 @@ class GraphRepository:
 
                 edge_groups = _group_by_type(edges)
                 for entity_type, records in edge_groups.items():
-                    unwind_query = _UNWIND_QUERIES.get(entity_type)
+                    unwind_query = instance_unwind.get(entity_type)
                     if unwind_query is None:
                         raise TypeError(
                             f"No UNWIND query for {entity_type.__name__}"
@@ -449,7 +417,7 @@ class GraphRepository:
         entity_type: type,
         records: List[Dict[str, Any]],
     ) -> None:
-        unwind_query = _UNWIND_QUERIES.get(entity_type)
+        unwind_query = self._unwind_queries.get(entity_type)
         if unwind_query is None:
             raise TypeError(
                 f"No UNWIND query registered for {entity_type.__name__}; "
