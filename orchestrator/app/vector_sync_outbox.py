@@ -203,6 +203,8 @@ class OutboxDrainer:
 
 _DEDUP_TTL_DEFAULT = 3600
 
+MAX_CLAIM_SCAN = 1000
+
 
 class RedisOutboxStore:
     """Redis-backed outbox store with atomic lease-based claiming.
@@ -229,8 +231,10 @@ local limit = tonumber(ARGV[2])
 local lease_seconds = tonumber(ARGV[3])
 local now = tonumber(ARGV[4])
 local prefix = ARGV[5]
+local max_scan = tonumber(ARGV[6])
 
-local event_ids = redis.call('SMEMBERS', index_key)
+local event_ids = redis.call('SRANDMEMBER', index_key, max_scan)
+if event_ids == false then event_ids = {} end
 local claimed = {}
 
 for _, eid in ipairs(event_ids) do
@@ -389,7 +393,11 @@ return 1
         )
 
     async def claim_pending(
-        self, worker_id: str, limit: int, lease_seconds: float,
+        self,
+        worker_id: str,
+        limit: int,
+        lease_seconds: float,
+        max_scan: int = MAX_CLAIM_SCAN,
     ) -> List[VectorSyncEvent]:
         now = time.time()
         claimed_ids = await self._redis.eval(
@@ -401,6 +409,7 @@ return 1
             str(lease_seconds),
             str(now),
             self._KEY_PREFIX,
+            str(max_scan),
         )
         if not claimed_ids:
             return []
@@ -537,6 +546,19 @@ class Neo4jOutboxStore:
 
     async def write_in_tx(self, tx: Any, event: VectorSyncEvent) -> None:
         await tx.run(self._CREATE_QUERY, **self._event_params(event))
+
+    async def write_after_tx(self, events: List[VectorSyncEvent]) -> None:
+        if not events:
+            return
+        create_query = self._CREATE_QUERY
+        params_fn = self._event_params
+        async with self._driver.session(default_access_mode="WRITE") as session:
+
+            async def _batch_create(tx: Any) -> None:
+                for event in events:
+                    await tx.run(create_query, **params_fn(event))
+
+            await session.execute_write(_batch_create)
 
     async def write_event(self, event: VectorSyncEvent) -> None:
         async with self._driver.session(default_access_mode="WRITE") as session:

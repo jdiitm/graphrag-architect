@@ -210,3 +210,64 @@ class TestNeo4jOutboxStoreProtocolCompliance:
         driver = AsyncMock()
         store = Neo4jOutboxStore(driver=driver)
         assert isinstance(store, OutboxStore)
+
+
+class TestNeo4jOutboxStoreWriteAfterTx:
+
+    @pytest.mark.asyncio
+    async def test_write_after_tx_opens_own_session(self) -> None:
+        session = _FakeSession()
+        driver = _make_driver(session)
+        store = Neo4jOutboxStore(driver=driver)
+        event = VectorSyncEvent(collection="svc", pruned_ids=["a"])
+
+        await store.write_after_tx([event])
+
+        session.execute_write.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_write_after_tx_writes_all_events(self) -> None:
+        session = _FakeSession()
+        captured_args: list[Any] = []
+
+        async def _capture_write(fn: Any, **kwargs: Any) -> None:
+            tx = _FakeTx()
+            await fn(tx, **kwargs)
+            captured_args.extend(tx.runs)
+
+        session.execute_write = AsyncMock(side_effect=_capture_write)
+        driver = _make_driver(session)
+        store = Neo4jOutboxStore(driver=driver)
+        events = [
+            VectorSyncEvent(collection="svc", pruned_ids=["a"]),
+            VectorSyncEvent(collection="svc", pruned_ids=["b"]),
+        ]
+
+        await store.write_after_tx(events)
+
+        assert len(captured_args) == 2
+        for query, params in captured_args:
+            assert "OutboxEvent" in query
+            assert "CREATE" in query
+
+    @pytest.mark.asyncio
+    async def test_write_after_tx_noop_for_empty_list(self) -> None:
+        session = _FakeSession()
+        driver = _make_driver(session)
+        store = Neo4jOutboxStore(driver=driver)
+
+        await store.write_after_tx([])
+
+        session.execute_write.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_write_after_tx_does_not_use_caller_tx(self) -> None:
+        session = _FakeSession()
+        caller_tx = _FakeTx()
+        driver = _make_driver(session)
+        store = Neo4jOutboxStore(driver=driver)
+        event = VectorSyncEvent(collection="svc", pruned_ids=["a"])
+
+        await store.write_after_tx([event])
+
+        assert len(caller_tx.runs) == 0
