@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Mapping, Optional, Protocol, Set, runtime_checkable
@@ -254,18 +255,96 @@ class GDSEmbeddingBackend:
         return asyncio.run(self.generate_embeddings_async(topology))
 
 
+@dataclass(frozen=True)
+class FastRPConfig:
+    embedding_dim: int = 128
+    iteration_weights: tuple[float, ...] = (0.0, 1.0, 1.0, 0.8)
+    normalization_strength: float = 0.0
+
+    @classmethod
+    def from_env(cls) -> FastRPConfig:
+        raw_dim = os.environ.get("FASTRP_EMBEDDING_DIM", "")
+        raw_weights = os.environ.get("FASTRP_ITERATION_WEIGHTS", "")
+        raw_norm = os.environ.get("FASTRP_NORMALIZATION_STRENGTH", "")
+        dim = int(raw_dim) if raw_dim else 128
+        weights = (
+            tuple(float(w) for w in raw_weights.split(","))
+            if raw_weights
+            else (0.0, 1.0, 1.0, 0.8)
+        )
+        norm = float(raw_norm) if raw_norm else 0.0
+        return cls(embedding_dim=dim, iteration_weights=weights, normalization_strength=norm)
+
+
+_GDS_FASTRP_QUERY = (
+    "CALL gds.fastRP.stream($graphName, {"
+    "  embeddingDimension: $embeddingDimension,"
+    "  iterationWeights: $iterationWeights,"
+    "  normalizationStrength: $normalizationStrength"
+    "}) YIELD nodeId, embedding"
+    " RETURN gds.util.asNode(nodeId).elementId AS nodeId, embedding"
+)
+
+
+class FastRPEmbeddingBackend:
+    def __init__(
+        self,
+        driver: Any,
+        config: Optional[FastRPConfig] = None,
+        graph_name: str = "graphrag",
+    ) -> None:
+        self._driver = driver
+        self._config = config or FastRPConfig()
+        self._graph_name = graph_name
+
+    async def generate_embeddings_async(
+        self,
+        topology: GraphTopology,
+    ) -> Dict[str, List[float]]:
+        params = {
+            "graphName": self._graph_name,
+            "embeddingDimension": self._config.embedding_dim,
+            "iterationWeights": list(self._config.iteration_weights),
+            "normalizationStrength": self._config.normalization_strength,
+        }
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(_GDS_FASTRP_QUERY, **params)
+                embeddings: Dict[str, List[float]] = {}
+                async for record in result:
+                    node_id: str = record["nodeId"]
+                    raw_embedding = record["embedding"]
+                    embeddings[node_id] = [float(v) for v in raw_embedding]
+                return embeddings
+        except Neo4jClientError as exc:
+            raise RuntimeError(
+                "Neo4j GDS plugin is not installed or the "
+                "gds.fastRP.stream procedure is not available. "
+                "Install the GDS plugin to use the FastRP embedding backend."
+            ) from exc
+
+    def generate_embeddings(
+        self,
+        topology: GraphTopology,
+    ) -> Dict[str, List[float]]:
+        return asyncio.run(self.generate_embeddings_async(topology))
+
+
 def create_embedding_backend(
     backend_type: str = "local",
     driver: Any = None,
     config: Optional[Node2VecConfig] = None,
+    fastrp_config: Optional[FastRPConfig] = None,
 ) -> GraphEmbeddingBackend:
     if backend_type == "local":
         return LocalEmbeddingBackend(config=config)
     if backend_type == "gds":
         return GDSEmbeddingBackend(driver=driver, config=config)
+    if backend_type == "fastrp":
+        return FastRPEmbeddingBackend(driver=driver, config=fastrp_config)
     raise ValueError(
         f"Unknown embedding backend: {backend_type!r}. "
-        f"Valid options: 'local', 'gds'"
+        f"Valid options: 'local', 'gds', 'fastrp'"
     )
 
 
