@@ -12,6 +12,11 @@ from typing import FrozenSet, List, Set, Tuple
 
 _DEFAULT_MAX_QUERY_CHARS = 4_000
 _DEFAULT_MAX_SOURCE_CHARS = 1_000_000
+_DEFAULT_MAX_INPUT_BYTES = 100_000
+
+
+class SanitizationBudgetExceeded(ValueError):
+    pass
 
 _INJECTION_PATTERNS: List[Tuple[re.Pattern[str], str]] = [
     (re.compile(
@@ -100,9 +105,17 @@ def sanitize_source_content(
     content: str,
     file_path: str,
     max_chars: int = _DEFAULT_MAX_SOURCE_CHARS,
+    max_input_bytes: int = 0,
 ) -> str:
     if not content:
         return content
+    if max_input_bytes > 0:
+        content_bytes = len(content.encode("utf-8", errors="replace"))
+        if content_bytes > max_input_bytes:
+            raise SanitizationBudgetExceeded(
+                f"Input for {file_path} exceeds sanitization byte limit "
+                f"({max_input_bytes} bytes)"
+            )
     cleaned = _strip_control_chars(content)
     cleaned = cleaned[:max_chars]
     cleaned = _strip_xml_boundaries(cleaned)
@@ -117,6 +130,7 @@ def sanitize_ingestion_content(
     content: str,
     file_path: str,
     max_chars: int = _DEFAULT_MAX_SOURCE_CHARS,
+    max_input_bytes: int = 0,
 ) -> str:
     """Security-sanitize content for ingestion without HTML-escaping.
 
@@ -128,6 +142,13 @@ def sanitize_ingestion_content(
     """
     if not content:
         return content
+    if max_input_bytes > 0:
+        content_bytes = len(content.encode("utf-8", errors="replace"))
+        if content_bytes > max_input_bytes:
+            raise SanitizationBudgetExceeded(
+                f"Input for {file_path} exceeds sanitization byte limit "
+                f"({max_input_bytes} bytes)"
+            )
     cleaned = _strip_control_chars(content)
     cleaned = cleaned[:max_chars]
     cleaned = _strip_xml_boundaries(cleaned)
@@ -227,10 +248,20 @@ class ContentFirewall:
         Tuple[re.Pattern[str], ThreatCategory, str]
     ]
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        max_input_bytes: int = _DEFAULT_MAX_INPUT_BYTES,
+    ) -> None:
         self._patterns = _FIREWALL_RULES
+        self._max_input_bytes = max_input_bytes
 
     def scan(self, content: str) -> ScanResult:
+        content_bytes = len(content.encode("utf-8", errors="replace"))
+        if content_bytes > self._max_input_bytes:
+            raise SanitizationBudgetExceeded(
+                f"Content ({content_bytes} bytes) exceeds firewall scan "
+                f"limit ({self._max_input_bytes} bytes)"
+            )
         detected_categories: Set[ThreatCategory] = set()
         detected_patterns: List[str] = []
         for pattern, category, _ in self._patterns:
@@ -341,11 +372,22 @@ class PromptInjectionClassifier:
     _threshold: float
     _patterns: List[Tuple[re.Pattern[str], str, float]]
 
-    def __init__(self, threshold: float = 0.3) -> None:
+    def __init__(
+        self,
+        threshold: float = 0.3,
+        max_input_bytes: int = _DEFAULT_MAX_INPUT_BYTES,
+    ) -> None:
         self._threshold = threshold
         self._patterns = _CLASSIFIER_RULES
+        self._max_input_bytes = max_input_bytes
 
     def classify(self, text: str) -> InjectionResult:
+        text_bytes = len(text.encode("utf-8", errors="replace"))
+        if text_bytes > self._max_input_bytes:
+            raise SanitizationBudgetExceeded(
+                f"Text ({text_bytes} bytes) exceeds classifier input "
+                f"limit ({self._max_input_bytes} bytes)"
+            )
         text = unicodedata.normalize("NFKC", text)
         total_score = 0.0
         detected: List[str] = []
