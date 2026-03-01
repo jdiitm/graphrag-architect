@@ -75,6 +75,12 @@ _DEGREE_CHECK_QUERY = (
     "RETURN size((n)--()) AS degree"
 )
 
+_BATCH_DEGREE_CHECK_QUERY = (
+    "UNWIND $source_ids AS sid "
+    "MATCH (n {id: sid, tenant_id: $tenant_id}) "
+    "RETURN n.id AS node_id, size((n)--()) AS degree"
+)
+
 _ONE_HOP_TEMPLATE = (
     "MATCH (source {{id: $source_id, tenant_id: $tenant_id}})"
     "-[r:{rel_type}]->(target) "
@@ -495,6 +501,31 @@ async def execute_batched_hop(
 
     async with driver.session() as session:
         return await session.execute_read(_tx, timeout=timeout)
+
+
+async def batch_check_degrees(
+    driver: AsyncDriver,
+    source_ids: List[str],
+    tenant_id: str,
+    timeout: float = 30.0,
+) -> Dict[str, int]:
+    if not source_ids:
+        return {}
+
+    params = {"source_ids": source_ids, "tenant_id": tenant_id}
+
+    async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
+        result = await tx.run(_BATCH_DEGREE_CHECK_QUERY, **params)
+        return await result.data()
+
+    async with driver.session() as session:
+        records = await session.execute_read(_tx, timeout=timeout)
+
+    return {
+        row["node_id"]: int(row["degree"])
+        for row in records
+        if "node_id" in row and "degree" in row
+    }
 
 
 def _drain_frontier(state: TraversalState) -> List[str]:

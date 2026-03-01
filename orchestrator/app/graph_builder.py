@@ -302,6 +302,12 @@ async def invalidate_caches_after_ingest(
         if node_ids:
             sg_result = _SUBGRAPH_CACHE.invalidate_by_nodes(node_ids)
         else:
+            logger.warning(
+                "Tenant-wide cache fallback: no committed node_ids provided "
+                "for tenant=%s — invalidating entire tenant cache. "
+                "This triggers a thundering-herd risk.",
+                tenant_id,
+            )
             sg_result = _SUBGRAPH_CACHE.invalidate_tenant(tenant_id)
         if hasattr(sg_result, "__await__"):
             await sg_result
@@ -648,6 +654,13 @@ async def _enqueue_vector_cleanup(
     if neo4j_driver is not None:
         store = Neo4jOutboxStore(driver=neo4j_driver)
         await store.write_event(event)
+    elif _is_production_mode():
+        raise SystemExit(
+            "FATAL: DEPLOYMENT_MODE=production but _enqueue_vector_cleanup "
+            "called without a durable store (neo4j_driver is None). "
+            "In-memory outbox is not safe for production — events would "
+            "be lost on pod restart."
+        )
     elif _coalescing_enabled():
         _COALESCING_OUTBOX.enqueue(event)
     else:

@@ -19,6 +19,14 @@ else
 end
 """
 
+_RENEW_LOCK_LUA = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("pexpire", KEYS[1], ARGV[2])
+else
+    return 0
+end
+"""
+
 _SEMAPHORE_ACQUIRE_LUA = """
 redis.call("zremrangebyscore", KEYS[1], "-inf", ARGV[1])
 local count = redis.call("zcard", KEYS[1])
@@ -49,7 +57,10 @@ class DistributedLock:
 
     @asynccontextmanager
     async def acquire(
-        self, key: str, ttl: int = _DEFAULT_TTL,
+        self,
+        key: str,
+        ttl: int = _DEFAULT_TTL,
+        heartbeat_interval: float = 0.0,
     ) -> AsyncIterator[None]:
         full_key = f"{self._prefix}{key}"
         owner = uuid.uuid4().hex
@@ -66,9 +77,19 @@ class DistributedLock:
                 f"Could not acquire distributed lock for key={key} "
                 f"after {self._retry_attempts} attempts"
             )
+
+        effective_interval = heartbeat_interval or ttl / 3.0
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(full_key, owner, ttl, effective_interval),
+        )
         try:
             yield
         finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
             released = await self._redis.eval(
                 _RELEASE_LOCK_LUA, 1, full_key, owner,
             )
@@ -76,6 +97,31 @@ class DistributedLock:
                 logger.warning(
                     "Lock for %s was overwritten by another owner; skipping delete",
                     full_key,
+                )
+
+    async def _heartbeat_loop(
+        self,
+        full_key: str,
+        owner: str,
+        ttl: int,
+        interval: float,
+    ) -> None:
+        ttl_ms = ttl * 1000
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                renewed = await self._redis.eval(
+                    _RENEW_LOCK_LUA, 1, full_key, owner, str(ttl_ms),
+                )
+                if not renewed:
+                    logger.warning(
+                        "Lock heartbeat: owner mismatch for %s, stopping renewal",
+                        full_key,
+                    )
+                    return
+            except Exception as exc:
+                logger.warning(
+                    "Lock heartbeat renewal failed for %s: %s", full_key, exc,
                 )
 
 
