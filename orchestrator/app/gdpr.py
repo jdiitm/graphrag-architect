@@ -11,6 +11,9 @@ logger = logging.getLogger(__name__)
 class TenantDataStore(Protocol):
     async def find_by_tenant(self, tenant_id: str) -> List[Dict[str, Any]]: ...
     async def delete_by_tenant(self, tenant_id: str) -> int: ...
+    async def delete_by_subject(
+        self, tenant_id: str, subject_id: str,
+    ) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -105,7 +108,7 @@ class GDPRService:
         )
         self._log_request(request)
 
-        deleted = await store.delete_by_tenant(tenant_id)
+        deleted = await store.delete_by_subject(tenant_id, subject_id)
 
         verification = await store.find_by_tenant(tenant_id)
         remaining = [

@@ -54,7 +54,7 @@ class TestAtomicOutboxWrite:
         assert repo._outbox_store is outbox_store
 
     @pytest.mark.asyncio
-    async def test_commit_topology_writes_outbox_after_graph_tx(self) -> None:
+    async def test_outbox_written_in_same_transaction(self) -> None:
         driver, session, mock_tx, captured = _mock_driver_with_tx_capture()
         outbox_store = AsyncMock(spec=Neo4jOutboxStore)
         repo = GraphRepository(driver, outbox_store=outbox_store)
@@ -68,8 +68,57 @@ class TestAtomicOutboxWrite:
             outbox_events=[event],
         )
 
-        outbox_store.write_in_tx.assert_not_called()
-        outbox_store.write_after_tx.assert_called_once_with([event])
+        outbox_store.write_in_tx.assert_called()
+        tx_arg = outbox_store.write_in_tx.call_args[0][0]
+        assert tx_arg is mock_tx
+
+    @pytest.mark.asyncio
+    async def test_no_write_after_tx_called(self) -> None:
+        driver, session, mock_tx, captured = _mock_driver_with_tx_capture()
+        outbox_store = AsyncMock(spec=Neo4jOutboxStore)
+        repo = GraphRepository(driver, outbox_store=outbox_store)
+        event = VectorSyncEvent(
+            collection="svc_embeddings",
+            pruned_ids=["old-node-1"],
+        )
+
+        await repo.commit_topology_with_outbox(
+            entities=[SAMPLE_SERVICE],
+            outbox_events=[event],
+        )
+
+        outbox_store.write_after_tx.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_outbox_failure_rolls_back_graph(self) -> None:
+        driver, session, mock_tx, captured = _mock_driver_with_tx_capture()
+        outbox_store = AsyncMock(spec=Neo4jOutboxStore)
+        outbox_store.write_in_tx = AsyncMock(
+            side_effect=RuntimeError("outbox down"),
+        )
+
+        mock_session = AsyncMock()
+
+        async def _execute_write_propagating(fn, **kw):
+            return await fn(mock_tx, **kw)
+
+        mock_session.execute_write = AsyncMock(
+            side_effect=_execute_write_propagating,
+        )
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        driver.session.return_value = mock_session
+
+        repo = GraphRepository(driver, outbox_store=outbox_store)
+        event = VectorSyncEvent(
+            collection="svc_embeddings", pruned_ids=["old-node-1"],
+        )
+
+        with pytest.raises(RuntimeError, match="outbox down"):
+            await repo.commit_topology_with_outbox(
+                entities=[SAMPLE_SERVICE],
+                outbox_events=[event],
+            )
 
     @pytest.mark.asyncio
     async def test_commit_without_events_skips_outbox_write(self) -> None:
@@ -83,6 +132,7 @@ class TestAtomicOutboxWrite:
         )
 
         outbox_store.write_after_tx.assert_not_called()
+        outbox_store.write_in_tx.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_outbox_store_still_commits_entities(self) -> None:
@@ -93,30 +143,6 @@ class TestAtomicOutboxWrite:
             entities=[SAMPLE_SERVICE],
             outbox_events=[],
         )
-
-        assert mock_tx.run.call_count >= 1
-        query_arg = mock_tx.run.call_args_list[0].args[0]
-        assert "UNWIND" in query_arg
-
-    @pytest.mark.asyncio
-    async def test_topology_committed_even_if_outbox_write_after_tx_fails(
-        self,
-    ) -> None:
-        driver, session, mock_tx, captured = _mock_driver_with_tx_capture()
-        outbox_store = AsyncMock(spec=Neo4jOutboxStore)
-        outbox_store.write_after_tx = AsyncMock(
-            side_effect=RuntimeError("outbox down"),
-        )
-        repo = GraphRepository(driver, outbox_store=outbox_store)
-        event = VectorSyncEvent(
-            collection="svc_embeddings", pruned_ids=["old-node-1"],
-        )
-
-        with pytest.raises(RuntimeError, match="outbox down"):
-            await repo.commit_topology_with_outbox(
-                entities=[SAMPLE_SERVICE],
-                outbox_events=[event],
-            )
 
         assert mock_tx.run.call_count >= 1
         query_arg = mock_tx.run.call_args_list[0].args[0]

@@ -264,7 +264,10 @@ class TestSynthesisPipelineIntegration:
         with patch(
             "orchestrator.app.query_engine._build_synthesis_provider", return_value=mock_provider,
         ), patch.dict(
-            "os.environ", {"PROMPT_GUARDRAILS_ENABLED": "true"},
+            "os.environ", {
+                "PROMPT_GUARDRAILS_ENABLED": "true",
+                "INJECTION_HARD_BLOCK_ENABLED": "false",
+            },
         ):
             from orchestrator.app.query_engine import _raw_llm_synthesize
             await _raw_llm_synthesize("What depends on auth?", malicious_context)
@@ -311,7 +314,10 @@ class TestTelemetryOnDetection:
         with patch(
             "orchestrator.app.query_engine._build_synthesis_provider", return_value=mock_provider,
         ), patch.dict(
-            "os.environ", {"PROMPT_GUARDRAILS_ENABLED": "true"},
+            "os.environ", {
+                "PROMPT_GUARDRAILS_ENABLED": "true",
+                "INJECTION_HARD_BLOCK_ENABLED": "false",
+            },
         ), caplog.at_level(logging.WARNING):
             from orchestrator.app.query_engine import _raw_llm_synthesize
             await _raw_llm_synthesize("query", malicious_context)

@@ -27,6 +27,24 @@ class MockStore:
         self._deleted += deleted
         return deleted
 
+    async def delete_by_subject(
+        self, tenant_id: str, subject_id: str,
+    ) -> int:
+        before = len(self._records)
+        self._records = [
+            r for r in self._records
+            if not (
+                r.get("tenant_id") == tenant_id
+                and (
+                    r.get("subject_id") == subject_id
+                    or r.get("owner") == subject_id
+                )
+            )
+        ]
+        deleted = before - len(self._records)
+        self._deleted += deleted
+        return deleted
+
 
 class TestDataExport:
 
@@ -116,6 +134,49 @@ class TestGDPRRequestLog:
         await service.export_data("t1", "u1", store)
         await service.erase_data("t1", "u1", store)
         assert len(service.request_log()) == 2
+
+
+class TestSubjectScopedErasure:
+
+    @pytest.mark.asyncio
+    async def test_erase_only_subject_records(self) -> None:
+        store = MockStore([
+            {"tenant_id": "t1", "subject_id": "alice", "data": "a"},
+            {"tenant_id": "t1", "subject_id": "bob", "data": "b"},
+            {"tenant_id": "t1", "subject_id": "charlie", "data": "c"},
+        ])
+        service = GDPRService()
+        result = await service.erase_data("t1", "alice", store)
+        assert result.records_deleted == 1
+        assert result.verified is True
+        remaining = await store.find_by_tenant("t1")
+        assert len(remaining) == 2
+        remaining_subjects = {r["subject_id"] for r in remaining}
+        assert remaining_subjects == {"bob", "charlie"}
+
+    @pytest.mark.asyncio
+    async def test_erase_unknown_subject_returns_zero(self) -> None:
+        store = MockStore([
+            {"tenant_id": "t1", "subject_id": "alice", "data": "a"},
+        ])
+        service = GDPRService()
+        result = await service.erase_data("t1", "nobody", store)
+        assert result.records_deleted == 0
+        assert result.verified is True
+
+    @pytest.mark.asyncio
+    async def test_erase_does_not_cascade_to_other_tenants(self) -> None:
+        store = MockStore([
+            {"tenant_id": "t1", "subject_id": "alice", "data": "a1"},
+            {"tenant_id": "t2", "subject_id": "alice", "data": "a2"},
+        ])
+        service = GDPRService()
+        result = await service.erase_data("t1", "alice", store)
+        assert result.records_deleted == 1
+        assert result.verified is True
+        t2_records = await store.find_by_tenant("t2")
+        assert len(t2_records) == 1
+        assert t2_records[0]["data"] == "a2"
 
 
 class TestDataSubjectRequest:

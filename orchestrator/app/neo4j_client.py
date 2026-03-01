@@ -356,6 +356,8 @@ class GraphRepository:
         nodes, edges = _partition_entities(entities) if entities else ([], [])
 
         instance_unwind = self._unwind_queries
+        outbox_store = self._outbox_store
+        resolved_events = outbox_events or []
 
         async def _topology_write() -> None:
             async def _topology_commit(
@@ -381,13 +383,14 @@ class GraphRepository:
                     for chunk in _chunk_list(records, self._batch_size):
                         await tx.run(unwind_query, batch=chunk)
 
+                if outbox_store and resolved_events:
+                    for event in resolved_events:
+                        await outbox_store.write_in_tx(tx, event=event)
+
             async with self._write_session() as session:
                 await session.execute_write(_topology_commit)
 
         await self._cb.call(_topology_write)
-
-        if self._outbox_store and outbox_events:
-            await self._outbox_store.write_after_tx(outbox_events)
 
     async def refresh_degree_for_ids(
         self, affected_ids: List[str],

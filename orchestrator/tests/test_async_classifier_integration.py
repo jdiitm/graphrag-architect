@@ -92,6 +92,7 @@ class TestAsyncClassifierIntegration:
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("PROMPT_GUARDRAILS_ENABLED", "true")
+        monkeypatch.setenv("INJECTION_HARD_BLOCK_ENABLED", "false")
         flagged_result = InjectionResult(
             score=0.9,
             detected_patterns=["instruction_override"],
