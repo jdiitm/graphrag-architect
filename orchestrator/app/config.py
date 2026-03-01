@@ -323,6 +323,17 @@ class HotTargetConfig:
 
 
 @dataclass(frozen=True)
+class SchemaStoreConfig:
+    backend: str = "memory"
+
+    @classmethod
+    def from_env(cls) -> SchemaStoreConfig:
+        return cls(
+            backend=os.environ.get("SCHEMA_STORE_BACKEND", "memory"),
+        )
+
+
+@dataclass(frozen=True)
 class VectorSyncConfig:
     backend: str = "memory"
     kafka_topic: str = "graph.mutations"

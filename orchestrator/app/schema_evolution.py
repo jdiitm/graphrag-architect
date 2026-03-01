@@ -90,6 +90,94 @@ class InMemoryVersionStore:
         return list(self._history)
 
 
+class Neo4jVersionStore:
+    _POINTER_LABEL = "_SchemaPointer"
+    _MIGRATION_LABEL = "_SchemaMigration"
+
+    def __init__(self, driver: Any) -> None:
+        self._driver = driver
+
+    def get_current_version(self) -> Optional[SchemaVersion]:
+        with self._driver.session() as session:
+            result = session.run(
+                "MATCH (p:_SchemaPointer) "
+                "RETURN p.major AS major, p.minor AS minor, p.patch AS patch",
+            )
+            record = result.single()
+            if record is None:
+                return None
+            return SchemaVersion(
+                major=record["major"],
+                minor=record["minor"],
+                patch=record["patch"],
+            )
+
+    def set_current_version(self, version: SchemaVersion) -> None:
+        with self._driver.session() as session:
+            session.run(
+                "MERGE (p:_SchemaPointer) "
+                "SET p.major = $major, p.minor = $minor, p.patch = $patch",
+                major=version.major,
+                minor=version.minor,
+                patch=version.patch,
+            )
+
+    def record_migration(
+        self, version: SchemaVersion, status: MigrationStatus,
+    ) -> None:
+        with self._driver.session() as session:
+            session.run(
+                "CREATE (m:_SchemaMigration {"
+                "major: $major, minor: $minor, patch: $patch, "
+                "status: $status, recorded_at: datetime()})",
+                major=version.major,
+                minor=version.minor,
+                patch=version.patch,
+                status=status.value,
+            )
+
+
+class RedisVersionStore:
+    _POINTER_KEY = "graphrag:schema:current_version"
+    _HISTORY_KEY = "graphrag:schema:migration_history"
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def get_current_version(self) -> Optional[SchemaVersion]:
+        raw = self._client.get(self._POINTER_KEY)
+        if raw is None:
+            return None
+        decoded = raw.decode() if isinstance(raw, bytes) else raw
+        return SchemaVersion.parse(decoded)
+
+    def set_current_version(self, version: SchemaVersion) -> None:
+        self._client.set(self._POINTER_KEY, str(version))
+
+    def record_migration(
+        self, version: SchemaVersion, status: MigrationStatus,
+    ) -> None:
+        self._client.rpush(
+            self._HISTORY_KEY, f"{version}:{status.value}",
+        )
+
+
+_KNOWN_BACKENDS = {"memory", "neo4j", "redis"}
+
+
+def create_version_store(backend: str = "memory", **kwargs: Any) -> VersionStore:
+    if backend == "memory":
+        return InMemoryVersionStore()
+    if backend == "neo4j":
+        return Neo4jVersionStore(driver=kwargs["driver"])
+    if backend == "redis":
+        return RedisVersionStore(client=kwargs["client"])
+    raise ValueError(
+        f"Unknown version store backend: {backend!r}. "
+        f"Valid backends: {', '.join(sorted(_KNOWN_BACKENDS))}"
+    )
+
+
 class MigrationRegistry:
     def __init__(self, store: VersionStore) -> None:
         self._store = store
