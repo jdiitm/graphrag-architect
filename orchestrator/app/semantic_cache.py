@@ -575,24 +575,101 @@ class SemanticQueryCache:
             self._evictions += 1
 
 
-_INVALIDATE_NODES_LUA = """
-local count = 0
-local to_delete = {}
-for i = 1, #KEYS do
-    local members = redis.call('smembers', KEYS[i])
-    for _, member in ipairs(members) do
-        to_delete[member] = true
-    end
-end
-for key, _ in pairs(to_delete) do
-    redis.call('del', key)
-    count = count + 1
-end
-for i = 1, #KEYS do
-    redis.call('del', KEYS[i])
-end
-return count
-"""
+_STREAM_KEY_SUFFIX = "invalidation:stream"
+_CONSUMER_GROUP = "cache-invalidators"
+_DEFAULT_INVALIDATION_BATCH_SIZE = 100
+
+
+class CacheInvalidationWorker:
+    def __init__(
+        self,
+        redis_conn: Any,
+        key_prefix: str = "graphrag:semcache:",
+        batch_size: int = _DEFAULT_INVALIDATION_BATCH_SIZE,
+        consumer_name: str = "worker-0",
+    ) -> None:
+        self._redis = redis_conn
+        self._prefix = key_prefix
+        self._batch_size = batch_size
+        self._stream_key = f"{key_prefix}{_STREAM_KEY_SUFFIX}"
+        self._consumer_group = _CONSUMER_GROUP
+        self._consumer_name = consumer_name
+
+    @property
+    def stream_key(self) -> str:
+        return self._stream_key
+
+    async def ensure_consumer_group(self) -> None:
+        try:
+            await self._redis.xgroup_create(
+                self._stream_key, self._consumer_group,
+                id="0", mkstream=True,
+            )
+        except Exception as exc:
+            if "BUSYGROUP" in str(exc):
+                logger.debug("Consumer group already exists")
+            else:
+                logger.warning("Consumer group creation failed: %s", exc)
+
+    async def process_batch(self) -> int:
+        messages = await self._redis.xreadgroup(
+            self._consumer_group, self._consumer_name,
+            {self._stream_key: ">"},
+            count=self._batch_size, block=100,
+        )
+        if not messages:
+            return 0
+
+        total_invalidated = 0
+        message_ids: List[str] = []
+
+        for _stream_name, entries in messages:
+            for msg_id, data in entries:
+                message_ids.append(msg_id)
+                node_ids_raw = data.get("node_ids", "")
+                if not node_ids_raw:
+                    continue
+                try:
+                    node_ids: list[str] = json.loads(node_ids_raw)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Malformed node_ids JSON in message %s, skipping",
+                        msg_id,
+                    )
+                    continue
+                try:
+                    total_invalidated += await self._invalidate_node_keys(
+                        node_ids,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to invalidate keys for message %s",
+                        msg_id,
+                    )
+
+        if message_ids:
+            await self._redis.xack(
+                self._stream_key, self._consumer_group, *message_ids,
+            )
+
+        return total_invalidated
+
+    async def _invalidate_node_keys(self, node_ids: list[str]) -> int:
+        count = 0
+        for nid in node_ids:
+            tag_key = f"{self._prefix}nodetag:{nid}"
+            cursor = 0
+            while True:
+                cursor, members = await self._redis.sscan(
+                    tag_key, cursor=cursor, count=self._batch_size,
+                )
+                if members:
+                    await self._redis.unlink(*members)
+                    count += len(members)
+                if cursor == 0:
+                    break
+            await self._redis.unlink(tag_key)
+        return count
 
 
 class RedisSemanticQueryCache:
@@ -613,11 +690,7 @@ class RedisSemanticQueryCache:
         self._prefix = key_prefix
         self._cache_config = config or CacheConfig()
         self._l1 = SemanticQueryCache(config=self._cache_config)
-        self._invalidate_nodes_script = (
-            self._redis.register_script(
-                _INVALIDATE_NODES_LUA,
-            )
-        )
+        self._stream_key = f"{key_prefix}{_STREAM_KEY_SUFFIX}"
 
     @property
     def generation(self) -> int:
@@ -771,17 +844,14 @@ class RedisSemanticQueryCache:
     ) -> int:
         l1_removed = self._l1.invalidate_by_nodes(node_ids)
         try:
-            tag_keys = [
-                f"{self._prefix}nodetag:{nid}"
-                for nid in node_ids
-            ]
-            if tag_keys:
-                await self._invalidate_nodes_script(
-                    keys=tag_keys,
+            if node_ids:
+                await self._redis.xadd(
+                    self._stream_key,
+                    {"node_ids": json.dumps(sorted(node_ids))},
                 )
         except Exception:
             logger.warning(
-                "Redis node-level invalidation "
+                "Redis invalidation event publish "
                 "failed (non-fatal)",
             )
         return l1_removed
