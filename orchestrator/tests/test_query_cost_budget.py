@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import time
 from unittest.mock import patch
 
 import pytest
@@ -120,10 +118,12 @@ class TestTenantCostBudgetSlidingWindow:
     @pytest.mark.asyncio
     async def test_budget_refills_after_window_expires(self) -> None:
         budget = TenantCostBudget(capacity=10, window_seconds=0.1)
-        assert await budget.try_acquire("t1", QueryComplexity.MULTI_HOP) is True
-        assert await budget.try_acquire("t1", QueryComplexity.MULTI_HOP) is False
-        await asyncio.sleep(0.15)
-        assert await budget.try_acquire("t1", QueryComplexity.MULTI_HOP) is True
+        clock = [1000.0]
+        with patch("time.monotonic", side_effect=lambda: clock[0]):
+            assert await budget.try_acquire("t1", QueryComplexity.MULTI_HOP) is True
+            assert await budget.try_acquire("t1", QueryComplexity.MULTI_HOP) is False
+            clock[0] += 0.2
+            assert await budget.try_acquire("t1", QueryComplexity.MULTI_HOP) is True
 
 
 class TestTenantCostBudgetMixedComplexity:
