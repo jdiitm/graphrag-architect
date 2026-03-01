@@ -216,6 +216,22 @@ class CircuitBreaker:
             self._sync_snapshot(snap)
         return result
 
+    async def record_failure(self) -> None:
+        lock = self._get_lock()
+        async with lock:
+            snap = await self._load_snapshot()
+            self._record_failure(snap)
+            await self._store.save(self._name, snap)
+            self._sync_snapshot(snap)
+
+    async def record_success(self) -> None:
+        lock = self._get_lock()
+        async with lock:
+            snap = await self._load_snapshot()
+            self._record_success(snap)
+            await self._store.save(self._name, snap)
+            self._sync_snapshot(snap)
+
     def _record_failure(self, snap: CircuitSnapshot) -> None:
         snap.failure_count += 1
         snap.last_failure_time = time.monotonic()
@@ -306,6 +322,10 @@ class GlobalProviderBreaker:
     def global_state(self) -> CircuitState:
         return self._global.state
 
+    @staticmethod
+    def _is_global_failure(exc: Exception) -> bool:
+        return isinstance(exc, (ConnectionError, OSError, TimeoutError))
+
     async def call(
         self,
         tenant_id: str,
@@ -313,8 +333,20 @@ class GlobalProviderBreaker:
         *args: Any,
         **kwargs: Any,
     ) -> T:
-        async def _guarded() -> T:
-            tenant_breaker = await self._registry.for_tenant(tenant_id)
-            return await tenant_breaker.call(func, *args, **kwargs)
+        global_state = self._global.state
+        if global_state == CircuitState.OPEN:
+            raise CircuitOpenError(
+                "Global circuit is open; network failure detected"
+            )
 
-        return await self._global.call(_guarded)
+        tenant_breaker = await self._registry.for_tenant(tenant_id)
+        try:
+            result = await tenant_breaker.call(func, *args, **kwargs)
+        except Exception as exc:
+            if self._is_global_failure(exc):
+                await self._global.record_failure()
+            raise
+
+        if global_state == CircuitState.HALF_OPEN:
+            await self._global.record_success()
+        return result
