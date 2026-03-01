@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import math
-import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
@@ -135,140 +134,6 @@ class InMemoryVectorStore:
         return [
             SearchResult(id=r.id, score=s, metadata=r.metadata)
             for r, s in scored[:limit]
-        ]
-
-
-class Neo4jVectorStore:
-    is_read_replica: bool = False
-
-    def __init__(self, driver: Any = None) -> None:
-        warnings.warn(
-            "Neo4jVectorStore is deprecated. Storing embeddings as Neo4j node "
-            "properties pollutes the PageCache and prevents independent scaling. "
-            "Migrate to QdrantVectorStore by setting VECTOR_STORE_BACKEND=qdrant.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self._driver = driver
-
-    def _get_driver(self) -> Any:
-        if self._driver is None:
-            from orchestrator.app.neo4j_pool import get_driver
-            self._driver = get_driver()
-        return self._driver
-
-    async def upsert(
-        self, collection: str, vectors: List[VectorRecord],
-    ) -> int:
-        async def _tx(tx: Any) -> int:
-            for record in vectors:
-                await tx.run(
-                    "MERGE (n {id: $id}) "
-                    "SET n.embedding = $vector, n += $metadata",
-                    id=record.id,
-                    vector=record.vector,
-                    metadata=record.metadata,
-                )
-            return len(vectors)
-
-        async with self._get_driver().session() as session:
-            return await session.execute_write(_tx)
-
-    async def search(
-        self,
-        collection: str,
-        query_vector: List[float],
-        limit: int = 10,
-    ) -> List[SearchResult]:
-        async def _tx(tx: Any) -> list:
-            result = await tx.run(
-                "CALL db.index.vector.queryNodes($index, $k, $vector) "
-                "YIELD node, score "
-                "RETURN node.id AS id, score, node {.*} AS metadata "
-                "LIMIT $limit",
-                index=collection,
-                k=limit,
-                vector=query_vector,
-                limit=limit,
-            )
-            return await result.data()
-
-        async with self._get_driver().session() as session:
-            records = await session.execute_read(_tx)
-
-        return [
-            SearchResult(
-                id=str(r["id"]),
-                score=r["score"],
-                metadata={k: v for k, v in r.get("metadata", {}).items() if k != "embedding"},
-            )
-            for r in records
-        ]
-
-    async def delete(self, collection: str, ids: List[str], tenant_id: str = "") -> int:
-        async def _tx(tx: Any) -> int:
-            if tenant_id:
-                cypher = (
-                    "MATCH (n) WHERE n.id IN $ids AND n.tenant_id = $tenant_id "
-                    "REMOVE n.embedding "
-                    "SET n.embedding_removed = true, "
-                    "n.embedding_removed_at = datetime() "
-                    "RETURN count(n) AS removed"
-                )
-                result = await tx.run(cypher, ids=ids, tenant_id=tenant_id)
-            else:
-                cypher = (
-                    "MATCH (n) WHERE n.id IN $ids "
-                    "REMOVE n.embedding "
-                    "SET n.embedding_removed = true, "
-                    "n.embedding_removed_at = datetime() "
-                    "RETURN count(n) AS removed"
-                )
-                result = await tx.run(cypher, ids=ids)
-            data = await result.data()
-            return data[0]["removed"] if data else 0
-
-        async with self._get_driver().session() as session:
-            return await session.execute_write(_tx)
-
-    async def search_with_tenant(
-        self,
-        collection: str,
-        query_vector: List[float],
-        tenant_id: str,
-        limit: int = 10,
-    ) -> List[SearchResult]:
-        if not tenant_id:
-            return await self.search(collection, query_vector, limit=limit)
-
-        async def _tx(tx: Any) -> list:
-            result = await tx.run(
-                "CALL db.index.vector.queryNodes($index, $k, $vector) "
-                "YIELD node, score "
-                "WHERE node.tenant_id = $tenant_id "
-                "RETURN node.id AS id, score, node {.*} AS metadata "
-                "LIMIT $limit",
-                index=collection,
-                k=limit * 2,
-                vector=query_vector,
-                tenant_id=tenant_id,
-                limit=limit,
-            )
-            return await result.data()
-
-        async with self._get_driver().session() as session:
-            records = await session.execute_read(_tx)
-
-        return [
-            SearchResult(
-                id=str(r["id"]),
-                score=r["score"],
-                metadata={
-                    k: v for k, v in r.get("metadata", {}).items()
-                    if k != "embedding"
-                },
-            )
-            for r in records
         ]
 
 
@@ -409,14 +274,20 @@ def create_vector_store(
     deployment_mode: str = "dev",
 ) -> Any:
     _ = pool_size
-    if deployment_mode == "production" and backend not in ("qdrant", "neo4j"):
+    _ = driver
+    if backend == "neo4j":
+        raise ValueError(
+            "Neo4j vector backend has been removed. Storing embeddings as "
+            "Neo4j node properties causes PageCache pollution and recall "
+            "collapse under multi-tenant post-filtering. "
+            "Use VECTOR_STORE_BACKEND=qdrant instead."
+        )
+    if deployment_mode == "production" and backend != "qdrant":
         raise ValueError(
             f"VECTOR_STORE_BACKEND={backend!r} is not durable. "
-            f"Production deployments require 'qdrant' (recommended) or "
-            f"'neo4j' (deprecated). Set VECTOR_STORE_BACKEND=qdrant."
+            f"Production deployments require 'qdrant'. "
+            f"Set VECTOR_STORE_BACKEND=qdrant."
         )
-    if backend == "neo4j":
-        return Neo4jVectorStore(driver=driver)
     if backend == "qdrant":
         return QdrantVectorStore(url=url, api_key=api_key, prefer_grpc=True)
     return InMemoryVectorStore()

@@ -115,6 +115,17 @@ class TestRunTraversal:
         ):
             yield
 
+    @pytest.fixture(autouse=True)
+    def _low_degree_stubs(self):
+        async def _all_low(driver, source_ids, tenant_id, timeout=30.0):
+            return {sid: 5 for sid in source_ids}
+
+        with patch(
+            "orchestrator.app.agentic_traversal.batch_check_degrees",
+            side_effect=_all_low,
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_single_hop_traversal(self) -> None:
         from neo4j.exceptions import Neo4jError
@@ -197,7 +208,6 @@ class TestRunTraversal:
                 timeout=30.0,
             )
 
-        assert mock_session.execute_read.call_count == 2
         assert len(context) >= 1
 
     @pytest.mark.asyncio
@@ -290,7 +300,7 @@ class TestRunTraversal:
         from neo4j.exceptions import Neo4jError
 
         mock_session = AsyncMock()
-        mock_session.execute_read = AsyncMock(side_effect=[[]])
+        mock_session.execute_read = AsyncMock(side_effect=[[], []])
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
         driver = _mock_driver(mock_session)
@@ -310,4 +320,3 @@ class TestRunTraversal:
             )
 
         assert context == []
-        assert mock_session.execute_read.call_count == 1

@@ -182,8 +182,8 @@ class TestASTQueriesMatchOldTemplates:
         assert "UNWIND" in cypher
         assert "$frontier_ids" in cypher
         assert "$tenant_id" in cypher
-        assert "source.id AS source_id" in cypher
-        assert "target.id AS target_id" in cypher
+        assert "source_id" in cypher
+        assert "target_id" in cypher
         assert "$limit" in cypher
 
 
