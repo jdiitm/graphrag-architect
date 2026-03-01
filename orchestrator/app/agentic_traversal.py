@@ -19,6 +19,7 @@ from orchestrator.app.context_manager import (
 from orchestrator.app.tenant_security import (
     TenantSecurityProvider,
     build_traversal_batched_neighbor,
+    build_traversal_batched_supernode_neighbor,
     build_traversal_neighbor_discovery,
     build_traversal_one_hop,
     build_traversal_sampled_neighbor,
@@ -32,6 +33,7 @@ MAX_NODE_DEGREE = 500
 COLLECTION_MULTIPLIER = 2.0
 
 _DEFAULT_DEGREE_THRESHOLD = 200
+_DEFAULT_APOC_DEGREE_THRESHOLD = 1000
 
 
 class TraversalStrategy(enum.Enum):
@@ -45,6 +47,7 @@ class TraversalStrategy(enum.Enum):
 class TraversalConfig:
     strategy: TraversalStrategy = TraversalStrategy.ADAPTIVE
     degree_threshold: int = _DEFAULT_DEGREE_THRESHOLD
+    apoc_degree_threshold: int = _DEFAULT_APOC_DEGREE_THRESHOLD
     max_hops: int = MAX_HOPS
     max_visited: int = MAX_VISITED
     timeout: float = 30.0
@@ -60,6 +63,12 @@ class TraversalConfig:
                 os.environ.get(
                     "TRAVERSAL_DEGREE_THRESHOLD",
                     str(_DEFAULT_DEGREE_THRESHOLD),
+                )
+            ),
+            apoc_degree_threshold=int(
+                os.environ.get(
+                    "TRAVERSAL_APOC_DEGREE_THRESHOLD",
+                    str(_DEFAULT_APOC_DEGREE_THRESHOLD),
                 )
             ),
             max_hops=int(os.environ.get("TRAVERSAL_MAX_HOPS", str(MAX_HOPS))),
@@ -535,24 +544,21 @@ async def execute_batched_hop(
                 await session.execute_read(_tx, timeout=timeout)
             )
 
-    for super_id in super_nodes:
+    if super_nodes:
         logger.warning(
-            "Super-node %s (degree=%d) excluded from batch; sampling individually",
-            super_id, degree_map.get(super_id, 0),
+            "Batching %d super-node(s) into single UNWIND expansion: %s",
+            len(super_nodes),
+            super_nodes,
         )
-        sampled = await execute_hop(
+        supernode_results = await _batched_supernode_expansion(
             driver=driver,
-            source_id=super_id,
+            source_ids=super_nodes,
             tenant_id=tenant_id,
             acl_params=acl_params,
             timeout=timeout,
-            max_degree=degree_threshold,
             sample_size=per_source_limit,
         )
-        for record in sampled:
-            if "source_id" not in record:
-                record["source_id"] = super_id
-        all_results.extend(sampled)
+        all_results.extend(supernode_results)
 
     return all_results
 
@@ -580,6 +586,36 @@ async def batch_check_degrees(
         for row in records
         if "node_id" in row and "degree" in row
     }
+
+
+async def _batched_supernode_expansion(
+    driver: AsyncDriver,
+    source_ids: List[str],
+    tenant_id: str,
+    acl_params: Dict[str, Any],
+    timeout: float = 30.0,
+    sample_size: int = 50,
+) -> List[Dict[str, Any]]:
+    if not source_ids:
+        return []
+
+    provider = TenantSecurityProvider()
+    query = build_traversal_batched_supernode_neighbor()
+
+    params: Dict[str, Any] = {
+        "source_ids": source_ids,
+        "tenant_id": tenant_id,
+        "sample_size": sample_size,
+        **acl_params,
+    }
+    provider.validate_query(query, params)
+
+    async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
+        result = await tx.run(query, **params)
+        return await result.data()
+
+    async with driver.session() as session:
+        return await session.execute_read(_tx, timeout=timeout)
 
 
 def _drain_frontier(state: TraversalState) -> List[str]:
@@ -773,8 +809,38 @@ async def _resolve_adaptive(
     beam_width: int,
     degree_threshold: int,
     degree_hint: Optional[int],
+    apoc_degree_threshold: int = _DEFAULT_APOC_DEGREE_THRESHOLD,
 ) -> List[Dict[str, Any]]:
     if degree_hint is not None:
+        if degree_hint >= apoc_degree_threshold:
+            try:
+                return await _try_apoc_expansion(
+                    driver=driver,
+                    start_node_id=start_node_id,
+                    tenant_id=tenant_id,
+                    acl_params=acl_params,
+                    max_hops=max_hops,
+                    max_visited=max_visited,
+                    token_budget=token_budget,
+                )
+            except ClientError:
+                logger.warning(
+                    "APOC expansion unavailable for high-degree node %s, "
+                    "falling back to batched BFS",
+                    start_node_id,
+                    exc_info=True,
+                )
+                return await _batched_bfs(
+                    driver=driver,
+                    start_node_id=start_node_id,
+                    tenant_id=tenant_id,
+                    acl_params=acl_params,
+                    max_hops=max_hops,
+                    timeout=timeout,
+                    token_budget=token_budget,
+                    max_visited=max_visited,
+                    beam_width=beam_width,
+                )
         if degree_hint >= degree_threshold:
             return await _batched_bfs(
                 driver=driver,
@@ -906,6 +972,7 @@ async def run_traversal(
             beam_width=config.beam_width,
             degree_threshold=config.degree_threshold,
             degree_hint=degree_hint,
+            apoc_degree_threshold=config.apoc_degree_threshold,
         )
 
     raise ValueError(f"Unknown traversal strategy: {config.strategy}")
