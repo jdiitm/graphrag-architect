@@ -165,7 +165,7 @@ class RedisVersionStore:
 _KNOWN_BACKENDS = {"memory", "neo4j", "redis"}
 
 
-def create_version_store(backend: str = "memory", **kwargs: Any) -> Any:
+def create_version_store(backend: str = "memory", **kwargs: Any) -> VersionStore:
     if backend == "memory":
         return InMemoryVersionStore()
     if backend == "neo4j":
