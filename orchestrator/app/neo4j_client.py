@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from neo4j import AsyncDriver, AsyncManagedTransaction, READ_ACCESS, WRITE_ACCESS
 
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
+from orchestrator.app.config import HotTargetConfig
 from orchestrator.app.ontology import (
     Ontology,
     build_default_ontology,
@@ -156,20 +157,42 @@ def _sort_entities_for_write(entities: List[Any]) -> List[Any]:
 _HOT_TARGET_DEFAULT_THRESHOLD = 50
 
 
+def _edge_target_id(edge: Any) -> str:
+    return (
+        getattr(edge, "target_service_id", "")
+        or getattr(edge, "topic_name", "")
+        or getattr(edge, "deployment_id", "")
+    )
+
+
 def detect_hot_targets(
     edges: List[Any],
     threshold: int = _HOT_TARGET_DEFAULT_THRESHOLD,
 ) -> Set[str]:
     target_counts: Dict[str, int] = {}
     for edge in edges:
-        target = (
-            getattr(edge, "target_service_id", "")
-            or getattr(edge, "topic_name", "")
-            or getattr(edge, "deployment_id", "")
-        )
+        target = _edge_target_id(edge)
         if target:
             target_counts[target] = target_counts.get(target, 0) + 1
     return {tid for tid, count in target_counts.items() if count >= threshold}
+
+
+def split_hot_targets(
+    edges: List[Any],
+    threshold: int = _HOT_TARGET_DEFAULT_THRESHOLD,
+) -> Tuple[List[Any], List[Any]]:
+    hot_ids = detect_hot_targets(edges, threshold=threshold)
+    if not hot_ids:
+        return edges, []
+    regular: List[Any] = []
+    hot: List[Any] = []
+    for edge in edges:
+        target = _edge_target_id(edge)
+        if target in hot_ids:
+            hot.append(edge)
+        else:
+            regular.append(edge)
+    return regular, hot
 
 
 def _partition_entities(
@@ -252,6 +275,7 @@ class GraphRepository:
         write_concurrency: Optional[int] = None,
         outbox_store: Optional[Any] = None,
         ontology: Optional[Ontology] = None,
+        hot_target_config: Optional[HotTargetConfig] = None,
     ) -> None:
         self._driver = driver
         self._cb = circuit_breaker or CircuitBreaker(CircuitBreakerConfig())
@@ -260,6 +284,7 @@ class GraphRepository:
         self._outbox_store = outbox_store
         self._ontology = ontology or build_default_ontology()
         self._unwind_queries = build_unwind_queries(ontology=self._ontology)
+        self._hot_target_config = hot_target_config or HotTargetConfig()
         resolved = (
             write_concurrency
             if write_concurrency is not None
@@ -387,12 +412,46 @@ class GraphRepository:
                 for et, recs in node_groups.items()
             ))
 
-        edge_groups = _group_by_type(edges)
-        if edge_groups:
+        regular_edges, hot_edges = split_hot_targets(
+            edges,
+            threshold=self._hot_target_config.hot_target_threshold,
+        )
+
+        regular_edge_groups = _group_by_type(regular_edges)
+        if regular_edge_groups:
             await asyncio.gather(*(
                 _guarded_write(et, recs)
-                for et, recs in edge_groups.items()
+                for et, recs in regular_edge_groups.items()
             ))
+
+        if hot_edges:
+            await self._write_hot_edges_serialized(hot_edges)
+
+    async def _write_hot_edges_serialized(
+        self, hot_edges: List[Any],
+    ) -> None:
+        hot_semaphore = asyncio.Semaphore(
+            self._hot_target_config.hot_target_max_concurrent,
+        )
+
+        async def _single_merge(edge: Any) -> None:
+            async with hot_semaphore:
+                entity_type = type(edge)
+                unwind_query = self._unwind_queries.get(entity_type)
+                if unwind_query is None:
+                    raise TypeError(
+                        f"No UNWIND query registered for "
+                        f"{entity_type.__name__}"
+                    )
+                async with self._write_session() as session:
+                    await session.execute_write(
+                        self._run_unwind, query=unwind_query,
+                        batch=[edge.model_dump()],
+                    )
+
+        await asyncio.gather(*(
+            _single_merge(edge) for edge in hot_edges
+        ))
 
     async def _refresh_degree_property(
         self, affected_ids: List[str],

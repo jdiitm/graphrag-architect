@@ -260,3 +260,20 @@ class IngestionConfig:
         else:
             value = _SINK_BATCH_DEFAULT
         return cls(sink_batch_size=value)
+
+
+@dataclass(frozen=True)
+class HotTargetConfig:
+    hot_target_threshold: int = 10
+    hot_target_max_concurrent: int = 1
+
+    @classmethod
+    def from_env(cls) -> HotTargetConfig:
+        return cls(
+            hot_target_threshold=int(
+                os.environ.get("HOT_TARGET_THRESHOLD", "10"),
+            ),
+            hot_target_max_concurrent=int(
+                os.environ.get("HOT_TARGET_MAX_CONCURRENT", "1"),
+            ),
+        )

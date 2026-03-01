@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from orchestrator.app.config import HotTargetConfig
 from orchestrator.app.extraction_models import (
     CallsEdge,
     ConsumesEdge,
@@ -15,7 +17,11 @@ from orchestrator.app.extraction_models import (
     ProducesEdge,
     ServiceNode,
 )
-from orchestrator.app.neo4j_client import GraphRepository, cypher_op_for_entity
+from orchestrator.app.neo4j_client import (
+    GraphRepository,
+    cypher_op_for_entity,
+    split_hot_targets,
+)
 
 
 SAMPLE_SERVICE = ServiceNode(
@@ -472,3 +478,244 @@ class TestCommitTopologyIdempotent:
         assert len(unwind_calls) == 1
         batch = unwind_calls[0].kwargs["batch"]
         assert len(batch) == 2
+
+
+class TestHotTargetConfig:
+
+    def test_defaults(self) -> None:
+        cfg = HotTargetConfig()
+        assert cfg.hot_target_threshold == 10
+        assert cfg.hot_target_max_concurrent == 1
+
+    def test_from_env_overrides(self) -> None:
+        with patch.dict("os.environ", {
+            "HOT_TARGET_THRESHOLD": "5",
+            "HOT_TARGET_MAX_CONCURRENT": "2",
+        }):
+            cfg = HotTargetConfig.from_env()
+            assert cfg.hot_target_threshold == 5
+            assert cfg.hot_target_max_concurrent == 2
+
+    def test_from_env_uses_defaults(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            cfg = HotTargetConfig.from_env()
+            assert cfg.hot_target_threshold == 10
+            assert cfg.hot_target_max_concurrent == 1
+
+    def test_frozen(self) -> None:
+        cfg = HotTargetConfig()
+        with pytest.raises(FrozenInstanceError):
+            cfg.hot_target_threshold = 999
+
+
+class TestSplitHotTargets:
+
+    def test_no_hot_targets_returns_all_regular(self) -> None:
+        edges = [SAMPLE_CALLS]
+        regular, hot = split_hot_targets(edges, threshold=10)
+        assert regular == edges
+        assert hot == []
+
+    def test_splits_edges_with_hot_target(self) -> None:
+        hot_edges = [
+            CallsEdge(
+                source_service_id=f"svc-{i}",
+                target_service_id="auth-service",
+                protocol="http",
+                tenant_id="test-tenant",
+            )
+            for i in range(12)
+        ]
+        cold_edge = CallsEdge(
+            source_service_id="unique-src",
+            target_service_id="unique-target",
+            protocol="grpc",
+            tenant_id="test-tenant",
+        )
+        all_edges = hot_edges + [cold_edge]
+
+        regular, hot = split_hot_targets(all_edges, threshold=10)
+
+        assert len(hot) == 12
+        assert len(regular) == 1
+        assert all(e.target_service_id == "auth-service" for e in hot)
+        assert regular[0].target_service_id == "unique-target"
+
+    def test_empty_edges_returns_empty(self) -> None:
+        regular, hot = split_hot_targets([], threshold=10)
+        assert regular == []
+        assert hot == []
+
+    def test_threshold_boundary_exact(self) -> None:
+        edges = [
+            CallsEdge(
+                source_service_id=f"svc-{i}",
+                target_service_id="hub-node",
+                protocol="http",
+                tenant_id="test-tenant",
+            )
+            for i in range(10)
+        ]
+        regular_below, hot_below = split_hot_targets(edges, threshold=11)
+        assert len(regular_below) == 10
+        assert len(hot_below) == 0
+
+        regular_at, hot_at = split_hot_targets(edges, threshold=10)
+        assert len(regular_at) == 0
+        assert len(hot_at) == 10
+
+    def test_multiple_hot_targets(self) -> None:
+        edges_a = [
+            ConsumesEdge(
+                service_id=f"consumer-{i}",
+                topic_name="hot-topic-a",
+                consumer_group=f"cg-{i}",
+                tenant_id="test-tenant",
+            )
+            for i in range(5)
+        ]
+        edges_b = [
+            ConsumesEdge(
+                service_id=f"consumer-{i}",
+                topic_name="hot-topic-b",
+                consumer_group=f"cg-{i}",
+                tenant_id="test-tenant",
+            )
+            for i in range(5)
+        ]
+        cold = [
+            DeployedInEdge(
+                service_id="lone-svc",
+                deployment_id="lone-deploy",
+                tenant_id="test-tenant",
+            )
+        ]
+
+        regular, hot = split_hot_targets(
+            edges_a + edges_b + cold, threshold=5,
+        )
+        assert len(hot) == 10
+        assert len(regular) == 1
+
+
+class TestBatchedCommitHotTargetSerialization:
+
+    @pytest.mark.asyncio
+    async def test_hot_edges_written_individually(self) -> None:
+        driver, _, tx = _mock_driver()
+        hot_config = HotTargetConfig(
+            hot_target_threshold=2, hot_target_max_concurrent=1,
+        )
+        repo = GraphRepository(driver, hot_target_config=hot_config)
+
+        hot_edges = [
+            CallsEdge(
+                source_service_id=f"svc-{i}",
+                target_service_id="shared-hub",
+                protocol="http",
+                tenant_id="test-tenant",
+            )
+            for i in range(3)
+        ]
+        node = ServiceNode(
+            id="svc-0", name="svc-0", language="go",
+            framework="gin", opentelemetry_enabled=False,
+            tenant_id="test-tenant",
+        )
+
+        await repo.commit_topology([node] + hot_edges)
+
+        calls = tx.run.call_args_list
+        node_calls = [
+            c for c in calls if "MERGE (n:" in c.args[0]
+        ]
+        edge_calls = [c for c in calls if ":CALLS" in c.args[0]]
+
+        assert len(node_calls) == 1
+        assert len(node_calls[0].kwargs["batch"]) >= 1
+
+        assert len(edge_calls) == 3
+        for call in edge_calls:
+            assert len(call.kwargs["batch"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_regular_edges_still_batched(self) -> None:
+        driver, _, tx = _mock_driver()
+        hot_config = HotTargetConfig(
+            hot_target_threshold=100, hot_target_max_concurrent=1,
+        )
+        repo = GraphRepository(driver, hot_target_config=hot_config)
+
+        edges = [
+            CallsEdge(
+                source_service_id=f"svc-{i}",
+                target_service_id=f"target-{i}",
+                protocol="http",
+                tenant_id="test-tenant",
+            )
+            for i in range(5)
+        ]
+        node = ServiceNode(
+            id="svc-0", name="svc-0", language="go",
+            framework="gin", opentelemetry_enabled=False,
+            tenant_id="test-tenant",
+        )
+
+        await repo.commit_topology([node] + edges)
+
+        edge_calls = [
+            c for c in tx.run.call_args_list if ":CALLS" in c.args[0]
+        ]
+        assert len(edge_calls) == 1
+        assert len(edge_calls[0].kwargs["batch"]) == 5
+
+    @pytest.mark.asyncio
+    async def test_mixed_batch_splits_correctly(self) -> None:
+        driver, _, tx = _mock_driver()
+        hot_config = HotTargetConfig(
+            hot_target_threshold=3, hot_target_max_concurrent=1,
+        )
+        repo = GraphRepository(driver, hot_target_config=hot_config)
+
+        hot_edges = [
+            CallsEdge(
+                source_service_id=f"caller-{i}",
+                target_service_id="central-auth",
+                protocol="http",
+                tenant_id="test-tenant",
+            )
+            for i in range(4)
+        ]
+        cold_edges = [
+            CallsEdge(
+                source_service_id=f"cold-src-{i}",
+                target_service_id=f"cold-tgt-{i}",
+                protocol="grpc",
+                tenant_id="test-tenant",
+            )
+            for i in range(3)
+        ]
+
+        await repo.commit_topology(hot_edges + cold_edges)
+
+        edge_calls = [
+            c for c in tx.run.call_args_list if ":CALLS" in c.args[0]
+        ]
+        batch_sizes = sorted(
+            [len(c.kwargs["batch"]) for c in edge_calls],
+        )
+        assert sum(batch_sizes) == 7
+
+        single_writes = [s for s in batch_sizes if s == 1]
+        assert len(single_writes) == 4
+
+        batched_writes = [s for s in batch_sizes if s > 1]
+        assert len(batched_writes) == 1
+        assert batched_writes[0] == 3
+
+    @pytest.mark.asyncio
+    async def test_default_config_used_when_none_provided(self) -> None:
+        driver, _, tx = _mock_driver()
+        repo = GraphRepository(driver)
+        assert repo._hot_target_config.hot_target_threshold == 10
+        assert repo._hot_target_config.hot_target_max_concurrent == 1
