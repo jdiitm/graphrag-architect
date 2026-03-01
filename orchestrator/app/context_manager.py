@@ -139,9 +139,17 @@ def identify_connected_paths(
     return components
 
 
+def _candidate_rank(candidate: Dict[str, Any]) -> float:
+    pr = candidate.get("pagerank", 0.0)
+    score = candidate.get("score", 0.0)
+    if pr > 0.0:
+        return pr * 0.7 + score * 0.3
+    return score
+
+
 def _path_min_score(path: List[Dict[str, Any]]) -> float:
-    scores = [c.get("score", 0.0) for c in path]
-    return min(scores) if scores else 0.0
+    ranks = [_candidate_rank(c) for c in path]
+    return min(ranks) if ranks else 0.0
 
 
 def _path_token_cost(path: List[Dict[str, Any]]) -> int:
@@ -413,7 +421,7 @@ def truncate_context_topology(
     connected = [p for p in paths if len(p) > 1]
 
     connected.sort(key=_path_min_score, reverse=True)
-    isolated.sort(key=lambda p: p[0].get("score", 0.0), reverse=True)
+    isolated.sort(key=lambda p: _candidate_rank(p[0]), reverse=True)
 
     result: List[Dict[str, Any]] = []
     total_tokens = 0

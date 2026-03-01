@@ -156,12 +156,24 @@ class QdrantVectorStore:
         api_key: str = "",
         prefer_grpc: bool = True,
         deployment_mode: str = "dev",
+        circuit_breaker: Optional[Any] = None,
     ) -> None:
         self._url = url
         self._api_key = api_key
         self._prefer_grpc = prefer_grpc
         self._deployment_mode = deployment_mode
         self._client: Optional[Any] = None
+        if circuit_breaker is not None:
+            self._circuit_breaker = circuit_breaker
+        else:
+            from orchestrator.app.circuit_breaker import (
+                CircuitBreaker,
+                CircuitBreakerConfig,
+            )
+            self._circuit_breaker = CircuitBreaker(
+                config=CircuitBreakerConfig(failure_threshold=3, recovery_timeout=30.0),
+                name="qdrant",
+            )
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -201,20 +213,23 @@ class QdrantVectorStore:
         query_vector: List[float],
         limit: int = 10,
     ) -> List[SearchResult]:
-        client = self._get_client()
-        results = await client.search(
-            collection_name=collection,
-            query_vector=query_vector,
-            limit=limit,
-        )
-        return [
-            SearchResult(
-                id=str(hit.id),
-                score=hit.score,
-                metadata=hit.payload or {},
+        async def _do_search() -> List[SearchResult]:
+            client = self._get_client()
+            results = await client.search(
+                collection_name=collection,
+                query_vector=query_vector,
+                limit=limit,
             )
-            for hit in results
-        ]
+            return [
+                SearchResult(
+                    id=str(hit.id),
+                    score=hit.score,
+                    metadata=hit.payload or {},
+                )
+                for hit in results
+            ]
+
+        return await self._circuit_breaker.call(_do_search)
 
     async def delete(self, collection: str, ids: List[str], tenant_id: str = "") -> int:
         client = self._get_client()
@@ -253,39 +268,42 @@ class QdrantVectorStore:
         deployment_mode: str = "",
     ) -> List[SearchResult]:
         effective_mode = deployment_mode or self._deployment_mode
-        client = self._get_client()
 
-        if effective_mode == "production" and tenant_id:
-            target_collection = resolve_collection_name(collection, tenant_id)
-            results = await client.search(
-                collection_name=target_collection,
-                query_vector=query_vector,
-                limit=limit,
-            )
-        else:
-            from qdrant_client.models import FieldCondition, Filter, MatchValue
-            query_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="tenant_id",
-                        match=MatchValue(value=tenant_id),
-                    ),
-                ],
-            )
-            results = await client.search(
-                collection_name=collection,
-                query_vector=query_vector,
-                query_filter=query_filter,
-                limit=limit,
-            )
-        return [
-            SearchResult(
-                id=str(hit.id),
-                score=hit.score,
-                metadata=hit.payload or {},
-            )
-            for hit in results
-        ]
+        async def _do_search() -> List[SearchResult]:
+            client = self._get_client()
+            if effective_mode == "production" and tenant_id:
+                target = resolve_collection_name(collection, tenant_id)
+                results = await client.search(
+                    collection_name=target,
+                    query_vector=query_vector,
+                    limit=limit,
+                )
+            else:
+                from qdrant_client.models import FieldCondition, Filter, MatchValue
+                query_filter = Filter(
+                    must=[
+                        FieldCondition(
+                            key="tenant_id",
+                            match=MatchValue(value=tenant_id),
+                        ),
+                    ],
+                )
+                results = await client.search(
+                    collection_name=collection,
+                    query_vector=query_vector,
+                    query_filter=query_filter,
+                    limit=limit,
+                )
+            return [
+                SearchResult(
+                    id=str(hit.id),
+                    score=hit.score,
+                    metadata=hit.payload or {},
+                )
+                for hit in results
+            ]
+
+        return await self._circuit_breaker.call(_do_search)
 
 
 def create_vector_store(

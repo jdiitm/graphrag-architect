@@ -167,26 +167,57 @@ def _compute_groundedness(
     answer_entities = _extract_entity_names_from_text(answer)
     context_entities = _extract_entity_names_from_context(sources)
 
-    stop_words = {
-        "the", "a", "an", "is", "are", "was", "were", "be", "been",
-        "being", "have", "has", "had", "do", "does", "did", "will",
-        "would", "could", "should", "may", "might", "shall", "can",
-        "not", "no", "and", "or", "but", "if", "then", "else",
-        "when", "where", "how", "what", "which", "who", "whom",
-        "this", "that", "these", "those", "it", "its", "to", "of",
-        "in", "for", "on", "with", "at", "by", "from", "as", "into",
-        "through", "during", "before", "after", "above", "below",
-        "between", "out", "off", "over", "under", "again", "further",
-        "all", "each", "every", "both", "few", "more", "most",
-        "other", "some", "such", "only", "very",
-    }
+    answer_lower = {e.lower() for e in answer_entities if len(e) > 2}
+    context_lower = {e.lower() for e in context_entities}
 
-    meaningful = {e for e in answer_entities if e not in stop_words and len(e) > 2}
-    if not meaningful:
+    if not answer_lower:
         return 1.0
 
-    verified = sum(1 for e in meaningful if e in context_entities)
-    return verified / len(meaningful)
+    def _is_grounded(entity: str) -> bool:
+        if entity in context_lower:
+            return True
+        return any(entity in ctx or ctx in entity for ctx in context_lower)
+
+    verified = sum(1 for e in answer_lower if _is_grounded(e))
+    return verified / len(answer_lower)
+
+
+def _compute_semantic_groundedness(
+    answer: str,
+    sources: List[Dict[str, Any]],
+) -> float:
+    if not answer or not sources:
+        return 1.0
+
+    answer_entities = _extract_entity_names_from_text(answer)
+    context_entities = _extract_entity_names_from_context(sources)
+
+    context_text = " ".join(
+        str(v) for s in sources for v in s.values()
+        if isinstance(v, (str, list))
+    )
+    context_lower = context_text.lower()
+
+    answer_lower = {e.lower() for e in answer_entities if len(e) > 2}
+    if not answer_lower:
+        return 1.0
+
+    context_entity_lower = {e.lower() for e in context_entities}
+
+    def _semantic_match(entity: str) -> bool:
+        if entity in context_entity_lower:
+            return True
+        if any(entity in ctx or ctx in entity for ctx in context_entity_lower):
+            return True
+        if entity in context_lower:
+            return True
+        tokens = entity.split()
+        if len(tokens) > 1:
+            return sum(1 for t in tokens if t in context_lower) >= len(tokens) // 2
+        return False
+
+    verified = sum(1 for e in answer_lower if _semantic_match(e))
+    return verified / len(answer_lower)
 
 
 class RAGEvaluator:
