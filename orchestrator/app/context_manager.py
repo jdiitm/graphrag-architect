@@ -433,11 +433,91 @@ def truncate_context_topology(
     return result
 
 
-def _truncate_value(value: Any, max_chars: int) -> str:
-    text = str(value)
-    if len(text) > max_chars:
+def _truncate_list_value(items: List[Any], max_chars: int) -> str:
+    if not items:
+        return "[]"
+    result_items: List[str] = []
+    remaining = len(items)
+    overhead = 4
+    budget = max_chars - overhead
+
+    for item in items:
+        item_repr = repr(item)
+        separator_cost = 2 if result_items else 0
+        summary_cost = len(f", '... {remaining} more'")
+        reserved = summary_cost if remaining > 1 else 0
+        if budget - reserved < len(item_repr) + separator_cost:
+            break
+        result_items.append(item_repr)
+        budget -= len(item_repr) + separator_cost
+        remaining -= 1
+
+    omitted = len(items) - len(result_items)
+    if omitted > 0:
+        result_items.append(f"'... {omitted} more'")
+
+    return "[" + ", ".join(result_items) + "]"
+
+
+def _truncate_dict_value(mapping: Dict[str, Any], max_chars: int) -> str:
+    if not mapping:
+        return "{}"
+    result_pairs: List[str] = []
+    remaining = len(mapping)
+    overhead = 4
+    budget = max_chars - overhead
+
+    for key, val in mapping.items():
+        pair_repr = f"{key!r}: {val!r}"
+        separator_cost = 2 if result_pairs else 0
+        summary_cost = len(f", '... {remaining} more': '...'")
+        reserved = summary_cost if remaining > 1 else 0
+        if budget - reserved < len(pair_repr) + separator_cost:
+            break
+        result_pairs.append(pair_repr)
+        budget -= len(pair_repr) + separator_cost
+        remaining -= 1
+
+    omitted = len(mapping) - len(result_pairs)
+    if omitted > 0:
+        result_pairs.append(f"'... {omitted} more': '...'")
+
+    return "{" + ", ".join(result_pairs) + "}"
+
+
+def _truncate_string_value(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    cutoff = max_chars - 3
+    if cutoff <= 0:
         return text[:max_chars] + "..."
-    return text
+    space_idx = text.rfind(" ", 0, cutoff + 1)
+    if space_idx > cutoff // 2:
+        return text[:space_idx] + "..."
+    return text[:cutoff] + "..."
+
+
+def _truncate_value(value: Any, max_chars: int) -> str:
+    if isinstance(value, list):
+        full = repr(value)
+        return full if len(full) <= max_chars else _truncate_list_value(
+            value, max_chars,
+        )
+
+    if isinstance(value, dict):
+        full = repr(value)
+        return full if len(full) <= max_chars else _truncate_dict_value(
+            value, max_chars,
+        )
+
+    text = str(value)
+    if len(text) <= max_chars:
+        return text
+
+    if isinstance(value, str):
+        return _truncate_string_value(text, max_chars)
+
+    return text[:max_chars] + "..."
 
 
 def _generate_context_delimiter() -> str:
