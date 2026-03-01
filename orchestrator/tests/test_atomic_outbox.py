@@ -54,7 +54,7 @@ class TestAtomicOutboxWrite:
         assert repo._outbox_store is outbox_store
 
     @pytest.mark.asyncio
-    async def test_commit_topology_writes_outbox_event_in_same_tx(self) -> None:
+    async def test_commit_topology_writes_outbox_after_graph_tx(self) -> None:
         driver, session, mock_tx, captured = _mock_driver_with_tx_capture()
         outbox_store = AsyncMock(spec=Neo4jOutboxStore)
         repo = GraphRepository(driver, outbox_store=outbox_store)
@@ -68,10 +68,8 @@ class TestAtomicOutboxWrite:
             outbox_events=[event],
         )
 
-        outbox_store.write_in_tx.assert_called_once()
-        call_args = outbox_store.write_in_tx.call_args
-        assert call_args.args[0] is mock_tx
-        assert call_args.kwargs["event"] is event
+        outbox_store.write_in_tx.assert_not_called()
+        outbox_store.write_after_tx.assert_called_once_with([event])
 
     @pytest.mark.asyncio
     async def test_commit_without_events_skips_outbox_write(self) -> None:
@@ -84,7 +82,7 @@ class TestAtomicOutboxWrite:
             outbox_events=[],
         )
 
-        outbox_store.write_in_tx.assert_not_called()
+        outbox_store.write_after_tx.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_outbox_store_still_commits_entities(self) -> None:
@@ -95,6 +93,30 @@ class TestAtomicOutboxWrite:
             entities=[SAMPLE_SERVICE],
             outbox_events=[],
         )
+
+        assert mock_tx.run.call_count >= 1
+        query_arg = mock_tx.run.call_args_list[0].args[0]
+        assert "UNWIND" in query_arg
+
+    @pytest.mark.asyncio
+    async def test_topology_committed_even_if_outbox_write_after_tx_fails(
+        self,
+    ) -> None:
+        driver, session, mock_tx, captured = _mock_driver_with_tx_capture()
+        outbox_store = AsyncMock(spec=Neo4jOutboxStore)
+        outbox_store.write_after_tx = AsyncMock(
+            side_effect=RuntimeError("outbox down"),
+        )
+        repo = GraphRepository(driver, outbox_store=outbox_store)
+        event = VectorSyncEvent(
+            collection="svc_embeddings", pruned_ids=["old-node-1"],
+        )
+
+        with pytest.raises(RuntimeError, match="outbox down"):
+            await repo.commit_topology_with_outbox(
+                entities=[SAMPLE_SERVICE],
+                outbox_events=[event],
+            )
 
         assert mock_tx.run.call_count >= 1
         query_arg = mock_tx.run.call_args_list[0].args[0]

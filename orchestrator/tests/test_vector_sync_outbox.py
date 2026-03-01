@@ -421,6 +421,10 @@ class FakeRedis:
         self._ttls[dedup_key] = dedup_ttl
         return 1
 
+    async def srandmember(self, name: str, count: int) -> list:
+        members = list(self._sets.get(name, set()))
+        return members[:count]
+
     async def eval(
         self,
         script: str,
@@ -435,7 +439,10 @@ class FakeRedis:
         lease_seconds = float(args[3])
         now = float(args[4])
         prefix = args[5]
-        event_ids = list(self._sets.get(index_key, set()))
+        max_scan = int(args[6]) if len(args) > 6 else len(
+            self._sets.get(index_key, set()),
+        )
+        event_ids = list(self._sets.get(index_key, set()))[:max_scan]
         claimed: List[str] = []
         for eid in event_ids:
             if len(claimed) >= limit:
@@ -664,14 +671,16 @@ class ClaimableFakeRedis(FakeRedis):
     ) -> list | int:
         if numkeys == 3:
             return self._eval_write_dedup(args)
-        import time as _time
         index_key = args[0]
         worker_id = args[1]
         limit = int(args[2])
         lease_seconds = float(args[3])
         now = float(args[4])
         prefix = args[5]
-        event_ids = list(self._sets.get(index_key, set()))
+        max_scan = int(args[6]) if len(args) > 6 else len(
+            self._sets.get(index_key, set()),
+        )
+        event_ids = list(self._sets.get(index_key, set()))[:max_scan]
         claimed: List[str] = []
         for eid in event_ids:
             if len(claimed) >= limit:
@@ -866,6 +875,53 @@ class TestDurableOutboxDrainerWithClaiming:
         assert processed == 1
         mock_store.load_pending.assert_called_once()
         mock_store.delete_event.assert_called_once_with(event.event_id)
+
+
+class TestRedisOutboxStoreMaxClaimScan:
+
+    def test_max_claim_scan_constant_is_defined(self) -> None:
+        from orchestrator.app.vector_sync_outbox import MAX_CLAIM_SCAN
+        assert MAX_CLAIM_SCAN == 1000
+
+    @pytest.mark.asyncio
+    async def test_claim_pending_accepts_max_scan_parameter(self) -> None:
+        redis = ClaimableFakeRedis()
+        store = RedisOutboxStore(redis_conn=redis)
+        for i in range(5):
+            event = VectorSyncEvent(collection="svc", pruned_ids=[f"v{i}"])
+            await store.write_event(event)
+
+        claimed = await store.claim_pending(
+            "w-1", limit=100, lease_seconds=60.0, max_scan=5,
+        )
+        assert len(claimed) == 5
+
+    @pytest.mark.asyncio
+    async def test_claim_pending_bounds_scan_to_max_scan(self) -> None:
+        redis = ClaimableFakeRedis()
+        store = RedisOutboxStore(redis_conn=redis)
+        for i in range(10):
+            event = VectorSyncEvent(collection="svc", pruned_ids=[f"v{i}"])
+            await store.write_event(event)
+
+        claimed = await store.claim_pending(
+            "w-1", limit=100, lease_seconds=60.0, max_scan=3,
+        )
+        assert len(claimed) == 3
+
+    @pytest.mark.asyncio
+    async def test_claim_pending_defaults_to_max_claim_scan(self) -> None:
+        from orchestrator.app.vector_sync_outbox import MAX_CLAIM_SCAN
+        redis = ClaimableFakeRedis()
+        store = RedisOutboxStore(redis_conn=redis)
+        for i in range(5):
+            event = VectorSyncEvent(collection="svc", pruned_ids=[f"v{i}"])
+            await store.write_event(event)
+
+        claimed = await store.claim_pending(
+            "w-1", limit=100, lease_seconds=60.0,
+        )
+        assert len(claimed) == 5
 
 
 class TestRedisOutboxStoreDedupKeyLifecycle:
