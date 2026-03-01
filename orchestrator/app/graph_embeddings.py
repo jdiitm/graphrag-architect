@@ -4,7 +4,7 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol, Set, runtime_checkable
+from typing import Any, ClassVar, Dict, List, Mapping, Optional, Protocol, Set, runtime_checkable
 
 import numpy as np
 from neo4j.exceptions import ClientError as Neo4jClientError
@@ -332,17 +332,47 @@ def _batch_cosine_similarities(
     return sims
 
 
+@dataclass(frozen=True)
+class FusionWeights:
+    text: float
+    structural: float
+
+
+class FusionWeightResolver:
+    _WEIGHT_MAP: ClassVar[Mapping[str, FusionWeights]] = {
+        "entity_lookup": FusionWeights(text=0.9, structural=0.1),
+        "single_hop": FusionWeights(text=0.6, structural=0.4),
+        "multi_hop": FusionWeights(text=0.3, structural=0.7),
+        "aggregate": FusionWeights(text=0.4, structural=0.6),
+    }
+
+    _LEGACY: ClassVar[FusionWeights] = FusionWeights(text=0.7, structural=0.3)
+
+    @classmethod
+    def resolve(cls, complexity: Optional[Any] = None) -> FusionWeights:
+        if complexity is None:
+            return cls._LEGACY
+        key = complexity.value if hasattr(complexity, "value") else str(complexity)
+        return cls._WEIGHT_MAP.get(key, cls._LEGACY)
+
+
 def rerank_with_structural(
     text_results: List[Any],
     structural_embeddings: Dict[str, List[float]],
     query_structural: List[float],
     text_weight: float = 0.7,
     structural_weight: float = 0.3,
+    complexity: Optional[Any] = None,
 ) -> List[Any]:
     if not text_results:
         return []
 
     from orchestrator.app.vector_store import SearchResult
+
+    if complexity is not None:
+        resolved = FusionWeightResolver.resolve(complexity)
+        text_weight = resolved.text
+        structural_weight = resolved.structural
 
     ids = [r.id for r in text_results]
     text_scores = np.array([r.score for r in text_results], dtype=np.float64)

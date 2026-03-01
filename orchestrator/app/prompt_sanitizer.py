@@ -4,9 +4,11 @@ import enum
 import hashlib
 import hmac
 import html
+import math
 import re
 import secrets
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass
 from typing import FrozenSet, List, Set, Tuple
 
@@ -368,6 +370,38 @@ class InjectionResult:
     is_flagged: bool
 
 
+_ENTROPY_WEIGHT = 0.3
+_SHORT_INPUT_TOKEN_LIMIT = 3
+
+
+class StructuralEntropyGuard:
+    _threshold: float
+
+    def __init__(self, threshold: float = 4.5) -> None:
+        self._threshold = threshold
+
+    def score(self, text: str) -> float:
+        tokens = text.split()
+        if len(tokens) < _SHORT_INPUT_TOKEN_LIMIT:
+            return 0.0
+        chars = [c for c in text if not c.isspace()]
+        if len(chars) < 2:
+            return 0.0
+        freq = Counter(chars)
+        total = len(chars)
+        entropy = -sum(
+            (count / total) * math.log2(count / total)
+            for count in freq.values()
+        )
+        if entropy < self._threshold:
+            return 0.0
+        max_entropy = math.log2(total) if total > 1 else 1.0
+        return min(1.0, entropy / max_entropy)
+
+
+_DEFAULT_ENTROPY_GUARD = StructuralEntropyGuard()
+
+
 class PromptInjectionClassifier:
     _threshold: float
     _patterns: List[Tuple[re.Pattern[str], str, float]]
@@ -395,6 +429,10 @@ class PromptInjectionClassifier:
             if pattern.search(text):
                 total_score += weight
                 detected.append(name)
+        entropy_contribution = _DEFAULT_ENTROPY_GUARD.score(text) * _ENTROPY_WEIGHT
+        total_score += entropy_contribution
+        if entropy_contribution > 0.0:
+            detected.append("structural_entropy")
         capped_score = min(total_score, 1.0)
         return InjectionResult(
             score=capped_score,

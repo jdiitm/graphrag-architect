@@ -265,6 +265,22 @@ class IngestionConfig:
 
 
 @dataclass(frozen=True)
+class ASTPoolConfig:
+    ceiling: int = 8
+
+    @classmethod
+    def from_env(cls) -> ASTPoolConfig:
+        raw = os.environ.get("AST_POOL_CEILING", "")
+        if raw:
+            raw_value = int(raw)
+        else:
+            raw_value = 8
+        cpu_count = os.cpu_count() or 4
+        clamped = max(1, min(cpu_count * 2, raw_value))
+        return cls(ceiling=clamped)
+
+
+@dataclass(frozen=True)
 class HotTargetConfig:
     hot_target_threshold: int = 10
     hot_target_max_concurrent: int = 1
