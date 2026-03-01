@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Coroutine, Dict, Generator, List
+import re
+from pathlib import PurePosixPath
+from typing import Any, Callable, Coroutine, Dict, Generator, List, Optional
 
 from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -30,7 +32,10 @@ SYSTEM_PROMPT = (
     "   Fields: id (kebab-case derived from module/package name), name, "
     'language ("go" or "python"), framework (e.g. "gin", "echo", "fastapi", '
     '"flask"), opentelemetry_enabled (true if any OTel import or dependency '
-    "is present).\n\n"
+    "is present), team_owner (inferred from the directory path of the source "
+    'files, e.g. "services/auth-team/..." implies team_owner="auth-team"; '
+    "also look for ownership hints in code comments or package annotations; "
+    "null if unknown).\n\n"
     "2. Calls - explicit inter-service HTTP or gRPC calls found in the code.\n"
     "   Fields: source_service_id, target_service_id, protocol "
     '("http", "grpc").\n\n'
@@ -46,6 +51,48 @@ HUMAN_PROMPT_TEMPLATE = (
     "Analyze the following source files and extract all services and "
     "inter-service calls.\n\n{file_contents}"
 )
+
+DEFAULT_READ_ROLES: List[str] = ["reader"]
+
+_TEAM_HINT_DIRECTORIES = frozenset({
+    "services", "teams", "apps", "cmd", "pkg", "internal",
+})
+
+_SAFE_TEAM_NAME = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
+
+
+def _infer_team_owner_from_paths(
+    file_paths: List[str],
+) -> Optional[str]:
+    for path in file_paths:
+        parts = PurePosixPath(path).parts
+        for i, segment in enumerate(parts[:-1]):
+            if segment in _TEAM_HINT_DIRECTORIES and i + 1 < len(parts) - 1:
+                candidate = parts[i + 1]
+                if _SAFE_TEAM_NAME.match(candidate):
+                    return candidate
+    return None
+
+
+def _apply_acl_defaults(
+    result: ServiceExtractionResult,
+    source_file_paths: List[str],
+) -> ServiceExtractionResult:
+    inferred_owner = _infer_team_owner_from_paths(source_file_paths)
+    patched_services: List[ServiceNode] = []
+    for svc in result.services:
+        updates: Dict[str, Any] = {}
+        if not svc.read_roles:
+            updates["read_roles"] = list(DEFAULT_READ_ROLES)
+        if svc.team_owner is None and inferred_owner is not None:
+            updates["team_owner"] = inferred_owner
+        if updates:
+            patched_services.append(svc.model_copy(update=updates))
+        else:
+            patched_services.append(svc)
+    return ServiceExtractionResult(
+        services=patched_services, calls=result.calls,
+    )
 
 
 class ServiceExtractor:
@@ -151,4 +198,7 @@ class ServiceExtractor:
                     unique_services.append(service)
             all_calls.extend(result.calls)
 
-        return ServiceExtractionResult(services=unique_services, calls=all_calls)
+        merged = ServiceExtractionResult(services=unique_services, calls=all_calls)
+        return _apply_acl_defaults(
+            merged, [f["path"] for f in source_files],
+        )

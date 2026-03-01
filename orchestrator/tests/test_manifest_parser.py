@@ -636,6 +636,78 @@ class TestManifestACLExtraction:
         assert result[0].team_owner == "infra-team"
         assert result[0].namespace_acl == ["production", "staging", "dev"]
 
+    def test_deployment_has_default_read_roles(self):
+        content = textwrap.dedent("""\
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: auth-service
+              namespace: production
+              labels:
+                graphrag.io/team-owner: platform
+            spec:
+              replicas: 3
+        """)
+        result = parse_k8s_manifests(content)
+        assert len(result) == 1
+        assert result[0].read_roles == ["reader"]
+
+    def test_kafka_topic_has_default_read_roles(self):
+        content = textwrap.dedent("""\
+            apiVersion: kafka.strimzi.io/v1beta2
+            kind: KafkaTopic
+            metadata:
+              name: user-events
+              labels:
+                graphrag.io/team-owner: data-team
+            spec:
+              partitions: 6
+              config:
+                retention.ms: "604800000"
+        """)
+        result = parse_kafka_topics(content)
+        assert len(result) == 1
+        assert result[0].read_roles == ["reader"]
+
+    def test_plain_deployment_without_labels_has_default_read_roles(self):
+        content = textwrap.dedent("""\
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: minimal-deploy
+              namespace: staging
+            spec:
+              replicas: 1
+        """)
+        result = parse_k8s_manifests(content)
+        assert len(result) == 1
+        assert result[0].read_roles == ["reader"]
+
+    def test_parse_all_manifests_all_nodes_have_read_roles(self):
+        files = [
+            {"path": "deploy.yaml", "content": textwrap.dedent("""\
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: web-app
+                  namespace: prod
+                spec:
+                  replicas: 2
+            """)},
+            {"path": "topics.yaml", "content": textwrap.dedent("""\
+                apiVersion: kafka.strimzi.io/v1beta2
+                kind: KafkaTopic
+                metadata:
+                  name: events
+                spec:
+                  partitions: 3
+            """)},
+        ]
+        result = parse_all_manifests(files)
+        assert len(result) == 2
+        for node in result:
+            assert node.read_roles == ["reader"]
+
 
 class TestMalformedYamlLogging:
     def test_malformed_yaml_logs_warning(self, caplog):
