@@ -63,7 +63,7 @@ from orchestrator.app.distributed_lock import (
     create_ingestion_lock,
 )
 
-from orchestrator.app.config import ASTPoolConfig, GRPCASTConfig
+from orchestrator.app.config import ASTExtractionConfig, ASTPoolConfig, GRPCASTConfig
 from orchestrator.app.ast_grpc_client import GRPCASTClient
 from orchestrator.app.ast_result_consumer import ASTResultConsumer
 
@@ -88,6 +88,16 @@ def _get_process_pool() -> concurrent.futures.ProcessPoolExecutor:
             max_workers=_PROCESS_POOL_MAX_WORKERS,
         )
     return _ASTPoolHolder.instance
+
+
+def _shutdown_process_pool() -> None:
+    if _ASTPoolHolder.instance is not None:
+        _ASTPoolHolder.instance.shutdown(wait=False)
+        _ASTPoolHolder.instance = None
+
+
+def _get_ast_extraction_mode() -> str:
+    return ASTExtractionConfig.from_env().mode
 
 
 class IngestionDegradedError(RuntimeError):
@@ -492,6 +502,21 @@ async def parse_source_ast(state: IngestionState) -> dict:
         checkpoint = _load_or_create_checkpoint(state, raw_files)
         pending = checkpoint.filter_files(raw_files, FileStatus.PENDING)
         tenant_id = state.get("tenant_id", "default")
+
+        if _get_ast_extraction_mode() == "go":
+            extracted_paths = (
+                [f["path"] for f in pending if f["path"].endswith(".go")]
+                + [f["path"] for f in pending if f["path"].endswith(".py")]
+            )
+            checkpoint.mark(extracted_paths, FileStatus.EXTRACTED)
+            INGESTION_DURATION.record(
+                (time.monotonic() - start) * 1000,
+                {"node": "parse_source_ast"},
+            )
+            return {
+                "extracted_nodes": [],
+                "extraction_checkpoint": checkpoint.to_dict(),
+            }
 
         if _USE_REMOTE_AST and _grpc_ast_endpoint_configured():
             try:
