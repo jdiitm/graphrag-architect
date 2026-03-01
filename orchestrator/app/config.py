@@ -349,6 +349,19 @@ class ContextRankingConfig:
 
 
 @dataclass(frozen=True)
+class SemanticCacheBackendConfig:
+    backend: str = "threadpool"
+
+    @classmethod
+    def from_env(cls) -> SemanticCacheBackendConfig:
+        return cls(
+            backend=os.environ.get(
+                "SEMANTIC_CACHE_BACKEND", "threadpool",
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class VectorSyncConfig:
     backend: str = "memory"
     kafka_topic: str = "graph.mutations"
