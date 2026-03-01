@@ -175,8 +175,7 @@ class TestOntologyDrivenNodeCypherParity:
         ontology = build_default_ontology()
         svc_def = ontology.get_node_type("Service")
         cypher = generate_merge_cypher("Service", svc_def)
-        assert "MERGE (n:Service {id: $id})" in cypher
-        assert "n.tenant_id = $tenant_id" in cypher
+        assert "MERGE (n:Service {id: $id, tenant_id: $tenant_id})" in cypher
         assert "n.name = $name" in cypher
         assert "n.language = $language" in cypher
 
@@ -185,12 +184,10 @@ class TestOntologyDrivenNodeCypherParity:
         svc_def = ontology.get_node_type("Service")
         cypher = generate_unwind_cypher("Service", svc_def)
         assert "UNWIND $batch AS row" in cypher
-        assert "MERGE (n:Service {id: row.id})" in cypher
-        assert "n.tenant_id = row.tenant_id" in cypher
+        assert "MERGE (n:Service {id: row.id, tenant_id: row.tenant_id})" in cypher
 
     def test_kafka_topic_merge_uses_name_key(self) -> None:
         ontology = build_default_ontology()
         topic_def = ontology.get_node_type("KafkaTopic")
         cypher = generate_merge_cypher("KafkaTopic", topic_def)
-        assert "MERGE (n:KafkaTopic {name: $name})" in cypher
-        assert "n.tenant_id = $tenant_id" in cypher
+        assert "MERGE (n:KafkaTopic {name: $name, tenant_id: $tenant_id})" in cypher

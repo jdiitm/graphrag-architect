@@ -10,6 +10,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from neo4j import AsyncDriver, AsyncManagedTransaction, READ_ACCESS, WRITE_ACCESS
 
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
+from orchestrator.app.ontology import (
+    build_default_ontology,
+    generate_edge_unwind_cypher,
+    generate_unwind_cypher,
+)
 from orchestrator.app.extraction_models import (
     CallsEdge,
     ConsumesEdge,
@@ -218,77 +223,36 @@ def _group_by_type(
     return groups
 
 
-_UNWIND_QUERIES: Dict[type, str] = {
-    ServiceNode: (
-        "UNWIND $batch AS row "
-        "MERGE (n:Service {id: row.id, tenant_id: row.tenant_id}) "
-        "SET n.name = row.name, n.language = row.language, "
-        "n.framework = row.framework, "
-        "n.opentelemetry_enabled = row.opentelemetry_enabled, "
-        "n.team_owner = row.team_owner, "
-        "n.namespace_acl = row.namespace_acl, "
-        "n.confidence = row.confidence"
-    ),
-    DatabaseNode: (
-        "UNWIND $batch AS row "
-        "MERGE (n:Database {id: row.id, tenant_id: row.tenant_id}) "
-        "SET n.type = row.type, "
-        "n.team_owner = row.team_owner, "
-        "n.namespace_acl = row.namespace_acl"
-    ),
-    KafkaTopicNode: (
-        "UNWIND $batch AS row "
-        "MERGE (n:KafkaTopic {name: row.name, tenant_id: row.tenant_id}) "
-        "SET n.partitions = row.partitions, "
-        "n.retention_ms = row.retention_ms, "
-        "n.team_owner = row.team_owner, "
-        "n.namespace_acl = row.namespace_acl"
-    ),
-    K8sDeploymentNode: (
-        "UNWIND $batch AS row "
-        "MERGE (n:K8sDeployment {id: row.id, tenant_id: row.tenant_id}) "
-        "SET n.namespace = row.namespace, "
-        "n.replicas = row.replicas, "
-        "n.team_owner = row.team_owner, "
-        "n.namespace_acl = row.namespace_acl"
-    ),
-    CallsEdge: (
-        "UNWIND $batch AS row "
-        "MATCH (a:Service {id: row.source_service_id, tenant_id: row.tenant_id}), "
-        "(b:Service {id: row.target_service_id, tenant_id: row.tenant_id}) "
-        "MERGE (a)-[r:CALLS]->(b) "
-        "SET r.protocol = row.protocol, "
-        "r.confidence = row.confidence, "
-        "r.ingestion_id = row.ingestion_id, "
-        "r.last_seen_at = row.last_seen_at"
-    ),
-    ProducesEdge: (
-        "UNWIND $batch AS row "
-        "MATCH (s:Service {id: row.service_id, tenant_id: row.tenant_id}), "
-        "(t:KafkaTopic {name: row.topic_name, tenant_id: row.tenant_id}) "
-        "MERGE (s)-[r:PRODUCES]->(t) "
-        "SET r.event_schema = row.event_schema, "
-        "r.ingestion_id = row.ingestion_id, "
-        "r.last_seen_at = row.last_seen_at"
-    ),
-    ConsumesEdge: (
-        "UNWIND $batch AS row "
-        "MATCH (s:Service {id: row.service_id, tenant_id: row.tenant_id}), "
-        "(t:KafkaTopic {name: row.topic_name, tenant_id: row.tenant_id}) "
-        "MERGE (s)-[r:CONSUMES]->(t) "
-        "SET r.consumer_group = row.consumer_group, "
-        "r.ingestion_id = row.ingestion_id, "
-        "r.last_seen_at = row.last_seen_at"
-    ),
-    DeployedInEdge: (
-        "UNWIND $batch AS row "
-        "MATCH (s:Service {id: row.service_id, tenant_id: row.tenant_id}), "
-        "(k:K8sDeployment {id: row.deployment_id, tenant_id: row.tenant_id}) "
-        "MERGE (s)-[r:DEPLOYED_IN]->(k) "
-        "SET r.ingestion_id = row.ingestion_id, "
-        "r.last_seen_at = row.last_seen_at"
-    ),
+_MODEL_TO_NODE_LABEL: Dict[type, str] = {
+    ServiceNode: "Service",
+    DatabaseNode: "Database",
+    KafkaTopicNode: "KafkaTopic",
+    K8sDeploymentNode: "K8sDeployment",
 }
+
+_MODEL_TO_EDGE_TYPE: Dict[type, str] = {
+    CallsEdge: "CALLS",
+    ProducesEdge: "PRODUCES",
+    ConsumesEdge: "CONSUMES",
+    DeployedInEdge: "DEPLOYED_IN",
+}
+
+
+def build_unwind_queries() -> Dict[type, str]:
+    ontology = build_default_ontology()
+    queries: Dict[type, str] = {}
+    for model_type, label in _MODEL_TO_NODE_LABEL.items():
+        node_def = ontology.get_node_type(label)
+        if node_def is not None:
+            queries[model_type] = generate_unwind_cypher(label, node_def)
+    for model_type, rel_type in _MODEL_TO_EDGE_TYPE.items():
+        edge_def = ontology.get_edge_type(rel_type)
+        if edge_def is not None:
+            queries[model_type] = generate_edge_unwind_cypher(rel_type, edge_def)
+    return queries
+
+
+_UNWIND_QUERIES = build_unwind_queries()
 
 
 def _chunk_list(

@@ -10,7 +10,11 @@ import yaml
 class NodeTypeDefinition:
     properties: Dict[str, str]
     unique_key: str
+    merge_keys: List[str] = field(default_factory=list)
     acl_fields: List[str] = field(default_factory=list)
+
+    def effective_merge_keys(self) -> List[str]:
+        return self.merge_keys if self.merge_keys else [self.unique_key]
 
 
 @dataclass(frozen=True)
@@ -63,6 +67,7 @@ class OntologyLoader:
             node_types[label] = NodeTypeDefinition(
                 properties=definition.get("properties", {}),
                 unique_key=definition.get("unique_key", "id"),
+                merge_keys=definition.get("merge_keys", []),
                 acl_fields=definition.get("acl_fields", []),
             )
 
@@ -86,15 +91,17 @@ class OntologyLoader:
 def generate_merge_cypher(
     label: str, node_def: NodeTypeDefinition,
 ) -> str:
-    key = node_def.unique_key
+    keys = node_def.effective_merge_keys()
+    merge_parts = [f"{k}: ${k}" for k in keys]
+    merge_clause = ", ".join(merge_parts)
     set_parts = [
         f"n.{prop} = ${prop}"
         for prop in node_def.properties
-        if prop != key
+        if prop not in keys
     ]
     set_clause = ", ".join(set_parts)
     return (
-        f"MERGE (n:{label} {{{key}: ${key}}}) "
+        f"MERGE (n:{label} {{{merge_clause}}}) "
         f"SET {set_clause}"
     )
 
@@ -102,16 +109,18 @@ def generate_merge_cypher(
 def generate_unwind_cypher(
     label: str, node_def: NodeTypeDefinition,
 ) -> str:
-    key = node_def.unique_key
+    keys = node_def.effective_merge_keys()
+    merge_parts = [f"{k}: row.{k}" for k in keys]
+    merge_clause = ", ".join(merge_parts)
     set_parts = [
         f"n.{prop} = row.{prop}"
         for prop in node_def.properties
-        if prop != key
+        if prop not in keys
     ]
     set_clause = ", ".join(set_parts)
     return (
         f"UNWIND $batch AS row "
-        f"MERGE (n:{label} {{{key}: row.{key}}}) "
+        f"MERGE (n:{label} {{{merge_clause}}}) "
         f"SET {set_clause}"
     )
 
@@ -168,11 +177,13 @@ def generate_edge_unwind_cypher(
 def _node_def(
     props: Dict[str, str],
     unique_key: str = "id",
+    merge_keys: Optional[List[str]] = None,
     acl_fields: Optional[List[str]] = None,
 ) -> NodeTypeDefinition:
     return NodeTypeDefinition(
         properties=props,
         unique_key=unique_key,
+        merge_keys=merge_keys or [],
         acl_fields=acl_fields or [],
     )
 
@@ -214,6 +225,7 @@ def build_default_ontology() -> Ontology:
                 "namespace_acl": "list", "confidence": "float",
             },
             unique_key="id",
+            merge_keys=["id", "tenant_id"],
             acl_fields=_ACL_FIELDS,
         ),
         "Database": _node_def(
@@ -223,6 +235,7 @@ def build_default_ontology() -> Ontology:
                 "namespace_acl": "list",
             },
             unique_key="id",
+            merge_keys=["id", "tenant_id"],
             acl_fields=_ACL_FIELDS,
         ),
         "KafkaTopic": _node_def(
@@ -232,6 +245,7 @@ def build_default_ontology() -> Ontology:
                 "team_owner": "string", "namespace_acl": "list",
             },
             unique_key="name",
+            merge_keys=["name", "tenant_id"],
             acl_fields=_ACL_FIELDS,
         ),
         "K8sDeployment": _node_def(
@@ -241,6 +255,7 @@ def build_default_ontology() -> Ontology:
                 "team_owner": "string", "namespace_acl": "list",
             },
             unique_key="id",
+            merge_keys=["id", "tenant_id"],
             acl_fields=_ACL_FIELDS,
         ),
     }
