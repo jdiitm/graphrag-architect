@@ -136,34 +136,30 @@ class TestRawLLMSynthesizePromptStructure:
 
     @pytest.mark.asyncio
     async def test_system_message_references_dynamic_delimiter(self) -> None:
-        mock_llm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "test answer"
-        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+        mock_provider = MagicMock()
+        mock_provider.ainvoke_messages = AsyncMock(return_value="test answer")
 
-        with patch("orchestrator.app.query_engine._build_llm", return_value=mock_llm):
+        with patch("orchestrator.app.query_engine._build_synthesis_provider", return_value=mock_provider):
             from orchestrator.app.query_engine import _raw_llm_synthesize
 
             await _raw_llm_synthesize("What depends on auth?", [{"name": "auth"}])
 
-        call_args = mock_llm.ainvoke.call_args[0][0]
+        call_args = mock_provider.ainvoke_messages.call_args[0][0]
         system_msg = call_args[0].content
         assert "disregard" in system_msg.lower() or "ignore" in system_msg.lower()
         assert "GRAPHCTX_" in system_msg or "graphctx_" in system_msg.lower()
 
     @pytest.mark.asyncio
     async def test_human_message_contains_dynamic_delimiter_tags(self) -> None:
-        mock_llm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "test answer"
-        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+        mock_provider = MagicMock()
+        mock_provider.ainvoke_messages = AsyncMock(return_value="test answer")
 
-        with patch("orchestrator.app.query_engine._build_llm", return_value=mock_llm):
+        with patch("orchestrator.app.query_engine._build_synthesis_provider", return_value=mock_provider):
             from orchestrator.app.query_engine import _raw_llm_synthesize
 
             await _raw_llm_synthesize("List services", [{"name": "svc-a"}])
 
-        call_args = mock_llm.ainvoke.call_args[0][0]
+        call_args = mock_provider.ainvoke_messages.call_args[0][0]
         human_msg = call_args[1].content
         assert "<graph_context>" not in human_msg
         assert "GRAPHCTX_" in human_msg

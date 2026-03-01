@@ -43,11 +43,11 @@ class TestAsyncClassifierIntegration:
             new_callable=AsyncMock,
             return_value=safe_result,
         ) as mock_classify, patch(
-            "orchestrator.app.query_engine._build_llm",
-        ) as mock_llm_builder:
-            mock_llm = AsyncMock()
-            mock_llm.ainvoke.return_value = MagicMock(content="answer")
-            mock_llm_builder.return_value = mock_llm
+            "orchestrator.app.query_engine._build_synthesis_provider",
+        ) as mock_provider_builder:
+            mock_provider = AsyncMock()
+            mock_provider.ainvoke_messages.return_value = "answer"
+            mock_provider_builder.return_value = mock_provider
 
             from orchestrator.app.query_engine import _raw_llm_synthesize
             await _raw_llm_synthesize("test query", [{"key": "val"}])
@@ -62,21 +62,22 @@ class TestAsyncClassifierIntegration:
         safe_result = InjectionResult(
             score=0.0, detected_patterns=[], is_flagged=False,
         )
+
+        mock_llm = AsyncMock()
+
+        async def fake_stream(*_args, **_kwargs):
+            yield MagicMock(content="chunk")
+
+        mock_llm.astream = fake_stream
+
         with patch(
             "orchestrator.app.query_engine._classify_async",
             new_callable=AsyncMock,
             return_value=safe_result,
         ) as mock_classify, patch(
-            "orchestrator.app.query_engine._build_llm",
-        ) as mock_llm_builder:
-            mock_llm = AsyncMock()
-
-            async def fake_stream(*_args, **_kwargs):
-                yield MagicMock(content="chunk")
-
-            mock_llm.astream = fake_stream
-            mock_llm_builder.return_value = mock_llm
-
+            "langchain_google_genai.ChatGoogleGenerativeAI",
+            return_value=mock_llm,
+        ):
             from orchestrator.app.query_engine import _raw_llm_synthesize_stream
             chunks = []
             async for chunk in _raw_llm_synthesize_stream(
@@ -101,13 +102,13 @@ class TestAsyncClassifierIntegration:
             new_callable=AsyncMock,
             return_value=flagged_result,
         ), patch(
-            "orchestrator.app.query_engine._build_llm",
-        ) as mock_llm_builder, patch(
+            "orchestrator.app.query_engine._build_synthesis_provider",
+        ) as mock_provider_builder, patch(
             "orchestrator.app.query_engine._query_logger",
         ) as mock_logger:
-            mock_llm = AsyncMock()
-            mock_llm.ainvoke.return_value = MagicMock(content="answer")
-            mock_llm_builder.return_value = mock_llm
+            mock_provider = AsyncMock()
+            mock_provider.ainvoke_messages.return_value = "answer"
+            mock_provider_builder.return_value = mock_provider
 
             from orchestrator.app.query_engine import _raw_llm_synthesize
             await _raw_llm_synthesize("test query", [{"key": "val"}])

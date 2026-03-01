@@ -7,7 +7,6 @@ from typing import Any, Callable, Coroutine, Dict, Generator, List, Optional
 
 from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -21,6 +20,7 @@ from orchestrator.app.extraction_models import (
     ServiceExtractionResult,
     ServiceNode,
 )
+from orchestrator.app.llm_provider import create_provider_with_failover
 from orchestrator.app.prompt_sanitizer import sanitize_source_content
 from orchestrator.app.token_counter import count_tokens
 
@@ -101,11 +101,7 @@ class ServiceExtractor:
 
     def __init__(self, config: ExtractionConfig) -> None:
         self.config = config
-        llm = ChatGoogleGenerativeAI(
-            model=config.model_name,
-            google_api_key=config.google_api_key,
-        )
-        structured_llm = llm.with_structured_output(ServiceExtractionResult)
+        self._provider = create_provider_with_failover(config)
 
         @retry(
             wait=wait_exponential(
@@ -117,7 +113,9 @@ class ServiceExtractor:
         async def _invoke_with_retry(
             messages: list,
         ) -> ServiceExtractionResult:
-            return await structured_llm.ainvoke(messages)
+            return await self._provider.ainvoke_structured(
+                SYSTEM_PROMPT, messages,
+            )
 
         self.chain = _invoke_with_retry
 

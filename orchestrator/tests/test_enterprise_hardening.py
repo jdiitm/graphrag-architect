@@ -166,7 +166,7 @@ class TestStreamingSynthesis:
         mock_llm.astream = fake_astream
 
         with patch(
-            "orchestrator.app.query_engine._build_llm",
+            "langchain_google_genai.ChatGoogleGenerativeAI",
             return_value=mock_llm,
         ):
             chunks = []
@@ -182,14 +182,12 @@ class TestStreamingSynthesis:
     async def test_non_streaming_synthesize_still_works(self) -> None:
         from orchestrator.app.query_engine import _raw_llm_synthesize
 
-        mock_llm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "The auth-service uses Go."
-        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+        mock_provider = MagicMock()
+        mock_provider.ainvoke_messages = AsyncMock(return_value="The auth-service uses Go.")
 
         with patch(
-            "orchestrator.app.query_engine._build_llm",
-            return_value=mock_llm,
+            "orchestrator.app.query_engine._build_synthesis_provider",
+            return_value=mock_provider,
         ):
             result = await _raw_llm_synthesize(
                 "What language is auth-service?",

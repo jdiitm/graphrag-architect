@@ -81,36 +81,32 @@ class TestStructuredLLMMessages:
     async def test_raw_llm_synthesize_uses_message_list(self):
         from orchestrator.app.query_engine import _raw_llm_synthesize
 
-        mock_llm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "Auth handles authentication."
-        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+        mock_provider = MagicMock()
+        mock_provider.ainvoke_messages = AsyncMock(return_value="Auth handles authentication.")
 
         with patch(
-            "orchestrator.app.query_engine._build_llm", return_value=mock_llm,
+            "orchestrator.app.query_engine._build_synthesis_provider", return_value=mock_provider,
         ):
             await _raw_llm_synthesize("What is auth?", [{"name": "auth"}])
 
-        call_args = mock_llm.ainvoke.call_args[0][0]
+        call_args = mock_provider.ainvoke_messages.call_args[0][0]
         assert isinstance(call_args, list), (
-            f"ainvoke must receive a list of messages, got {type(call_args)}"
+            f"ainvoke_messages must receive a list of messages, got {type(call_args)}"
         )
 
     @pytest.mark.asyncio
     async def test_raw_llm_synthesize_has_system_message(self):
         from orchestrator.app.query_engine import _raw_llm_synthesize
 
-        mock_llm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "Auth handles authentication."
-        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+        mock_provider = MagicMock()
+        mock_provider.ainvoke_messages = AsyncMock(return_value="Auth handles authentication.")
 
         with patch(
-            "orchestrator.app.query_engine._build_llm", return_value=mock_llm,
+            "orchestrator.app.query_engine._build_synthesis_provider", return_value=mock_provider,
         ):
             await _raw_llm_synthesize("What is auth?", [{"name": "auth"}])
 
-        messages = mock_llm.ainvoke.call_args[0][0]
+        messages = mock_provider.ainvoke_messages.call_args[0][0]
         system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
         assert len(system_msgs) == 1, (
             f"Expected exactly 1 SystemMessage, got {len(system_msgs)}"
@@ -120,17 +116,15 @@ class TestStructuredLLMMessages:
     async def test_raw_llm_synthesize_has_human_message(self):
         from orchestrator.app.query_engine import _raw_llm_synthesize
 
-        mock_llm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "Auth handles authentication."
-        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+        mock_provider = MagicMock()
+        mock_provider.ainvoke_messages = AsyncMock(return_value="Auth handles authentication.")
 
         with patch(
-            "orchestrator.app.query_engine._build_llm", return_value=mock_llm,
+            "orchestrator.app.query_engine._build_synthesis_provider", return_value=mock_provider,
         ):
             await _raw_llm_synthesize("What is auth?", [{"name": "auth"}])
 
-        messages = mock_llm.ainvoke.call_args[0][0]
+        messages = mock_provider.ainvoke_messages.call_args[0][0]
         human_msgs = [m for m in messages if isinstance(m, HumanMessage)]
         assert len(human_msgs) == 1, (
             f"Expected exactly 1 HumanMessage, got {len(human_msgs)}"
@@ -140,17 +134,15 @@ class TestStructuredLLMMessages:
     async def test_human_message_contains_sanitized_query(self):
         from orchestrator.app.query_engine import _raw_llm_synthesize
 
-        mock_llm = MagicMock()
-        mock_response = MagicMock()
-        mock_response.content = "Answer."
-        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+        mock_provider = MagicMock()
+        mock_provider.ainvoke_messages = AsyncMock(return_value="Answer.")
 
         with patch(
-            "orchestrator.app.query_engine._build_llm", return_value=mock_llm,
+            "orchestrator.app.query_engine._build_synthesis_provider", return_value=mock_provider,
         ):
             await _raw_llm_synthesize("What is auth?", [{"name": "auth"}])
 
-        messages = mock_llm.ainvoke.call_args[0][0]
+        messages = mock_provider.ainvoke_messages.call_args[0][0]
         human_msg = next(m for m in messages if isinstance(m, HumanMessage))
         assert "<user_query>" in human_msg.content
 

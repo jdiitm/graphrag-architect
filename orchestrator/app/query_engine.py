@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
 from neo4j import AsyncDriver, AsyncManagedTransaction
 
@@ -23,6 +22,7 @@ from orchestrator.app.circuit_breaker import (
     TenantCircuitBreakerRegistry,
 )
 from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfig, RAGEvalConfig
+from orchestrator.app.llm_provider import LLMError, LLMProvider, create_provider_with_failover
 from orchestrator.app.cypher_sandbox import (
     SandboxedQueryExecutor,
     TemplateHashRegistry,
@@ -315,23 +315,20 @@ def _build_traversal_acl_params(state: QueryState) -> Dict[str, Any]:
     }
 
 
-def _build_llm() -> ChatGoogleGenerativeAI:
+def _build_synthesis_provider() -> LLMProvider:
     config = ExtractionConfig.from_env()
-    return ChatGoogleGenerativeAI(
-        model=config.model_name,
-        google_api_key=config.google_api_key,
-    )
+    return create_provider_with_failover(config)
 
 
 def _build_llm_judge_fn() -> Optional[Any]:
     try:
-        llm = _build_llm()
-    except (KeyError, Exception):
+        provider = _build_synthesis_provider()
+    except Exception:
         return None
 
     async def _judge(prompt: str) -> str:
-        response = await llm.ainvoke(prompt)
-        return response.content.strip()
+        result = await provider.ainvoke(prompt)
+        return result.strip()
 
     return _judge
 
@@ -356,7 +353,7 @@ async def _raw_llm_synthesize(
     query: str,
     context: List[Dict[str, Any]],
 ) -> str:
-    llm = _build_llm()
+    provider = _build_synthesis_provider()
     sanitized = sanitize_query_input(query)
 
     if _prompt_guardrails_enabled():
@@ -390,15 +387,21 @@ async def _raw_llm_synthesize(
             ),
         ),
     ]
-    response = await llm.ainvoke(messages)
-    return response.content.strip()
+    result = await provider.ainvoke_messages(messages)
+    return result.strip()
 
 
 async def _raw_llm_synthesize_stream(
     query: str,
     context: List[Dict[str, Any]],
 ) -> AsyncIterator[str]:
-    llm = _build_llm()
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    config = ExtractionConfig.from_env()
+    llm = ChatGoogleGenerativeAI(
+        model=config.model_name,
+        google_api_key=config.google_api_key,
+    )
     sanitized = sanitize_query_input(query)
 
     if _prompt_guardrails_enabled():
@@ -432,9 +435,28 @@ async def _raw_llm_synthesize_stream(
             ),
         ),
     ]
-    async for chunk in llm.astream(messages):
-        if hasattr(chunk, "content") and chunk.content:
-            yield chunk.content
+    try:
+        async for chunk in llm.astream(messages):
+            if hasattr(chunk, "content") and chunk.content:
+                yield chunk.content
+    except LLMError:
+        _query_logger.warning(
+            "Streaming LLM provider failed, yielding degraded response",
+            exc_info=True,
+        )
+        yield (
+            "The LLM synthesis service is temporarily unavailable. "
+            "Please retry shortly."
+        )
+    except Exception:
+        _query_logger.warning(
+            "Streaming LLM provider error, yielding degraded response",
+            exc_info=True,
+        )
+        yield (
+            "The LLM synthesis service is temporarily unavailable. "
+            "Please retry shortly."
+        )
 
 
 async def _llm_synthesize(
@@ -451,6 +473,15 @@ async def _llm_synthesize(
         return (
             "The LLM synthesis service is temporarily unavailable due to "
             "circuit breaker activation. Please retry shortly."
+        )
+    except LLMError:
+        _query_logger.warning(
+            "All LLM providers failed, returning degraded response",
+            exc_info=True,
+        )
+        return (
+            "The LLM synthesis service is temporarily unavailable. "
+            "All configured providers failed. Please retry shortly."
         )
 
 
