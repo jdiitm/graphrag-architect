@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
-from typing import Any, Dict
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
+from orchestrator.app.query_models import QueryComplexity
 from orchestrator.app.redis_client import create_async_redis, require_redis
 
 logger = logging.getLogger(__name__)
@@ -152,6 +155,72 @@ class RedisRateLimiter:
         except Exception:
             logger.warning("Redis rate limiter failed, allowing request")
             return True
+
+
+@dataclass(frozen=True)
+class QueryCostModel:
+    entity_lookup: int = 1
+    single_hop: int = 3
+    multi_hop: int = 10
+    aggregate: int = 8
+
+    def cost_for(self, complexity: QueryComplexity) -> int:
+        mapping: Dict[QueryComplexity, int] = {
+            QueryComplexity.ENTITY_LOOKUP: self.entity_lookup,
+            QueryComplexity.SINGLE_HOP: self.single_hop,
+            QueryComplexity.MULTI_HOP: self.multi_hop,
+            QueryComplexity.AGGREGATE: self.aggregate,
+        }
+        return mapping.get(complexity, 1)
+
+    @classmethod
+    def from_env(cls) -> QueryCostModel:
+        return cls(
+            entity_lookup=int(os.environ.get("QUERY_COST_ENTITY_LOOKUP", "1")),
+            single_hop=int(os.environ.get("QUERY_COST_SINGLE_HOP", "3")),
+            multi_hop=int(os.environ.get("QUERY_COST_MULTI_HOP", "10")),
+            aggregate=int(os.environ.get("QUERY_COST_AGGREGATE", "8")),
+        )
+
+
+class TenantCostBudget:
+    def __init__(
+        self,
+        capacity: int = 100,
+        window_seconds: float = 60.0,
+        cost_model: Optional[QueryCostModel] = None,
+    ) -> None:
+        self._capacity = capacity
+        self._window = window_seconds
+        self._cost_model = cost_model or QueryCostModel()
+        self._usage: Dict[str, List[Tuple[float, int]]] = {}
+        self._lock = asyncio.Lock()
+
+    async def try_acquire(self, tenant_id: str, complexity: QueryComplexity) -> bool:
+        cost = self._cost_model.cost_for(complexity)
+        async with self._lock:
+            now = time.monotonic()
+            entries = self._usage.get(tenant_id, [])
+            entries = [(t, c) for t, c in entries if now - t < self._window]
+            current_usage = sum(c for _, c in entries)
+            if current_usage + cost > self._capacity:
+                self._usage[tenant_id] = entries
+                return False
+            entries.append((now, cost))
+            self._usage[tenant_id] = entries
+            return True
+
+
+def create_cost_budget(
+    capacity: int = 100,
+    window_seconds: float = 60.0,
+) -> TenantCostBudget:
+    cost_model = QueryCostModel.from_env()
+    return TenantCostBudget(
+        capacity=capacity,
+        window_seconds=window_seconds,
+        cost_model=cost_model,
+    )
 
 
 def create_rate_limiter(
