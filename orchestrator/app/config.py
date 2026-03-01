@@ -320,3 +320,18 @@ class HotTargetConfig:
                 os.environ.get("HOT_TARGET_MAX_CONCURRENT", "1"),
             ),
         )
+
+
+@dataclass(frozen=True)
+class VectorSyncConfig:
+    backend: str = "memory"
+    kafka_topic: str = "graph.mutations"
+
+    @classmethod
+    def from_env(cls) -> VectorSyncConfig:
+        return cls(
+            backend=os.environ.get("VECTOR_SYNC_BACKEND", "memory"),
+            kafka_topic=os.environ.get(
+                "VECTOR_SYNC_KAFKA_TOPIC", "graph.mutations",
+            ),
+        )
