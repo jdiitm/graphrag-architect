@@ -151,13 +151,43 @@ def _sandbox_inject_limit(cypher: str) -> str:
     return _SANDBOX.inject_limit(cypher)
 
 
+class FulltextTenantRequired(Exception):
+    pass
 
-_FULLTEXT_FALLBACK_CYPHER = (
+
+_FULLTEXT_UNSCOPED = (
     "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
     "YIELD node, score "
     "RETURN node {.*, score: score} AS result "
     "ORDER BY score DESC LIMIT $limit"
 )
+
+_FULLTEXT_TENANT_SCOPED = (
+    "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
+    "YIELD node, score "
+    "WHERE node.tenant_id = $tenant_id "
+    "RETURN node {.*, score: score} AS result "
+    "ORDER BY score DESC LIMIT $limit"
+)
+
+
+def _is_query_production_mode() -> bool:
+    return os.environ.get("DEPLOYMENT_MODE", "").lower() == "production"
+
+
+def build_fulltext_fallback_cypher(
+    tenant_id: str,
+    deployment_mode: str = "",
+) -> str:
+    if tenant_id:
+        return _FULLTEXT_TENANT_SCOPED
+    effective_mode = deployment_mode or os.environ.get("DEPLOYMENT_MODE", "dev")
+    if effective_mode.lower() == "production":
+        raise FulltextTenantRequired(
+            "Fulltext fallback queries require tenant_id in production mode. "
+            "Unscoped fulltext queries risk cross-tenant data leakage."
+        )
+    return _FULLTEXT_UNSCOPED
 
 
 _EMBEDDING_STATE: Dict[str, Any] = {"cfg": None, "client": None}
@@ -502,15 +532,7 @@ async def _fetch_candidates_with_embedding(
         candidates = _search_results_to_dicts(results)
         return await filter_tombstoned_results(driver, candidates, tenant_id)
 
-    base_cypher = _FULLTEXT_FALLBACK_CYPHER
-    if tenant_id:
-        base_cypher = (
-            "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
-            "YIELD node, score "
-            "WHERE node.tenant_id = $tenant_id "
-            "RETURN node {.*, score: score} AS result "
-            "ORDER BY score DESC LIMIT $limit"
-        )
+    base_cypher = build_fulltext_fallback_cypher(tenant_id=tenant_id)
     vec_cypher, vec_acl = _apply_acl(base_cypher, state, alias="node")
 
     async def _vector_tx(tx: AsyncManagedTransaction) -> list:

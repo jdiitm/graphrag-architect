@@ -266,3 +266,24 @@ func TestValidateInflightForProduction_NegativeInProdReturnsError(t *testing.T) 
 		t.Fatal("expected error when maxInflight is negative in production mode")
 	}
 }
+
+func TestValidateDLQFallbackForProduction_PathInProdReturnsError(t *testing.T) {
+	err := validateDLQFallbackForProduction("production", "/var/dlq/fallback.jsonl")
+	if err == nil {
+		t.Fatal("expected error when DLQ fallback path is set in production mode")
+	}
+}
+
+func TestValidateDLQFallbackForProduction_EmptyPathInProdSucceeds(t *testing.T) {
+	err := validateDLQFallbackForProduction("production", "")
+	if err != nil {
+		t.Fatalf("unexpected error for empty fallback path in production: %v", err)
+	}
+}
+
+func TestValidateDLQFallbackForProduction_PathInDevSucceeds(t *testing.T) {
+	err := validateDLQFallbackForProduction("", "/tmp/dlq.jsonl")
+	if err != nil {
+		t.Fatalf("unexpected error for fallback path in dev mode: %v", err)
+	}
+}

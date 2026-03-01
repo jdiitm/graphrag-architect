@@ -1,7 +1,7 @@
 from orchestrator.app.query_engine import (
     MAX_CYPHER_ITERATIONS,
+    FulltextTenantRequired,
     _CB_EMBEDDING_GLOBAL,
-    _FULLTEXT_FALLBACK_CYPHER,
     _SANDBOX,
     _SEMANTIC_CACHE,
     _SUBGRAPH_CACHE,
@@ -38,8 +38,8 @@ from orchestrator.app.query_engine import (
 
 __all__ = [
     "MAX_CYPHER_ITERATIONS",
+    "FulltextTenantRequired",
     "_CB_EMBEDDING_GLOBAL",
-    "_FULLTEXT_FALLBACK_CYPHER",
     "_SANDBOX",
     "_SEMANTIC_CACHE",
     "_SUBGRAPH_CACHE",

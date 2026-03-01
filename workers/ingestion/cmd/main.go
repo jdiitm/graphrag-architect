@@ -72,6 +72,18 @@ func validateInflightForProduction(deploymentMode string, maxInflight int) error
 	return nil
 }
 
+func validateDLQFallbackForProduction(deploymentMode, fallbackPath string) error {
+	if deploymentMode == "production" && fallbackPath != "" {
+		return fmt.Errorf(
+			"DLQ_FALLBACK_PATH=%q is unsafe for DEPLOYMENT_MODE=production; "+
+				"pod eviction loses all file-based DLQ records; "+
+				"remove DLQ_FALLBACK_PATH and rely on the Kafka DLQ sink",
+			fallbackPath,
+		)
+	}
+	return nil
+}
+
 func main() {
 	orchestratorURL := envOrDefault("ORCHESTRATOR_URL", "http://localhost:8000")
 	kafkaBrokers := envOrDefault("KAFKA_BROKERS", "localhost:9092")
@@ -106,6 +118,10 @@ func main() {
 	}
 	maxInflight := envIntOrDefault("MAX_INFLIGHT", 0)
 	if err := validateInflightForProduction(deploymentMode, maxInflight); err != nil {
+		log.Fatalf("production safety check failed: %v", err)
+	}
+	dlqFallbackPath := os.Getenv("DLQ_FALLBACK_PATH")
+	if err := validateDLQFallbackForProduction(deploymentMode, dlqFallbackPath); err != nil {
 		log.Fatalf("production safety check failed: %v", err)
 	}
 
@@ -197,14 +213,14 @@ func main() {
 	}
 	var dlqOpts []dlq.Option
 	dlqOpts = append(dlqOpts, dlq.WithObserver(m))
-	if fallbackPath := os.Getenv("DLQ_FALLBACK_PATH"); fallbackPath != "" {
-		fileSink, err := dlq.NewFileSink(fallbackPath)
+	if dlqFallbackPath != "" {
+		fileSink, err := dlq.NewFileSink(dlqFallbackPath)
 		if err != nil {
 			log.Printf("FATAL: create dlq file fallback: %v", err)
 			return
 		}
 		dlqOpts = append(dlqOpts, dlq.WithFallback(fileSink))
-		log.Printf("DLQ fallback: file=%s", fallbackPath)
+		log.Printf("DLQ fallback: file=%s", dlqFallbackPath)
 	}
 	dlqHandler := dlq.NewHandler(disp.DLQ(), sink, dlqOpts...)
 
