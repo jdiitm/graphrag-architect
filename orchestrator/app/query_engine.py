@@ -22,7 +22,7 @@ from orchestrator.app.circuit_breaker import (
     TenantCircuitBreakerRegistry,
 )
 from orchestrator.app.config import AuthConfig, EmbeddingConfig, ExtractionConfig, RAGEvalConfig
-from orchestrator.app.llm_provider import LLMError, create_provider_with_failover
+from orchestrator.app.llm_provider import LLMError, LLMProvider, create_provider_with_failover
 from orchestrator.app.cypher_sandbox import (
     SandboxedQueryExecutor,
     TemplateHashRegistry,
@@ -315,7 +315,7 @@ def _build_traversal_acl_params(state: QueryState) -> Dict[str, Any]:
     }
 
 
-def _build_synthesis_provider() -> Any:
+def _build_synthesis_provider() -> LLMProvider:
     config = ExtractionConfig.from_env()
     return create_provider_with_failover(config)
 
@@ -323,11 +323,12 @@ def _build_synthesis_provider() -> Any:
 def _build_llm_judge_fn() -> Optional[Any]:
     try:
         provider = _build_synthesis_provider()
-    except (KeyError, LLMError, Exception):
+    except Exception:
         return None
 
     async def _judge(prompt: str) -> str:
-        return await provider.ainvoke(prompt)
+        result = await provider.ainvoke(prompt)
+        return result.strip()
 
     return _judge
 
@@ -386,7 +387,8 @@ async def _raw_llm_synthesize(
             ),
         ),
     ]
-    return await provider.ainvoke_messages(messages)
+    result = await provider.ainvoke_messages(messages)
+    return result.strip()
 
 
 async def _raw_llm_synthesize_stream(
@@ -433,9 +435,28 @@ async def _raw_llm_synthesize_stream(
             ),
         ),
     ]
-    async for chunk in llm.astream(messages):
-        if hasattr(chunk, "content") and chunk.content:
-            yield chunk.content
+    try:
+        async for chunk in llm.astream(messages):
+            if hasattr(chunk, "content") and chunk.content:
+                yield chunk.content
+    except LLMError:
+        _query_logger.warning(
+            "Streaming LLM provider failed, yielding degraded response",
+            exc_info=True,
+        )
+        yield (
+            "The LLM synthesis service is temporarily unavailable. "
+            "Please retry shortly."
+        )
+    except Exception:
+        _query_logger.warning(
+            "Streaming LLM provider error, yielding degraded response",
+            exc_info=True,
+        )
+        yield (
+            "The LLM synthesis service is temporarily unavailable. "
+            "Please retry shortly."
+        )
 
 
 async def _llm_synthesize(

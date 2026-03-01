@@ -194,6 +194,9 @@ class ClaudeProvider:
                 model=config.claude_model_name,
                 anthropic_api_key=config.anthropic_api_key,
             )
+            self._structured_llm = self._llm.with_structured_output(
+                ServiceExtractionResult
+            )
         except ImportError as exc:
             raise ImportError(
                 "langchain-anthropic is required for ClaudeProvider. "
@@ -217,7 +220,7 @@ class ClaudeProvider:
                 lc_messages.append(HumanMessage(content=str(msg)))
         if prompt.strip():
             lc_messages.insert(0, SystemMessage(content=prompt))
-        return await self._llm.ainvoke(lc_messages)
+        return await self._structured_llm.ainvoke(lc_messages)
 
 
 def create_provider(

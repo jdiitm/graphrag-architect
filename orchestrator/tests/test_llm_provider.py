@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from orchestrator.app.config import ExtractionConfig
@@ -7,6 +9,7 @@ from orchestrator.app.extraction_models import (
     ServiceNode,
 )
 from orchestrator.app.llm_provider import (
+    ClaudeProvider,
     GeminiProvider,
     ProviderWithCircuitBreaker,
     StubProvider,
@@ -89,3 +92,38 @@ class TestGeminiProvider:
         config = _minimal_config()
         provider = GeminiProvider(config)
         assert provider._config is config
+
+
+class TestClaudeProviderStructuredOutput:
+    @pytest.mark.asyncio
+    async def test_ainvoke_structured_uses_structured_llm(self) -> None:
+        expected = ServiceExtractionResult(
+            services=[
+                ServiceNode(
+                    id="svc-a",
+                    name="service-a",
+                    language="go",
+                    framework="gin",
+                    opentelemetry_enabled=True,
+                    tenant_id="test-tenant",
+                )
+            ],
+            calls=[],
+        )
+
+        mock_structured = AsyncMock(return_value=expected)
+        mock_raw = AsyncMock()
+
+        with patch.object(ClaudeProvider, "__init__", return_value=None):
+            provider = ClaudeProvider.__new__(ClaudeProvider)
+            provider._structured_llm = AsyncMock()
+            provider._structured_llm.ainvoke = mock_structured
+            provider._llm = AsyncMock()
+            provider._llm.ainvoke = mock_raw
+
+            result = await provider.ainvoke_structured("extract services", ["code"])
+
+        mock_structured.assert_called_once()
+        mock_raw.assert_not_called()
+        assert isinstance(result, ServiceExtractionResult)
+        assert result.services[0].id == "svc-a"
