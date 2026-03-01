@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import warnings
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -200,40 +199,18 @@ class TestStreamingSynthesis:
         assert "auth-service" in result.lower() or "go" in result.lower()
 
 
-class TestNeo4jVectorStoreDeprecation:
+class TestNeo4jVectorStoreRemoval:
 
-    def test_neo4j_vector_store_emits_deprecation_warning(self) -> None:
-        from orchestrator.app.vector_store import Neo4jVectorStore
+    def test_neo4j_backend_raises_value_error(self) -> None:
+        from orchestrator.app.vector_store import create_vector_store
 
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            Neo4jVectorStore(driver=MagicMock())
+        with pytest.raises(ValueError, match="removed"):
+            create_vector_store(backend="neo4j")
 
-        deprecation_warnings = [
-            w for w in caught if issubclass(w.category, DeprecationWarning)
-        ]
-        assert len(deprecation_warnings) >= 1, (
-            "Neo4jVectorStore must emit a DeprecationWarning on construction"
-        )
+    def test_neo4j_vector_store_class_absent(self) -> None:
+        from orchestrator.app import vector_store
 
-    def test_neo4j_backend_logs_deprecation_via_factory(self) -> None:
-        from orchestrator.app.vector_store import (
-            Neo4jVectorStore,
-            create_vector_store,
-        )
-
-        mock_driver = MagicMock()
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            store = create_vector_store(
-                backend="neo4j", driver=mock_driver,
-            )
-
-        assert isinstance(store, Neo4jVectorStore)
-        deprecation_warnings = [
-            w for w in caught if issubclass(w.category, DeprecationWarning)
-        ]
-        assert len(deprecation_warnings) >= 1
+        assert not hasattr(vector_store, "Neo4jVectorStore")
 
 
 class TestTenantScopedTombstoneSweep:

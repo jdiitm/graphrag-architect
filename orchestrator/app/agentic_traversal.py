@@ -117,21 +117,7 @@ _SAMPLED_NEIGHBOR_TEMPLATE = (
     "LIMIT $sample_size"
 )
 
-_BATCHED_NEIGHBOR_TEMPLATE = (
-    "UNWIND $frontier_ids AS fid "
-    "MATCH (source {id: fid, tenant_id: $tenant_id})"
-    "-[r]->(target) "
-    "WHERE target.tenant_id = $tenant_id "
-    "AND r.tombstoned_at IS NULL "
-    "AND ($is_admin OR target.team_owner = $acl_team "
-    "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
-    "RETURN source.id AS source_id, target.id AS target_id, "
-    "target.name AS target_name, type(r) AS rel_type, "
-    "labels(target)[0] AS target_label, "
-    "coalesce(target.pagerank, 0) AS pagerank, "
-    "coalesce(target.degree, 0) AS degree "
-    "LIMIT $limit"
-)
+_BATCHED_NEIGHBOR_TEMPLATE = build_traversal_batched_neighbor()
 
 _NEIGHBOR_DISCOVERY_NO_ACL = (
     "MATCH (source {id: $source_id, tenant_id: $tenant_id})"
@@ -480,27 +466,69 @@ async def execute_batched_hop(
     acl_params: Dict[str, Any],
     timeout: float = 30.0,
     limit: int = 200,
+    degree_threshold: int = MAX_NODE_DEGREE,
+    per_source_limit: int = 50,
 ) -> List[Dict[str, Any]]:
     if not source_ids:
         return []
 
-    provider = TenantSecurityProvider()
-    batched_query = build_traversal_batched_neighbor()
+    degree_map = await batch_check_degrees(
+        driver, source_ids, tenant_id, timeout=timeout,
+    )
 
-    params = {
-        "frontier_ids": source_ids,
-        "tenant_id": tenant_id,
-        "limit": limit,
-        **acl_params,
-    }
-    provider.validate_query(batched_query, params)
+    normal_frontier = [
+        sid for sid in source_ids
+        if degree_map.get(sid, 0) <= degree_threshold
+    ]
+    super_nodes = [
+        sid for sid in source_ids
+        if degree_map.get(sid, 0) > degree_threshold
+    ]
 
-    async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
-        result = await tx.run(batched_query, **params)
-        return await result.data()
+    all_results: List[Dict[str, Any]] = []
 
-    async with driver.session() as session:
-        return await session.execute_read(_tx, timeout=timeout)
+    if normal_frontier:
+        provider = TenantSecurityProvider()
+        batched_query = build_traversal_batched_neighbor()
+
+        params = {
+            "frontier_ids": normal_frontier,
+            "tenant_id": tenant_id,
+            "limit": limit,
+            "per_source_limit": per_source_limit,
+            **acl_params,
+        }
+        provider.validate_query(batched_query, params)
+
+        async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
+            result = await tx.run(batched_query, **params)
+            return await result.data()
+
+        async with driver.session() as session:
+            all_results.extend(
+                await session.execute_read(_tx, timeout=timeout)
+            )
+
+    for super_id in super_nodes:
+        logger.warning(
+            "Super-node %s (degree=%d) excluded from batch; sampling individually",
+            super_id, degree_map.get(super_id, 0),
+        )
+        sampled = await execute_hop(
+            driver=driver,
+            source_id=super_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            timeout=timeout,
+            max_degree=degree_threshold,
+            sample_size=per_source_limit,
+        )
+        for record in sampled:
+            if "source_id" not in record:
+                record["source_id"] = super_id
+        all_results.extend(sampled)
+
+    return all_results
 
 
 async def batch_check_degrees(

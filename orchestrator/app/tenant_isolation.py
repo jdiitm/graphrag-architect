@@ -215,6 +215,37 @@ def validate_tenant_binding(
         connection.validate_database(expected_database)
 
 
+async def detect_neo4j_edition(driver: Any) -> str:
+    async with driver.session() as session:
+        result = await session.run(
+            "CALL dbms.components() YIELD edition RETURN edition"
+        )
+        record = await result.single()
+        return str(record["edition"]).lower()
+
+
+async def validate_physical_isolation_support(
+    driver: Any,
+    registry: TenantRegistry,
+) -> None:
+    tenants_requiring_physical = [
+        cfg for cfg in registry.all_tenants()
+        if cfg.isolation_mode == IsolationMode.PHYSICAL
+    ]
+    if not tenants_requiring_physical:
+        return
+
+    edition = await detect_neo4j_edition(driver)
+    if edition == "community":
+        tenant_ids = [cfg.tenant_id for cfg in tenants_requiring_physical]
+        raise TenantIsolationViolation(
+            f"Neo4j Community edition does not support multi-database. "
+            f"Tenants {tenant_ids} request PHYSICAL isolation which "
+            f"requires Neo4j Enterprise or Aura. Either upgrade Neo4j "
+            f"or switch these tenants to LOGICAL isolation."
+        )
+
+
 class OrphanedPoolDetector:
     def __init__(
         self,

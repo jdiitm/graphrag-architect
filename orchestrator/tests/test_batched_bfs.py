@@ -44,6 +44,10 @@ def _make_mock_driver(query_results: list[list[dict]]) -> AsyncMock:
     return mock_driver
 
 
+async def _stub_low_degrees(driver, source_ids, tenant_id, timeout=30.0):
+    return {sid: 5 for sid in source_ids}
+
+
 _DEFAULT_ACL = {
     "is_admin": True,
     "acl_team": "",
@@ -65,6 +69,15 @@ class TestBatchedNeighborTemplate:
 
 @pytest.mark.asyncio
 class TestExecuteBatchedHop:
+
+    @pytest.fixture(autouse=True)
+    def _low_degree_stubs(self):
+        with patch(
+            "orchestrator.app.agentic_traversal.batch_check_degrees",
+            side_effect=_stub_low_degrees,
+        ):
+            yield
+
     async def test_single_query_for_multiple_sources(self) -> None:
         hop_results = [
             {"source_id": "a", "target_id": "x", "target_name": "svc-x",
@@ -100,6 +113,15 @@ class TestExecuteBatchedHop:
 
 @pytest.mark.asyncio
 class TestBatchedBFS:
+
+    @pytest.fixture(autouse=True)
+    def _low_degree_stubs(self):
+        with patch(
+            "orchestrator.app.agentic_traversal.batch_check_degrees",
+            side_effect=_stub_low_degrees,
+        ):
+            yield
+
     async def test_single_hop_collects_neighbors(self) -> None:
         hop_results = [
             {"source_id": "start", "target_id": "a", "target_name": "svc-a",
@@ -170,6 +192,15 @@ class TestBatchedBFS:
 
 @pytest.mark.asyncio
 class TestRunTraversalFallback:
+
+    @pytest.fixture(autouse=True)
+    def _low_degree_stubs(self):
+        with patch(
+            "orchestrator.app.agentic_traversal.batch_check_degrees",
+            side_effect=_stub_low_degrees,
+        ):
+            yield
+
     async def test_falls_back_to_batched_bfs(self) -> None:
         from neo4j.exceptions import Neo4jError
 
