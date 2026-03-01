@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
-from neo4j.exceptions import Neo4jError
+from neo4j.exceptions import ClientError, Neo4jError
 
 from orchestrator.app.context_manager import (
     TokenBudget,
@@ -38,6 +38,7 @@ class TraversalStrategy(enum.Enum):
     BOUNDED_CYPHER = "bounded_cypher"
     BATCHED_BFS = "batched_bfs"
     ADAPTIVE = "adaptive"
+    APOC = "apoc"
 
 
 @dataclass(frozen=True)
@@ -183,6 +184,19 @@ _BOUNDED_PATH_TEMPLATE = (
     "RETURN target.id AS target_id, target.name AS target_name, "
     "labels(target)[0] AS target_label "
     "LIMIT $max_nodes"
+)
+
+_APOC_EXPAND_QUERY = (
+    "MATCH (start) WHERE elementId(start) = $start_id "
+    "CALL apoc.path.expandConfig(start, {"
+    "  maxLevel: $max_hops, limit: $max_visited, bfs: true,"
+    "  filterStartNode: false, uniqueness: 'NODE_GLOBAL'"
+    "}) YIELD path "
+    "UNWIND nodes(path) AS n "
+    "UNWIND relationships(path) AS r "
+    "RETURN DISTINCT elementId(n) AS node_id, labels(n) AS labels, "
+    "elementId(r) AS rel_id, type(r) AS rel_type, "
+    "elementId(startNode(r)) AS src, elementId(endNode(r)) AS tgt"
 )
 
 
@@ -666,6 +680,59 @@ async def _run_bounded_with_fallback(
     )
 
 
+async def apoc_path_expansion(
+    session: Any,
+    start_id: str,
+    max_hops: int = 3,
+    max_visited: int = 500,
+) -> Dict[str, Any]:
+    result = await session.run(
+        _APOC_EXPAND_QUERY,
+        start_id=start_id,
+        max_hops=max_hops,
+        max_visited=max_visited,
+    )
+    records = [r async for r in result]
+    nodes: Dict[str, Any] = {r["node_id"]: r["labels"] for r in records}
+    edges = [
+        (r["src"], r["tgt"], r["rel_type"])
+        for r in records
+        if r.get("rel_id")
+    ]
+    return {"nodes": nodes, "edges": edges}
+
+
+def _format_apoc_for_traversal(
+    raw: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    formatted: List[Dict[str, Any]] = []
+    nodes_map = raw.get("nodes", {})
+    for src, tgt, rel_type in raw.get("edges", []):
+        target_labels = nodes_map.get(tgt, [])
+        formatted.append({
+            "source_id": src,
+            "target_id": tgt,
+            "rel_type": rel_type,
+            "target_label": target_labels[0] if target_labels else "",
+        })
+    return formatted
+
+
+async def _try_apoc_expansion(
+    driver: AsyncDriver,
+    start_node_id: str,
+    max_hops: int,
+    max_visited: int,
+    token_budget: TokenBudget,
+) -> List[Dict[str, Any]]:
+    async with driver.session() as session:
+        raw = await apoc_path_expansion(
+            session, start_node_id, max_hops, max_visited,
+        )
+    formatted = _format_apoc_for_traversal(raw)
+    return truncate_context(formatted, token_budget)
+
+
 async def run_traversal(
     driver: AsyncDriver,
     start_node_id: str,
@@ -720,44 +787,35 @@ async def run_traversal(
             beam_width=config.beam_width,
         )
 
-    if config.strategy != TraversalStrategy.ADAPTIVE:
-        raise ValueError(f"Unknown traversal strategy: {config.strategy}")
-
-    degree = degree_hint if degree_hint is not None else 0
-
-    if degree >= config.degree_threshold:
-        logger.info(
-            "ADAPTIVE: high-degree node %s (degree=%d, threshold=%d), using batched BFS",
-            start_node_id,
-            degree,
-            config.degree_threshold,
-        )
-        return await _batched_bfs(
-            driver=driver,
-            start_node_id=start_node_id,
-            tenant_id=tenant_id,
-            acl_params=acl_params,
-            max_hops=effective_hops,
-            timeout=effective_timeout,
-            token_budget=effective_budget,
-            max_visited=effective_max_visited,
-            beam_width=config.beam_width,
+    if config.strategy == TraversalStrategy.APOC:
+        return await _try_apoc_expansion(
+            driver, start_node_id, effective_hops,
+            effective_max_visited, effective_budget,
         )
 
-    logger.info(
-        "ADAPTIVE: low-degree node %s (degree=%d, threshold=%d), using bounded Cypher",
-        start_node_id,
-        degree,
-        config.degree_threshold,
-    )
-    return await _run_bounded_with_fallback(
-        driver=driver,
-        start_node_id=start_node_id,
-        tenant_id=tenant_id,
-        acl_params=acl_params,
-        max_hops=effective_hops,
-        timeout=effective_timeout,
-        effective_budget=effective_budget,
-        max_visited=effective_max_visited,
-        beam_width=config.beam_width,
-    )
+    if config.strategy == TraversalStrategy.ADAPTIVE:
+        try:
+            return await _try_apoc_expansion(
+                driver, start_node_id, effective_hops,
+                effective_max_visited, effective_budget,
+            )
+        except ClientError:
+            logger.warning(
+                "APOC expansion unavailable for node %s, "
+                "falling back to batched BFS",
+                start_node_id,
+                exc_info=True,
+            )
+            return await _batched_bfs(
+                driver=driver,
+                start_node_id=start_node_id,
+                tenant_id=tenant_id,
+                acl_params=acl_params,
+                max_hops=effective_hops,
+                timeout=effective_timeout,
+                token_budget=effective_budget,
+                max_visited=effective_max_visited,
+                beam_width=config.beam_width,
+            )
+
+    raise ValueError(f"Unknown traversal strategy: {config.strategy}")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from neo4j.exceptions import ClientError
 
 from orchestrator.app.agentic_traversal import (
     TraversalConfig,
@@ -24,9 +25,10 @@ class TestAdaptiveDegreeHint:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
                 new_callable=AsyncMock,
-            ) as mock_bounded,
+                side_effect=ClientError("not available"),
+            ),
             patch(
                 "orchestrator.app.agentic_traversal._batched_bfs",
                 new_callable=AsyncMock,
@@ -42,7 +44,6 @@ class TestAdaptiveDegreeHint:
                 degree_hint=500,
             )
             mock_bfs.assert_called_once()
-            mock_bounded.assert_not_called()
             assert result == expected
 
     @pytest.mark.asyncio
@@ -57,13 +58,14 @@ class TestAdaptiveDegreeHint:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
                 new_callable=AsyncMock,
-                return_value=expected,
-            ) as mock_bounded,
+                side_effect=ClientError("not available"),
+            ),
             patch(
                 "orchestrator.app.agentic_traversal._batched_bfs",
                 new_callable=AsyncMock,
+                return_value=expected,
             ) as mock_bfs,
         ):
             result = await run_traversal(
@@ -74,8 +76,7 @@ class TestAdaptiveDegreeHint:
                 config=config,
                 degree_hint=50,
             )
-            mock_bounded.assert_called_once()
-            mock_bfs.assert_not_called()
+            mock_bfs.assert_called_once()
             assert result == expected
 
     @pytest.mark.asyncio
@@ -90,13 +91,14 @@ class TestAdaptiveDegreeHint:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
                 new_callable=AsyncMock,
-                return_value=expected,
-            ) as mock_bounded,
+                side_effect=ClientError("not available"),
+            ),
             patch(
                 "orchestrator.app.agentic_traversal._batched_bfs",
                 new_callable=AsyncMock,
+                return_value=expected,
             ) as mock_bfs,
         ):
             result = await run_traversal(
@@ -106,8 +108,7 @@ class TestAdaptiveDegreeHint:
                 acl_params=acl_params,
                 config=config,
             )
-            mock_bounded.assert_called_once()
-            mock_bfs.assert_not_called()
+            mock_bfs.assert_called_once()
             assert result == expected
 
     @pytest.mark.asyncio
@@ -122,9 +123,10 @@ class TestAdaptiveDegreeHint:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
                 new_callable=AsyncMock,
-            ) as mock_bounded,
+                side_effect=ClientError("not available"),
+            ),
             patch(
                 "orchestrator.app.agentic_traversal._batched_bfs",
                 new_callable=AsyncMock,
@@ -140,7 +142,6 @@ class TestAdaptiveDegreeHint:
                 degree_hint=200,
             )
             mock_bfs.assert_called_once()
-            mock_bounded.assert_not_called()
             assert result == expected
 
     @pytest.mark.asyncio
@@ -155,13 +156,14 @@ class TestAdaptiveDegreeHint:
 
         with (
             patch(
-                "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
                 new_callable=AsyncMock,
-                return_value=expected,
-            ) as mock_bounded,
+                side_effect=ClientError("not available"),
+            ),
             patch(
                 "orchestrator.app.agentic_traversal._batched_bfs",
                 new_callable=AsyncMock,
+                return_value=expected,
             ) as mock_bfs,
         ):
             result = await run_traversal(
@@ -172,8 +174,7 @@ class TestAdaptiveDegreeHint:
                 config=config,
                 degree_hint=0,
             )
-            mock_bounded.assert_called_once()
-            mock_bfs.assert_not_called()
+            mock_bfs.assert_called_once()
             assert result == expected
 
 
