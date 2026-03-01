@@ -165,6 +165,23 @@ class CoalescingOutbox:
         self._entries = remaining
         return ready
 
+    def drain_batch(
+        self,
+        batch_size: int = 100,
+    ) -> List[VectorSyncEvent]:
+        now = time.monotonic()
+        ready: List[VectorSyncEvent] = []
+        ready_keys: List[Any] = []
+        for key, (event, enqueued_at) in self._entries.items():
+            if now - enqueued_at >= self._window_seconds:
+                ready_keys.append(key)
+                ready.append(event)
+                if len(ready) >= batch_size:
+                    break
+        for key in ready_keys:
+            del self._entries[key]
+        return ready
+
 
 class OutboxDrainer:
     def __init__(
