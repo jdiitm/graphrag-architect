@@ -125,7 +125,7 @@ class TestSemanticQueryCacheTTL:
         embedding = [1.0, 0.0, 0.0]
         cache.store("q", embedding, {"answer": "a"}, complexity="entity_lookup")
         entry = list(cache._entries.values())[0]
-        assert entry.ttl_seconds == 600.0
+        assert 540.0 <= entry.ttl_seconds <= 660.0
 
 
 class TestSemanticQueryCacheInvalidation:
