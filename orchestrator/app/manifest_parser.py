@@ -15,6 +15,7 @@ DEFAULT_NAMESPACE = "default"
 DEFAULT_REPLICAS = 1
 DEFAULT_PARTITIONS = 1
 DEFAULT_RETENTION_MS = 604800000
+DEFAULT_READ_ROLES = ["reader"]
 
 TEAM_OWNER_LABEL = "graphrag.io/team-owner"
 NAMESPACE_ACL_ANNOTATION = "graphrag.io/namespace-acl"
@@ -100,6 +101,7 @@ def _extract_deployment(
         tenant_id=tenant_id,
         team_owner=team_owner,
         namespace_acl=namespace_acl,
+        read_roles=list(DEFAULT_READ_ROLES),
     )
 
 
@@ -144,6 +146,7 @@ def _extract_kafka_topic(
         tenant_id=tenant_id,
         team_owner=team_owner,
         namespace_acl=namespace_acl,
+        read_roles=list(DEFAULT_READ_ROLES),
     )
 
 
