@@ -278,29 +278,35 @@ class TestDefaultStrategyIsPrecomputed:
 
 
 class TestLocalPageRankSafetyCap:
-    def test_logs_deprecation_when_edges_exceed_cap(self, caplog) -> None:
-        import logging
-        from orchestrator.app.lazy_traversal import LocalPageRankStrategy, _LOCAL_SAFETY_CAP
+    def test_raises_when_edges_exceed_safety_cap(self) -> None:
+        from orchestrator.app.lazy_traversal import (
+            GraphTooLargeForLocalPPR,
+            LocalPageRankStrategy,
+            _LOCAL_SAFETY_CAP,
+        )
 
         strategy = LocalPageRankStrategy()
         edges = [
             {"source": f"n{i}", "target": f"n{i+1}"}
             for i in range(_LOCAL_SAFETY_CAP + 1)
         ]
-        with caplog.at_level(logging.WARNING):
+        with pytest.raises(GraphTooLargeForLocalPPR):
             strategy.rank(edges, seed_nodes=["n0"], top_n=10)
-        assert any("deprecat" in msg.lower() for msg in caplog.messages)
 
-    def test_truncates_edges_at_safety_cap(self) -> None:
-        from orchestrator.app.lazy_traversal import LocalPageRankStrategy, _LOCAL_SAFETY_CAP
+    def test_raises_on_oversized_graph_with_large_max_edges(self) -> None:
+        from orchestrator.app.lazy_traversal import (
+            GraphTooLargeForLocalPPR,
+            LocalPageRankStrategy,
+            _LOCAL_SAFETY_CAP,
+        )
 
         strategy = LocalPageRankStrategy(max_edges=_LOCAL_SAFETY_CAP + 5000)
         edges = [
             {"source": f"n{i}", "target": f"n{i+1}"}
             for i in range(_LOCAL_SAFETY_CAP + 100)
         ]
-        result = strategy.rank(edges, seed_nodes=["n0"], top_n=10)
-        assert isinstance(result, list)
+        with pytest.raises(GraphTooLargeForLocalPPR):
+            strategy.rank(edges, seed_nodes=["n0"], top_n=10)
 
 
 class TestGDSPageRankFilter:

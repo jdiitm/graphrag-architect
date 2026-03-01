@@ -60,6 +60,10 @@ _DEFAULT_MAX_EDGES = 2000
 _LOCAL_SAFETY_CAP = 10000
 
 
+class GraphTooLargeForLocalPPR(Exception):
+    pass
+
+
 @runtime_checkable
 class PageRankStrategy(Protocol):
     def rank(
@@ -91,15 +95,11 @@ class LocalPageRankStrategy:
             return []
 
         if len(edges) > _LOCAL_SAFETY_CAP:
-            _logger.warning(
-                "LocalPageRankStrategy is deprecated for large graphs "
-                "(%d edges > safety cap %d). Use PrecomputedPageRankStrategy. "
-                "Truncating to %d edges.",
-                len(edges),
-                _LOCAL_SAFETY_CAP,
-                _LOCAL_SAFETY_CAP,
+            raise GraphTooLargeForLocalPPR(
+                f"Graph has {len(edges)} edges, exceeding the safety cap "
+                f"of {_LOCAL_SAFETY_CAP}. Use GDS PageRank or "
+                f"PrecomputedPageRankStrategy for large graphs."
             )
-            edges = edges[:_LOCAL_SAFETY_CAP]
 
         bounded = edges[:self._max_edges] if len(edges) > self._max_edges else edges
         adjacency, nodes = _build_undirected_adjacency(bounded)
@@ -300,6 +300,19 @@ class GDSPageRankStrategy:
             _logger.debug("Failed to drop GDS graph %s", graph_name, exc_info=True)
 
 
+def _run_local_pagerank(
+    hop_records: List[Dict[str, Any]],
+    seed_names: List[str],
+    top_n: int,
+) -> List[Dict[str, Any]]:
+    ranked = LocalPageRankStrategy().rank(hop_records, seed_names, top_n)
+    top_nodes = {node for node, _score in ranked}
+    return [
+        rec for rec in hop_records
+        if rec.get("source") in top_nodes or rec.get("target") in top_nodes
+    ]
+
+
 async def gds_pagerank_filter(
     driver: Any,
     hop_records: List[Dict[str, Any]],
@@ -308,12 +321,13 @@ async def gds_pagerank_filter(
     top_n: int = 50,
 ) -> List[Dict[str, Any]]:
     if len(hop_records) <= _GDS_EDGE_THRESHOLD:
-        ranked = LocalPageRankStrategy().rank(hop_records, seed_names, top_n)
-        top_nodes = {node for node, _score in ranked}
-        return [
-            rec for rec in hop_records
-            if rec.get("source") in top_nodes or rec.get("target") in top_nodes
-        ]
+        try:
+            return await asyncio.to_thread(
+                _run_local_pagerank, hop_records, seed_names, top_n,
+            )
+        except GraphTooLargeForLocalPPR:
+            _logger.warning("Graph too large for local PPR, returning unfiltered")
+            return hop_records
 
     strategy = GDSPageRankStrategy(driver=driver)
     ranked = await strategy.rank_async(seed_names, tenant_id, top_n)
@@ -325,12 +339,13 @@ async def gds_pagerank_filter(
             if rec.get("source") in top_nodes or rec.get("target") in top_nodes
         ]
 
-    ranked = LocalPageRankStrategy().rank(hop_records, seed_names, top_n)
-    top_nodes = {node for node, _score in ranked}
-    return [
-        rec for rec in hop_records
-        if rec.get("source") in top_nodes or rec.get("target") in top_nodes
-    ]
+    try:
+        return await asyncio.to_thread(
+            _run_local_pagerank, hop_records, seed_names, top_n,
+        )
+    except GraphTooLargeForLocalPPR:
+        _logger.warning("Graph too large for local PPR fallback, returning unfiltered")
+        return hop_records
 
 
 _DEFAULT_STRATEGY = PrecomputedPageRankStrategy()

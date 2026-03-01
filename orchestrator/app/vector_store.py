@@ -120,14 +120,24 @@ class InMemoryVectorStore:
         query_vector: List[float],
         tenant_id: str,
         limit: int = 10,
+        deployment_mode: str = "",
     ) -> List[SearchResult]:
-        if collection not in self._store:
-            return []
-        records = list(self._store[collection].values())
+        if deployment_mode == "production" and tenant_id:
+            target_collection = resolve_collection_name(collection, tenant_id)
+            if target_collection not in self._store:
+                return []
+            records = list(self._store[target_collection].values())
+        else:
+            if collection not in self._store:
+                return []
+            records = list(self._store[collection].values())
+            records = [
+                r for r in records
+                if not tenant_id or r.metadata.get("tenant_id") == tenant_id
+            ]
+
         scored: List[tuple[VectorRecord, float]] = []
         for record in records:
-            if tenant_id and record.metadata.get("tenant_id") != tenant_id:
-                continue
             score = _cosine_similarity(query_vector, record.vector)
             scored.append((record, score))
         scored.sort(key=lambda pair: pair[1], reverse=True)
@@ -145,10 +155,12 @@ class QdrantVectorStore:
         url: str = "http://localhost:6333",
         api_key: str = "",
         prefer_grpc: bool = True,
+        deployment_mode: str = "dev",
     ) -> None:
         self._url = url
         self._api_key = api_key
         self._prefer_grpc = prefer_grpc
+        self._deployment_mode = deployment_mode
         self._client: Optional[Any] = None
 
     def _get_client(self) -> Any:
@@ -238,23 +250,34 @@ class QdrantVectorStore:
         query_vector: List[float],
         tenant_id: str,
         limit: int = 10,
+        deployment_mode: str = "",
     ) -> List[SearchResult]:
+        effective_mode = deployment_mode or self._deployment_mode
         client = self._get_client()
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
-        query_filter = Filter(
-            must=[
-                FieldCondition(
-                    key="tenant_id",
-                    match=MatchValue(value=tenant_id),
-                ),
-            ],
-        )
-        results = await client.search(
-            collection_name=collection,
-            query_vector=query_vector,
-            query_filter=query_filter,
-            limit=limit,
-        )
+
+        if effective_mode == "production" and tenant_id:
+            target_collection = resolve_collection_name(collection, tenant_id)
+            results = await client.search(
+                collection_name=target_collection,
+                query_vector=query_vector,
+                limit=limit,
+            )
+        else:
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+            query_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="tenant_id",
+                        match=MatchValue(value=tenant_id),
+                    ),
+                ],
+            )
+            results = await client.search(
+                collection_name=collection,
+                query_vector=query_vector,
+                query_filter=query_filter,
+                limit=limit,
+            )
         return [
             SearchResult(
                 id=str(hit.id),
@@ -289,5 +312,8 @@ def create_vector_store(
             f"Set VECTOR_STORE_BACKEND=qdrant."
         )
     if backend == "qdrant":
-        return QdrantVectorStore(url=url, api_key=api_key, prefer_grpc=True)
+        return QdrantVectorStore(
+            url=url, api_key=api_key, prefer_grpc=True,
+            deployment_mode=deployment_mode,
+        )
     return InMemoryVectorStore()
