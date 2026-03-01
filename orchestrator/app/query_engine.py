@@ -1038,7 +1038,19 @@ async def _do_synthesize(state: QueryState) -> dict:
     ranked_context = await _async_rerank_candidates(
         state["query"], context, complexity=state.get("complexity"),
     )
-    truncated = truncate_context_topology(ranked_context, _DEFAULT_TOKEN_BUDGET)
+
+    loop = asyncio.get_running_loop()
+    pool = get_thread_pool()
+    try:
+        truncated = await loop.run_in_executor(
+            pool, truncate_context_topology, ranked_context, _DEFAULT_TOKEN_BUDGET,
+        )
+    except Exception:
+        _query_logger.warning(
+            "Context topology truncation failed in executor, using untruncated context",
+            exc_info=True,
+        )
+        truncated = ranked_context
 
     tenant_id = state.get("tenant_id", "")
     answer = await _llm_synthesize(state["query"], truncated, tenant_id=tenant_id)
