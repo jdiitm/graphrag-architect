@@ -65,7 +65,11 @@ from orchestrator.app.distributed_lock import (
 
 _VECTOR_COLLECTION = "services"
 
-_PROCESS_POOL_MAX_WORKERS = int(os.environ.get("AST_POOL_WORKERS", "4"))
+_POOL_CEILING = 8
+_PROCESS_POOL_MAX_WORKERS = min(
+    int(os.environ.get("AST_POOL_WORKERS", "4")),
+    _POOL_CEILING,
+)
 
 _USE_REMOTE_AST: bool = os.environ.get("USE_REMOTE_AST", "false").lower() == "true"
 
@@ -769,14 +773,22 @@ class PeriodicVectorDrainer:
         self._interval = interval_seconds
         self._task: Optional[asyncio.Task[None]] = None
         self._stopped = False
+        self._wake: Optional[asyncio.Event] = None
+
+    def notify(self) -> None:
+        if self._wake is not None:
+            self._wake.set()
 
     def start(self) -> asyncio.Task[None]:
         self._stopped = False
+        self._wake = asyncio.Event()
         self._task = asyncio.create_task(self._loop())
         return self._task
 
     def stop(self) -> None:
         self._stopped = True
+        if self._wake is not None:
+            self._wake.set()
         if self._task is not None and not self._task.done():
             self._task.cancel()
 
@@ -790,7 +802,14 @@ class PeriodicVectorDrainer:
                 logger.warning(
                     "Periodic vector drain error (non-fatal): %s", exc,
                 )
-            await asyncio.sleep(self._interval)
+            try:
+                await asyncio.wait_for(
+                    self._wake.wait(),  # type: ignore[union-attr]
+                    timeout=self._interval,
+                )
+                self._wake.clear()  # type: ignore[union-attr]
+            except asyncio.TimeoutError:
+                pass
 
 
 async def commit_to_neo4j(state: IngestionState) -> dict:
