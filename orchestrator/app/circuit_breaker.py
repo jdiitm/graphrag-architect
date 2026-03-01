@@ -315,7 +315,7 @@ class GlobalProviderBreaker:
             config=cfg,
             store=store,
             name="global-provider",
-            should_trip=is_provider_rate_limit,
+            should_trip=self._is_global_failure,
         )
 
     @property
@@ -333,20 +333,16 @@ class GlobalProviderBreaker:
         *args: Any,
         **kwargs: Any,
     ) -> T:
-        global_state = self._global.state
-        if global_state == CircuitState.OPEN:
-            raise CircuitOpenError(
-                "Global circuit is open; network failure detected"
-            )
+        if self._global.state != CircuitState.CLOSED:
+            async def _tenant_guarded() -> T:
+                tenant_breaker = await self._registry.for_tenant(tenant_id)
+                return await tenant_breaker.call(func, *args, **kwargs)
+            return await self._global.call(_tenant_guarded)
 
         tenant_breaker = await self._registry.for_tenant(tenant_id)
         try:
-            result = await tenant_breaker.call(func, *args, **kwargs)
+            return await tenant_breaker.call(func, *args, **kwargs)
         except Exception as exc:
             if self._is_global_failure(exc):
                 await self._global.record_failure()
             raise
-
-        if global_state == CircuitState.HALF_OPEN:
-            await self._global.record_success()
-        return result

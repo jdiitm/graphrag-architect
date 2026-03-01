@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -16,9 +17,6 @@ from orchestrator.app.circuit_breaker import (
 def _rate_limit_error() -> RuntimeError:
     return RuntimeError("429 rate limit exceeded")
 
-
-def _service_unavailable_error() -> RuntimeError:
-    return RuntimeError("503 service unavailable")
 
 
 class TestProviderErrorsDoNotTripGlobal:
@@ -200,6 +198,49 @@ class TestNetworkErrorsTripGlobal:
             await gpb.call("tenant-b", AsyncMock(return_value="no"))
         with pytest.raises(CircuitOpenError):
             await gpb.call("tenant-c", AsyncMock(return_value="no"))
+
+
+class TestGlobalHalfOpenProbeLimit:
+
+    @pytest.mark.asyncio
+    async def test_half_open_limits_concurrent_probes(self) -> None:
+        registry = TenantCircuitBreakerRegistry(
+            config=CircuitBreakerConfig(failure_threshold=5),
+            name_prefix="ho",
+        )
+        gpb = GlobalProviderBreaker(
+            registry=registry,
+            global_config=CircuitBreakerConfig(
+                failure_threshold=2,
+                recovery_timeout=0.0,
+                jitter_factor=0.0,
+                half_open_max_calls=1,
+            ),
+        )
+
+        for _ in range(2):
+            with pytest.raises(ConnectionError):
+                await gpb.call(
+                    "tenant-a",
+                    AsyncMock(side_effect=ConnectionError("down")),
+                )
+        assert gpb.global_state == CircuitState.HALF_OPEN
+
+        async def slow_success() -> str:
+            await asyncio.sleep(0.05)
+            return "probe-ok"
+
+        results = await asyncio.gather(
+            gpb.call("t1", slow_success),
+            gpb.call("t2", slow_success),
+            gpb.call("t3", slow_success),
+            return_exceptions=True,
+        )
+
+        successes = [r for r in results if r == "probe-ok"]
+        rejections = [r for r in results if isinstance(r, CircuitOpenError)]
+        assert len(successes) == 1
+        assert len(rejections) == 2
 
 
 class TestIsGlobalFailureClassification:
