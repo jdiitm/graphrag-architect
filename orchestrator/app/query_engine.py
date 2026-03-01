@@ -97,7 +97,7 @@ _INJECTION_CLASSIFIER = PromptInjectionClassifier()
 _VS_CFG = VectorStoreConfig.from_env()
 _VECTOR_STORE = create_vector_store(
     backend=_VS_CFG.backend, url=_VS_CFG.qdrant_url, api_key=_VS_CFG.qdrant_api_key,
-    pool_size=_VS_CFG.pool_size,
+    pool_size=_VS_CFG.pool_size, deployment_mode=_VS_CFG.deployment_mode,
 )
 
 _VECTOR_COLLECTION = "service_embeddings"
