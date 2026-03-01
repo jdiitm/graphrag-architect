@@ -282,13 +282,12 @@ class TestRunTraversalStrategySelection:
             patch(
                 "orchestrator.app.agentic_traversal._try_apoc_expansion",
                 new_callable=AsyncMock,
-                side_effect=ClientError("not available"),
-            ),
+            ) as mock_apoc,
             patch(
-                "orchestrator.app.agentic_traversal._batched_bfs",
+                "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
                 new_callable=AsyncMock,
                 return_value=expected,
-            ) as mock_bfs,
+            ) as mock_bounded,
         ):
             result = await run_traversal(
                 driver=mock_driver,
@@ -298,7 +297,8 @@ class TestRunTraversalStrategySelection:
                 config=config,
                 degree_hint=50,
             )
-            mock_bfs.assert_called_once()
+            mock_apoc.assert_not_called()
+            mock_bounded.assert_called_once()
             assert result == expected
 
     @pytest.mark.asyncio
@@ -546,7 +546,11 @@ class TestRunTraversalStrategySelection:
             patch(
                 "orchestrator.app.agentic_traversal._try_apoc_expansion",
                 new_callable=AsyncMock,
-                side_effect=ClientError("not available"),
+            ) as mock_apoc,
+            patch(
+                "orchestrator.app.agentic_traversal.bounded_path_expansion",
+                new_callable=AsyncMock,
+                side_effect=OSError("bounded expansion failed"),
             ),
             patch(
                 "orchestrator.app.agentic_traversal._batched_bfs",
@@ -562,5 +566,6 @@ class TestRunTraversalStrategySelection:
                 config=config,
                 degree_hint=50,
             )
+            mock_apoc.assert_not_called()
             mock_bfs.assert_called_once()
             assert result == fallback_result

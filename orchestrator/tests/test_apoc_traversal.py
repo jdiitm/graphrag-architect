@@ -15,26 +15,17 @@ from orchestrator.app.agentic_traversal import (
 _DEFAULT_ACL: dict = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
 
 
-class _AsyncRecordIterator:
-    def __init__(self, records: list) -> None:
-        self._records = list(records)
-        self._index = 0
-
-    def __aiter__(self) -> _AsyncRecordIterator:
-        return self
-
-    async def __anext__(self) -> dict:
-        if self._index >= len(self._records):
-            raise StopAsyncIteration
-        record = self._records[self._index]
-        self._index += 1
-        return record
-
-
-def _mock_session_with_records(records: list) -> AsyncMock:
-    session = AsyncMock()
-    session.run = AsyncMock(return_value=_AsyncRecordIterator(records))
-    return session
+def _mock_tx_two_queries(
+    node_records: list,
+    edge_records: list,
+) -> AsyncMock:
+    tx = AsyncMock()
+    node_result = AsyncMock()
+    node_result.data = AsyncMock(return_value=node_records)
+    edge_result = AsyncMock()
+    edge_result.data = AsyncMock(return_value=edge_records)
+    tx.run = AsyncMock(side_effect=[node_result, edge_result])
+    return tx
 
 
 def _mock_async_session_driver() -> tuple[MagicMock, AsyncMock]:
@@ -46,53 +37,195 @@ def _mock_async_session_driver() -> tuple[MagicMock, AsyncMock]:
     return driver, session
 
 
-class TestApocPathExpansionCypher:
+class TestApocQueryTenantIsolation:
     @pytest.mark.asyncio
-    async def test_sends_correct_cypher_with_apoc_expand_config(self) -> None:
+    async def test_node_query_filters_by_tenant_id(self) -> None:
         from orchestrator.app.agentic_traversal import apoc_path_expansion
 
-        session = _mock_session_with_records([])
+        tx = _mock_tx_two_queries([], [])
         await apoc_path_expansion(
-            session, start_id="4:abc:0", max_hops=3, max_visited=500,
+            tx,
+            source_id="auth-service",
+            tenant_id="tenant-42",
+            acl_params=_DEFAULT_ACL,
         )
 
-        session.run.assert_called_once()
-        query = session.run.call_args[0][0]
-        assert "apoc.path.expandConfig" in query
-        assert "$start_id" in query
-        assert "$max_hops" in query
-        assert "$max_visited" in query
+        assert tx.run.call_count == 2
+        node_query = tx.run.call_args_list[0][0][0]
+        assert "tenant_id" in node_query
+        assert "$source_id" in node_query
+        node_kwargs = tx.run.call_args_list[0][1]
+        assert node_kwargs["tenant_id"] == "tenant-42"
+        assert node_kwargs["source_id"] == "auth-service"
 
-        kwargs = session.run.call_args[1]
-        assert kwargs["start_id"] == "4:abc:0"
-        assert kwargs["max_hops"] == 3
-        assert kwargs["max_visited"] == 500
-
-
-class TestApocResultRecordStepCompat:
     @pytest.mark.asyncio
-    async def test_returns_nodes_and_edges_for_record_step(self) -> None:
+    async def test_node_query_enforces_acl(self) -> None:
         from orchestrator.app.agentic_traversal import apoc_path_expansion
 
-        records = [
-            {
-                "node_id": "4:xxx:1",
-                "labels": ["Service"],
-                "rel_id": "5:xxx:0",
-                "rel_type": "DEPENDS_ON",
-                "src": "4:xxx:0",
-                "tgt": "4:xxx:1",
-            },
+        acl = {"is_admin": False, "acl_team": "platform", "acl_namespaces": ["prod"]}
+        tx = _mock_tx_two_queries([], [])
+        await apoc_path_expansion(
+            tx,
+            source_id="auth-service",
+            tenant_id="t1",
+            acl_params=acl,
+        )
+
+        node_query = tx.run.call_args_list[0][0][0]
+        assert "$is_admin" in node_query
+        assert "$acl_team" in node_query
+        assert "$acl_namespaces" in node_query
+
+    @pytest.mark.asyncio
+    async def test_edge_query_filters_tombstoned(self) -> None:
+        from orchestrator.app.agentic_traversal import apoc_path_expansion
+
+        tx = _mock_tx_two_queries([], [])
+        await apoc_path_expansion(
+            tx,
+            source_id="svc-a",
+            tenant_id="t1",
+            acl_params=_DEFAULT_ACL,
+        )
+
+        edge_query = tx.run.call_args_list[1][0][0]
+        assert "tombstoned_at IS NULL" in edge_query
+
+
+class TestApocPropertyBasedIds:
+    @pytest.mark.asyncio
+    async def test_queries_use_property_id_not_element_id(self) -> None:
+        from orchestrator.app.agentic_traversal import apoc_path_expansion
+
+        tx = _mock_tx_two_queries(
+            [{"node_id": "auth-service", "labels": ["Service"]}],
+            [],
+        )
+        result = await apoc_path_expansion(
+            tx,
+            source_id="auth-service",
+            tenant_id="t1",
+            acl_params=_DEFAULT_ACL,
+        )
+
+        for call in tx.run.call_args_list:
+            query = call[0][0]
+            assert "elementId" not in query
+            assert "{id: $source_id" in query
+        assert "auth-service" in result["nodes"]
+
+
+class TestApocEdgeDeduplication:
+    @pytest.mark.asyncio
+    async def test_duplicate_edges_are_collapsed(self) -> None:
+        from orchestrator.app.agentic_traversal import apoc_path_expansion
+
+        nodes = [
+            {"node_id": "a", "labels": ["Service"]},
+            {"node_id": "b", "labels": ["Service"]},
         ]
-        session = _mock_session_with_records(records)
-        result = await apoc_path_expansion(session, start_id="4:xxx:0")
+        edges = [
+            {"src": "a", "tgt": "b", "rel_type": "CALLS"},
+            {"src": "a", "tgt": "b", "rel_type": "CALLS"},
+        ]
+        tx = _mock_tx_two_queries(nodes, edges)
+        result = await apoc_path_expansion(
+            tx, source_id="a", tenant_id="t1", acl_params=_DEFAULT_ACL,
+        )
+
+        assert len(result["edges"]) == 1
+        assert result["edges"][0] == ("a", "b", "CALLS")
+
+
+class TestApocEdgeCrossFilter:
+    @pytest.mark.asyncio
+    async def test_edges_excluded_when_endpoint_not_in_valid_nodes(self) -> None:
+        from orchestrator.app.agentic_traversal import apoc_path_expansion
+
+        nodes = [{"node_id": "a", "labels": ["Service"]}]
+        edges = [
+            {"src": "a", "tgt": "b", "rel_type": "CALLS"},
+            {"src": "a", "tgt": "a", "rel_type": "SELF_REF"},
+        ]
+        tx = _mock_tx_two_queries(nodes, edges)
+        result = await apoc_path_expansion(
+            tx, source_id="a", tenant_id="t1", acl_params=_DEFAULT_ACL,
+        )
+
+        assert ("a", "b", "CALLS") not in result["edges"]
+        assert ("a", "a", "SELF_REF") in result["edges"]
+
+
+class TestApocQueryUsesExpandConfig:
+    @pytest.mark.asyncio
+    async def test_both_queries_contain_apoc_expand_config(self) -> None:
+        from orchestrator.app.agentic_traversal import apoc_path_expansion
+
+        tx = _mock_tx_two_queries([], [])
+        await apoc_path_expansion(
+            tx,
+            source_id="svc-a",
+            tenant_id="t1",
+            acl_params=_DEFAULT_ACL,
+            max_hops=3,
+            max_visited=500,
+        )
+
+        assert tx.run.call_count == 2
+        for call in tx.run.call_args_list:
+            query = call[0][0]
+            assert "apoc.path.expandConfig" in query
+            kwargs = call[1]
+            assert kwargs["max_hops"] == 3
+            assert kwargs["max_visited"] == 500
+
+
+class TestApocResultStructure:
+    @pytest.mark.asyncio
+    async def test_returns_nodes_dict_and_edges_list(self) -> None:
+        from orchestrator.app.agentic_traversal import apoc_path_expansion
+
+        nodes = [
+            {"node_id": "svc-a", "labels": ["Service"]},
+            {"node_id": "svc-b", "labels": ["Service"]},
+        ]
+        edges = [{"src": "svc-a", "tgt": "svc-b", "rel_type": "DEPENDS_ON"}]
+        tx = _mock_tx_two_queries(nodes, edges)
+        result = await apoc_path_expansion(
+            tx, source_id="svc-a", tenant_id="t1", acl_params=_DEFAULT_ACL,
+        )
 
         assert "nodes" in result
         assert "edges" in result
-        assert "4:xxx:1" in result["nodes"]
-        assert result["nodes"]["4:xxx:1"] == ["Service"]
+        assert "svc-b" in result["nodes"]
+        assert result["nodes"]["svc-b"] == ["Service"]
         assert len(result["edges"]) == 1
-        assert result["edges"][0] == ("4:xxx:0", "4:xxx:1", "DEPENDS_ON")
+        assert result["edges"][0] == ("svc-a", "svc-b", "DEPENDS_ON")
+
+    @pytest.mark.asyncio
+    async def test_multiple_property_node_ids_and_rel_types(self) -> None:
+        from orchestrator.app.agentic_traversal import apoc_path_expansion
+
+        nodes = [
+            {"node_id": "pod-a", "labels": ["Pod"]},
+            {"node_id": "node-b", "labels": ["Node"]},
+            {"node_id": "cluster-c", "labels": ["Cluster"]},
+        ]
+        edges = [
+            {"src": "pod-a", "tgt": "node-b", "rel_type": "RUNS_ON"},
+            {"src": "node-b", "tgt": "cluster-c", "rel_type": "HOSTS"},
+        ]
+        tx = _mock_tx_two_queries(nodes, edges)
+        result = await apoc_path_expansion(
+            tx, source_id="pod-a", tenant_id="t1", acl_params=_DEFAULT_ACL,
+        )
+
+        assert "pod-a" in result["nodes"]
+        assert "node-b" in result["nodes"]
+        assert "cluster-c" in result["nodes"]
+        assert ("pod-a", "node-b", "RUNS_ON") in result["edges"]
+        assert ("node-b", "cluster-c", "HOSTS") in result["edges"]
+        assert len(result["edges"]) == 2
 
 
 class TestTraversalStrategyApocEnum:
@@ -101,21 +234,18 @@ class TestTraversalStrategyApocEnum:
         assert TraversalStrategy("apoc") == TraversalStrategy.APOC
 
 
-class TestApocStrategyRouting:
+class TestApocStrategyPassesTenantParams:
     @pytest.mark.asyncio
-    async def test_run_traversal_routes_to_apoc_expansion(self) -> None:
+    async def test_apoc_routing_forwards_tenant_and_acl(self) -> None:
         config = TraversalConfig(strategy=TraversalStrategy.APOC)
         driver, _ = _mock_async_session_driver()
-        apoc_raw = {
-            "nodes": {"4:n:1": ["Service"]},
-            "edges": [("4:n:0", "4:n:1", "CALLS")],
-        }
+        formatted = [{"source_id": "svc-a", "target_id": "svc-b", "rel_type": "CALLS"}]
 
         with patch(
-            "orchestrator.app.agentic_traversal.apoc_path_expansion",
+            "orchestrator.app.agentic_traversal._try_apoc_expansion",
             new_callable=AsyncMock,
-            return_value=apoc_raw,
-        ) as mock_apoc:
+            return_value=formatted,
+        ) as mock_try:
             result = await run_traversal(
                 driver=driver,
                 start_node_id="svc-a",
@@ -123,15 +253,16 @@ class TestApocStrategyRouting:
                 acl_params=_DEFAULT_ACL,
                 config=config,
             )
-            mock_apoc.assert_called_once()
+            mock_try.assert_called_once()
+            call_kwargs = mock_try.call_args.kwargs
+            assert call_kwargs["tenant_id"] == "t1"
+            assert call_kwargs["acl_params"] == _DEFAULT_ACL
             assert isinstance(result, list)
 
 
-class TestAdaptiveApocFallback:
+class TestAdaptiveWithoutDegreeHintFallsBack:
     @pytest.mark.asyncio
-    async def test_adaptive_tries_apoc_first_falls_back_on_client_error(
-        self,
-    ) -> None:
+    async def test_no_degree_hint_tries_apoc_then_bfs(self) -> None:
         config = TraversalConfig(strategy=TraversalStrategy.ADAPTIVE)
         driver, _ = _mock_async_session_driver()
         bfs_result = [{"target_id": "svc-fallback"}]
@@ -160,60 +291,108 @@ class TestAdaptiveApocFallback:
             assert result == bfs_result
 
 
+class TestAdaptiveDegreeHintRouting:
+    @pytest.mark.asyncio
+    async def test_high_degree_hint_skips_apoc_routes_to_bfs(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.ADAPTIVE,
+            degree_threshold=200,
+        )
+        driver, _ = _mock_async_session_driver()
+        bfs_result = [{"target_id": "svc-dense"}]
+
+        with (
+            patch(
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
+                new_callable=AsyncMock,
+            ) as mock_apoc,
+            patch(
+                "orchestrator.app.agentic_traversal._batched_bfs",
+                new_callable=AsyncMock,
+                return_value=bfs_result,
+            ) as mock_bfs,
+        ):
+            result = await run_traversal(
+                driver=driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=_DEFAULT_ACL,
+                config=config,
+                degree_hint=500,
+            )
+            mock_apoc.assert_not_called()
+            mock_bfs.assert_called_once()
+            assert result == bfs_result
+
+    @pytest.mark.asyncio
+    async def test_low_degree_hint_skips_apoc_routes_to_bounded_cypher(self) -> None:
+        config = TraversalConfig(
+            strategy=TraversalStrategy.ADAPTIVE,
+            degree_threshold=200,
+        )
+        driver, _ = _mock_async_session_driver()
+        bounded_result = [{"target_id": "svc-sparse"}]
+
+        with (
+            patch(
+                "orchestrator.app.agentic_traversal._try_apoc_expansion",
+                new_callable=AsyncMock,
+            ) as mock_apoc,
+            patch(
+                "orchestrator.app.agentic_traversal._run_bounded_with_fallback",
+                new_callable=AsyncMock,
+                return_value=bounded_result,
+            ) as mock_bounded,
+        ):
+            result = await run_traversal(
+                driver=driver,
+                start_node_id="svc-a",
+                tenant_id="t1",
+                acl_params=_DEFAULT_ACL,
+                config=config,
+                degree_hint=50,
+            )
+            mock_apoc.assert_not_called()
+            mock_bounded.assert_called_once()
+            assert result == bounded_result
+
+
+class TestApocUsesManagedTransaction:
+    @pytest.mark.asyncio
+    async def test_try_apoc_calls_execute_read_not_session_run(self) -> None:
+        from orchestrator.app.agentic_traversal import _try_apoc_expansion
+        from orchestrator.app.context_manager import TokenBudget
+
+        driver, session = _mock_async_session_driver()
+        apoc_raw = {"nodes": {}, "edges": []}
+        session.execute_read = AsyncMock(return_value=apoc_raw)
+
+        await _try_apoc_expansion(
+            driver=driver,
+            start_node_id="svc-a",
+            tenant_id="t1",
+            acl_params=_DEFAULT_ACL,
+            max_hops=3,
+            max_visited=50,
+            token_budget=TokenBudget(),
+        )
+
+        session.execute_read.assert_called_once()
+        session.run.assert_not_called()
+
+
 class TestApocEmptyResult:
     @pytest.mark.asyncio
-    async def test_empty_start_returns_empty_path_set(self) -> None:
+    async def test_empty_expansion_returns_empty_collections(self) -> None:
         from orchestrator.app.agentic_traversal import apoc_path_expansion
 
-        session = _mock_session_with_records([])
+        tx = _mock_tx_two_queries([], [])
         result = await apoc_path_expansion(
-            session, start_id="4:nonexistent:0",
+            tx, source_id="nonexistent", tenant_id="t1", acl_params=_DEFAULT_ACL,
         )
 
         assert result["nodes"] == {}
         assert result["edges"] == []
-
-
-class TestApocResultNodeIdsAndRelTypes:
-    @pytest.mark.asyncio
-    async def test_result_includes_node_ids_and_relationship_types(self) -> None:
-        from orchestrator.app.agentic_traversal import apoc_path_expansion
-
-        records = [
-            {
-                "node_id": "4:a:0",
-                "labels": ["Pod"],
-                "rel_id": "5:r:0",
-                "rel_type": "RUNS_ON",
-                "src": "4:a:0",
-                "tgt": "4:b:0",
-            },
-            {
-                "node_id": "4:b:0",
-                "labels": ["Node"],
-                "rel_id": "5:r:1",
-                "rel_type": "HOSTS",
-                "src": "4:b:0",
-                "tgt": "4:c:0",
-            },
-            {
-                "node_id": "4:c:0",
-                "labels": ["Cluster"],
-                "rel_id": None,
-                "rel_type": None,
-                "src": None,
-                "tgt": None,
-            },
-        ]
-        session = _mock_session_with_records(records)
-        result = await apoc_path_expansion(session, start_id="4:a:0")
-
-        assert "4:a:0" in result["nodes"]
-        assert "4:b:0" in result["nodes"]
-        assert "4:c:0" in result["nodes"]
-        assert ("4:a:0", "4:b:0", "RUNS_ON") in result["edges"]
-        assert ("4:b:0", "4:c:0", "HOSTS") in result["edges"]
-        assert len(result["edges"]) == 2
 
 
 class TestExistingStrategiesUnaffected:

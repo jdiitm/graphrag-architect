@@ -186,17 +186,29 @@ _BOUNDED_PATH_TEMPLATE = (
     "LIMIT $max_nodes"
 )
 
-_APOC_EXPAND_QUERY = (
-    "MATCH (start) WHERE elementId(start) = $start_id "
+_APOC_NODES_QUERY = (
+    "MATCH (start {id: $source_id, tenant_id: $tenant_id}) "
     "CALL apoc.path.expandConfig(start, {"
     "  maxLevel: $max_hops, limit: $max_visited, bfs: true,"
     "  filterStartNode: false, uniqueness: 'NODE_GLOBAL'"
     "}) YIELD path "
     "UNWIND nodes(path) AS n "
+    "WHERE n.tenant_id = $tenant_id "
+    "AND ($is_admin OR n.team_owner = $acl_team "
+    "OR ANY(ns IN n.namespace_acl WHERE ns IN $acl_namespaces)) "
+    "RETURN DISTINCT n.id AS node_id, labels(n) AS labels"
+)
+
+_APOC_EDGES_QUERY = (
+    "MATCH (start {id: $source_id, tenant_id: $tenant_id}) "
+    "CALL apoc.path.expandConfig(start, {"
+    "  maxLevel: $max_hops, limit: $max_visited, bfs: true,"
+    "  filterStartNode: false, uniqueness: 'NODE_GLOBAL'"
+    "}) YIELD path "
     "UNWIND relationships(path) AS r "
-    "RETURN DISTINCT elementId(n) AS node_id, labels(n) AS labels, "
-    "elementId(r) AS rel_id, type(r) AS rel_type, "
-    "elementId(startNode(r)) AS src, elementId(endNode(r)) AS tgt"
+    "WHERE r.tombstoned_at IS NULL "
+    "RETURN DISTINCT startNode(r).id AS src, endNode(r).id AS tgt, "
+    "type(r) AS rel_type"
 )
 
 
@@ -681,24 +693,34 @@ async def _run_bounded_with_fallback(
 
 
 async def apoc_path_expansion(
-    session: Any,
-    start_id: str,
+    tx: AsyncManagedTransaction,
+    source_id: str,
+    tenant_id: str,
+    acl_params: Dict[str, Any],
     max_hops: int = 3,
     max_visited: int = 500,
 ) -> Dict[str, Any]:
-    result = await session.run(
-        _APOC_EXPAND_QUERY,
-        start_id=start_id,
-        max_hops=max_hops,
-        max_visited=max_visited,
-    )
-    records = [r async for r in result]
-    nodes: Dict[str, Any] = {r["node_id"]: r["labels"] for r in records}
-    edges = [
+    params: Dict[str, Any] = {
+        "source_id": source_id,
+        "tenant_id": tenant_id,
+        "max_hops": max_hops,
+        "max_visited": max_visited,
+        **acl_params,
+    }
+
+    node_result = await tx.run(_APOC_NODES_QUERY, **params)
+    node_records = await node_result.data()
+    nodes: Dict[str, Any] = {r["node_id"]: r["labels"] for r in node_records}
+
+    edge_result = await tx.run(_APOC_EDGES_QUERY, **params)
+    edge_records = await edge_result.data()
+    valid_ids = set(nodes.keys())
+    edges = list(dict.fromkeys(
         (r["src"], r["tgt"], r["rel_type"])
-        for r in records
-        if r.get("rel_id")
-    ]
+        for r in edge_records
+        if r["src"] in valid_ids and r["tgt"] in valid_ids
+    ))
+
     return {"nodes": nodes, "edges": edges}
 
 
@@ -721,16 +743,89 @@ def _format_apoc_for_traversal(
 async def _try_apoc_expansion(
     driver: AsyncDriver,
     start_node_id: str,
+    tenant_id: str,
+    acl_params: Dict[str, Any],
     max_hops: int,
     max_visited: int,
     token_budget: TokenBudget,
 ) -> List[Dict[str, Any]]:
-    async with driver.session() as session:
-        raw = await apoc_path_expansion(
-            session, start_node_id, max_hops, max_visited,
+    async def _tx(tx: AsyncManagedTransaction) -> Dict[str, Any]:
+        return await apoc_path_expansion(
+            tx, start_node_id, tenant_id, acl_params,
+            max_hops, max_visited,
         )
+
+    async with driver.session() as session:
+        raw = await session.execute_read(_tx)
     formatted = _format_apoc_for_traversal(raw)
     return truncate_context(formatted, token_budget)
+
+
+async def _resolve_adaptive(
+    driver: AsyncDriver,
+    start_node_id: str,
+    tenant_id: str,
+    acl_params: Dict[str, Any],
+    max_hops: int,
+    timeout: float,
+    token_budget: TokenBudget,
+    max_visited: int,
+    beam_width: int,
+    degree_threshold: int,
+    degree_hint: Optional[int],
+) -> List[Dict[str, Any]]:
+    if degree_hint is not None:
+        if degree_hint >= degree_threshold:
+            return await _batched_bfs(
+                driver=driver,
+                start_node_id=start_node_id,
+                tenant_id=tenant_id,
+                acl_params=acl_params,
+                max_hops=max_hops,
+                timeout=timeout,
+                token_budget=token_budget,
+                max_visited=max_visited,
+                beam_width=beam_width,
+            )
+        return await _run_bounded_with_fallback(
+            driver=driver,
+            start_node_id=start_node_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            max_hops=max_hops,
+            timeout=timeout,
+            effective_budget=token_budget,
+            max_visited=max_visited,
+            beam_width=beam_width,
+        )
+    try:
+        return await _try_apoc_expansion(
+            driver=driver,
+            start_node_id=start_node_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            max_hops=max_hops,
+            max_visited=max_visited,
+            token_budget=token_budget,
+        )
+    except ClientError:
+        logger.warning(
+            "APOC expansion unavailable for node %s, "
+            "falling back to batched BFS",
+            start_node_id,
+            exc_info=True,
+        )
+        return await _batched_bfs(
+            driver=driver,
+            start_node_id=start_node_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            max_hops=max_hops,
+            timeout=timeout,
+            token_budget=token_budget,
+            max_visited=max_visited,
+            beam_width=beam_width,
+        )
 
 
 async def run_traversal(
@@ -789,33 +884,28 @@ async def run_traversal(
 
     if config.strategy == TraversalStrategy.APOC:
         return await _try_apoc_expansion(
-            driver, start_node_id, effective_hops,
-            effective_max_visited, effective_budget,
+            driver=driver,
+            start_node_id=start_node_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            max_hops=effective_hops,
+            max_visited=effective_max_visited,
+            token_budget=effective_budget,
         )
 
     if config.strategy == TraversalStrategy.ADAPTIVE:
-        try:
-            return await _try_apoc_expansion(
-                driver, start_node_id, effective_hops,
-                effective_max_visited, effective_budget,
-            )
-        except ClientError:
-            logger.warning(
-                "APOC expansion unavailable for node %s, "
-                "falling back to batched BFS",
-                start_node_id,
-                exc_info=True,
-            )
-            return await _batched_bfs(
-                driver=driver,
-                start_node_id=start_node_id,
-                tenant_id=tenant_id,
-                acl_params=acl_params,
-                max_hops=effective_hops,
-                timeout=effective_timeout,
-                token_budget=effective_budget,
-                max_visited=effective_max_visited,
-                beam_width=config.beam_width,
-            )
+        return await _resolve_adaptive(
+            driver=driver,
+            start_node_id=start_node_id,
+            tenant_id=tenant_id,
+            acl_params=acl_params,
+            max_hops=effective_hops,
+            timeout=effective_timeout,
+            token_budget=effective_budget,
+            max_visited=effective_max_visited,
+            beam_width=config.beam_width,
+            degree_threshold=config.degree_threshold,
+            degree_hint=degree_hint,
+        )
 
     raise ValueError(f"Unknown traversal strategy: {config.strategy}")
