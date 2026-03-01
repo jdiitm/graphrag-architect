@@ -41,14 +41,14 @@ class TestBatchedHopDegreeGuard:
             "orchestrator.app.agentic_traversal.batch_check_degrees",
             side_effect=_mock_batch_check,
         ), patch(
-            "orchestrator.app.agentic_traversal.execute_hop",
+            "orchestrator.app.agentic_traversal._batched_supernode_expansion",
             new_callable=AsyncMock,
             return_value=[
                 {"source_id": "super-hub", "target_id": "sampled-1",
                  "target_name": "s1", "rel_type": "CALLS",
                  "target_label": "Service", "pagerank": 0, "degree": 0},
             ],
-        ) as mock_hop:
+        ) as mock_super_expand:
             mock_session = AsyncMock()
 
             async def _capture_batch_read(func, **kwargs):
@@ -87,14 +87,13 @@ class TestBatchedHopDegreeGuard:
             for batch_ids in batch_query_source_ids:
                 assert "super-hub" not in batch_ids, (
                     "Super-node must NOT appear in the batch UNWIND query. "
-                    "It should be sampled individually via execute_hop."
+                    "It should be routed to batched supernode expansion."
                 )
 
-            mock_hop.assert_called_once()
-            hop_kwargs = mock_hop.call_args
-            assert hop_kwargs[1].get("source_id") == "super-hub" or \
-                hop_kwargs[0][1] == "super-hub", (
-                "Super-node must be sampled via execute_hop"
+            mock_super_expand.assert_called_once()
+            call_kwargs = mock_super_expand.call_args[1]
+            assert "super-hub" in call_kwargs["source_ids"], (
+                "Super-node must be routed to _batched_supernode_expansion"
             )
 
     @pytest.mark.asyncio
@@ -181,7 +180,7 @@ class TestBatchedHopDegreeGuard:
             "orchestrator.app.agentic_traversal.batch_check_degrees",
             side_effect=_mock_batch_check,
         ), patch(
-            "orchestrator.app.agentic_traversal.execute_hop",
+            "orchestrator.app.agentic_traversal._batched_supernode_expansion",
             new_callable=AsyncMock,
             return_value=[sampled_result],
         ):
@@ -213,4 +212,4 @@ class TestBatchedHopDegreeGuard:
 
             target_ids = {r["target_id"] for r in results}
             assert "from-batch" in target_ids, "Batch results must be included"
-            assert "from-sample" in target_ids, "Sampled super-node results must be included"
+            assert "from-sample" in target_ids, "Batched supernode expansion results must be included"

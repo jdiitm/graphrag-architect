@@ -124,3 +124,29 @@ def build_traversal_batched_neighbor() -> str:
         "n.pagerank AS pagerank, n.degree AS degree "
         "LIMIT $limit"
     )
+
+
+def build_traversal_batched_supernode_neighbor() -> str:
+    acl = _acl_where_fragment()
+    return (
+        "UNWIND $source_ids AS sid "
+        "MATCH (source {id: sid, tenant_id: $tenant_id})"
+        "-[r]->(target) "
+        "WHERE target.tenant_id = $tenant_id "
+        "AND r.tombstoned_at IS NULL "
+        f"{acl}"
+        "WITH source, target, r, "
+        "coalesce(target.pagerank, 0) AS pagerank, "
+        "coalesce(target.degree, 0) AS degree "
+        "ORDER BY pagerank DESC, degree DESC "
+        "WITH source, collect({target_id: target.id, "
+        "target_name: target.name, rel_type: type(r), "
+        "target_label: labels(target)[0], "
+        "pagerank: pagerank, degree: degree})"
+        "[0..$sample_size] AS neighbors "
+        "UNWIND neighbors AS n "
+        "RETURN source.id AS source_id, n.target_id AS target_id, "
+        "n.target_name AS target_name, n.rel_type AS rel_type, "
+        "n.target_label AS target_label, "
+        "n.pagerank AS pagerank, n.degree AS degree"
+    )
