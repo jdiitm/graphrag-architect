@@ -47,6 +47,10 @@ from orchestrator.app.checkpoint_store import get_checkpointer
 from orchestrator.app.node_sink import IncrementalNodeSink
 from orchestrator.app.vector_store import create_vector_store
 from orchestrator.app.config import VectorStoreConfig
+from orchestrator.app.mutation_publisher import (
+    GraphMutationEvent,
+    KafkaMutationPublisher,
+)
 from orchestrator.app.workspace_loader import load_directory_chunked, load_directory_stream
 from orchestrator.app.vector_sync_outbox import (
     CoalescingOutbox,
@@ -285,6 +289,27 @@ def _build_extractor() -> ServiceExtractor:
 
 class _VectorStoreHolder:
     value: Any = None
+
+
+class _MutationPublisherHolder:
+    value: Optional[KafkaMutationPublisher] = None
+
+
+def _get_mutation_publisher() -> Optional[KafkaMutationPublisher]:
+    if _MutationPublisherHolder.value is None:
+        brokers = os.environ.get("KAFKA_BROKERS", "")
+        if not brokers:
+            return None
+        topic = os.environ.get(
+            "VECTOR_SYNC_KAFKA_TOPIC", "graph.mutations",
+        )
+        from orchestrator.app.mutation_publisher import LoggingMutationTransport
+        transport = LoggingMutationTransport()
+        _MutationPublisherHolder.value = KafkaMutationPublisher(
+            transport=transport,
+            topic=topic,
+        )
+    return _MutationPublisherHolder.value
 
 
 def get_vector_store() -> Any:
@@ -849,6 +874,31 @@ def _get_sink_batch_size() -> int:
     return IngestionConfig.from_env().sink_batch_size
 
 
+async def _publish_mutation_events(
+    committed_node_ids: Optional[Set[str]],
+    pruned_ids: List[str],
+    tenant_id: str,
+) -> None:
+    publisher = _get_mutation_publisher()
+    if publisher is None:
+        return
+    events: List[GraphMutationEvent] = []
+    if committed_node_ids:
+        events.append(GraphMutationEvent(
+            mutation_type="node_upsert",
+            entity_ids=sorted(committed_node_ids),
+            tenant_id=tenant_id,
+        ))
+    if pruned_ids:
+        events.append(GraphMutationEvent(
+            mutation_type="edge_tombstone",
+            entity_ids=list(pruned_ids),
+            tenant_id=tenant_id,
+        ))
+    if events:
+        await publisher.publish(events)
+
+
 async def _post_commit_side_effects(
     repo: GraphRepository,
     ingestion_id: str,
@@ -857,6 +907,7 @@ async def _post_commit_side_effects(
     committed_node_ids: Optional[Set[str]] = None,
     neo4j_driver: Any = None,
 ) -> None:
+    pruned_ids: List[str] = []
     try:
         pruned_count, pruned_ids = await repo.prune_stale_edges(ingestion_id)
         span.set_attribute("edges_pruned", pruned_count)
@@ -874,6 +925,12 @@ async def _post_commit_side_effects(
             logger.warning("Background task limit reached; vector drain skipped")
     except Exception as prune_exc:
         logger.warning("Edge pruning failed (non-fatal): %s", prune_exc)
+    try:
+        await _publish_mutation_events(
+            committed_node_ids, pruned_ids, tenant_id,
+        )
+    except Exception as pub_exc:
+        logger.warning("Mutation publish failed (non-fatal): %s", pub_exc)
     try:
         await invalidate_caches_after_ingest(
             tenant_id=tenant_id, node_ids=committed_node_ids,
