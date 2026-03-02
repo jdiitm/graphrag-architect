@@ -18,6 +18,14 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
         prometheus.io/path: "/metrics"
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "graphrag"
+        vault.hashicorp.com/agent-configmap: "vault-agent-config"
+        vault.hashicorp.com/agent-inject-secret-graphrag.env: "secret/data/graphrag"
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "graphrag"
+        vault.hashicorp.com/agent-configmap: "vault-agent-config"
+        vault.hashicorp.com/agent-inject-secret-graphrag.env: "secret/data/graphrag"
     spec:
       containers:
         - name: ingestion-worker
