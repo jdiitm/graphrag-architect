@@ -46,6 +46,7 @@ from orchestrator.app.prompt_sanitizer import (
     sanitize_query_input,
 )
 from orchestrator.app.graph_embeddings import (
+    FusionHint,
     classify_fusion_hint,
     compute_centroid,
     rerank_with_structural,
@@ -1019,7 +1020,7 @@ def set_structural_embeddings(embeddings: Dict[str, List[float]]) -> None:
 def _apply_structural_rerank(
     candidates: List[Dict[str, Any]],
     complexity: Optional[QueryComplexity] = None,
-    hint: Any = None,
+    hint: Optional[FusionHint] = None,
 ) -> List[Dict[str, Any]]:
     if not _STRUCTURAL_EMBEDDINGS or not candidates:
         return candidates
@@ -1077,7 +1078,7 @@ async def _async_rerank_candidates(
     query: str,
     candidates: List[Dict[str, Any]],
     complexity: Optional[QueryComplexity] = None,
-    hint: Any = None,
+    hint: Optional[FusionHint] = None,
 ) -> List[Dict[str, Any]]:
     if not candidates:
         return []

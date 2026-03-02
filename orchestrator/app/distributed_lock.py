@@ -228,6 +228,7 @@ class LockHeartbeat:
                 try:
                     await self._lock.extend(self._ttl)
                 except Exception:
+                    logger.warning("Lock extend failed, aborting", exc_info=True)
                     self.abort_event.set()
                     return
         except asyncio.CancelledError:

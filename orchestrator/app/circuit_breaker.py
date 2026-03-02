@@ -383,7 +383,22 @@ class GlobalProviderBreaker:
         if self._global.state != CircuitState.CLOSED:
             async def _tenant_guarded() -> T:
                 tenant_breaker = await self._registry.for_tenant(tenant_id)
-                return await tenant_breaker.call(func, *args, **kwargs)
+                try:
+                    result = await tenant_breaker.call(func, *args, **kwargs)
+                except Exception as exc:
+                    if provider_name and self._provider_registry is not None:
+                        prov_cb = await self._provider_registry.for_provider(
+                            provider_name,
+                        )
+                        if not isinstance(exc, CircuitOpenError):
+                            await prov_cb.record_failure()
+                    raise
+                if provider_name and self._provider_registry is not None:
+                    prov_cb = await self._provider_registry.for_provider(
+                        provider_name,
+                    )
+                    await prov_cb.record_success()
+                return result
             return await self._global.call(_tenant_guarded)
 
         tenant_breaker = await self._registry.for_tenant(tenant_id)
