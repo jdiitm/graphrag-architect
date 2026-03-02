@@ -19,12 +19,22 @@ logger = logging.getLogger(__name__)
 class CheckpointStoreConfig:
     backend: str = "memory"
     postgres_dsn: str = ""
+    pool_size: int = 4
+    batch_max_size: int = 50
+    batch_flush_interval_ms: int = 500
 
     @classmethod
     def from_env(cls) -> CheckpointStoreConfig:
         return cls(
             backend=os.environ.get("CHECKPOINT_BACKEND", "memory"),
             postgres_dsn=os.environ.get("CHECKPOINT_POSTGRES_DSN", ""),
+            pool_size=int(os.environ.get("CHECKPOINT_POOL_SIZE", "4")),
+            batch_max_size=int(
+                os.environ.get("CHECKPOINT_BATCH_MAX_SIZE", "50"),
+            ),
+            batch_flush_interval_ms=int(
+                os.environ.get("CHECKPOINT_BATCH_FLUSH_MS", "500"),
+            ),
         )
 
 
