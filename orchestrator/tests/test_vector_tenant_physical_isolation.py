@@ -7,11 +7,10 @@ from orchestrator.app.vector_store import (
     QdrantVectorStore,
     VectorRecord,
     create_vector_store,
-    resolve_collection_name,
 )
 
 
-class TestQdrantProductionUsesPhysicalIsolation:
+class TestQdrantProductionUsesPayloadFiltering:
 
     def test_qdrant_store_accepts_deployment_mode(self) -> None:
         store = QdrantVectorStore(
@@ -35,17 +34,22 @@ class TestQdrantProductionUsesPhysicalIsolation:
 
 
 @pytest.mark.asyncio
-class TestInMemoryPhysicalIsolation:
+class TestUnifiedPayloadFilteringIsolation:
 
-    async def test_production_mode_routes_to_tenant_collection(self) -> None:
+    async def test_production_mode_uses_payload_filtering(self) -> None:
         store = InMemoryVectorStore()
         await store.upsert(
-            resolve_collection_name("services", "acme"),
-            [VectorRecord(id="a", vector=[1.0, 0.0], metadata={"tenant_id": "acme"})],
-        )
-        await store.upsert(
-            resolve_collection_name("services", "globex"),
-            [VectorRecord(id="b", vector=[1.0, 0.0], metadata={"tenant_id": "globex"})],
+            "services",
+            [
+                VectorRecord(
+                    id="a", vector=[1.0, 0.0],
+                    metadata={"tenant_id": "acme"},
+                ),
+                VectorRecord(
+                    id="b", vector=[1.0, 0.0],
+                    metadata={"tenant_id": "globex"},
+                ),
+            ],
         )
 
         acme_results = await store.search_with_tenant(
@@ -65,12 +69,17 @@ class TestInMemoryPhysicalIsolation:
     async def test_production_mode_prevents_cross_tenant_leakage(self) -> None:
         store = InMemoryVectorStore()
         await store.upsert(
-            resolve_collection_name("services", "acme"),
-            [VectorRecord(id="a", vector=[1.0, 0.0], metadata={"tenant_id": "acme"})],
-        )
-        await store.upsert(
             "services",
-            [VectorRecord(id="leak", vector=[1.0, 0.0], metadata={"tenant_id": "globex"})],
+            [
+                VectorRecord(
+                    id="a", vector=[1.0, 0.0],
+                    metadata={"tenant_id": "acme"},
+                ),
+                VectorRecord(
+                    id="leak", vector=[1.0, 0.0],
+                    metadata={"tenant_id": "globex"},
+                ),
+            ],
         )
 
         acme_results = await store.search_with_tenant(
@@ -80,13 +89,19 @@ class TestInMemoryPhysicalIsolation:
         result_ids = {r.id for r in acme_results}
         assert "leak" not in result_ids
 
-    async def test_dev_mode_uses_logical_filtering(self) -> None:
+    async def test_dev_mode_uses_payload_filtering(self) -> None:
         store = InMemoryVectorStore()
         await store.upsert(
             "services",
             [
-                VectorRecord(id="a", vector=[1.0, 0.0], metadata={"tenant_id": "acme"}),
-                VectorRecord(id="b", vector=[0.9, 0.1], metadata={"tenant_id": "globex"}),
+                VectorRecord(
+                    id="a", vector=[1.0, 0.0],
+                    metadata={"tenant_id": "acme"},
+                ),
+                VectorRecord(
+                    id="b", vector=[0.9, 0.1],
+                    metadata={"tenant_id": "globex"},
+                ),
             ],
         )
 

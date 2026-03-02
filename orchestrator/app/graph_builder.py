@@ -45,7 +45,7 @@ from orchestrator.app.observability import (
 from orchestrator.app.schema_validation import validate_topology
 from orchestrator.app.checkpoint_store import get_checkpointer
 from orchestrator.app.node_sink import IncrementalNodeSink
-from orchestrator.app.vector_store import create_vector_store, resolve_collection_name
+from orchestrator.app.vector_store import create_vector_store
 from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.workspace_loader import load_directory_chunked, load_directory_stream
 from orchestrator.app.vector_sync_outbox import (
@@ -139,7 +139,8 @@ def get_ast_dlq() -> List[Dict[str, Any]]:
 
 
 def resolve_vector_collection(tenant_id: Optional[str] = None) -> str:
-    return resolve_collection_name(_VECTOR_COLLECTION, tenant_id)
+    _ = tenant_id
+    return _VECTOR_COLLECTION
 
 _VECTOR_OUTBOX = VectorSyncOutbox()
 

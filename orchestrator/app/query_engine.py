@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import json
 import logging
 import os
 import time
@@ -509,19 +510,21 @@ async def _raw_llm_synthesize_stream(
             "Streaming LLM provider failed, yielding degraded response",
             exc_info=True,
         )
-        yield (
-            "The LLM synthesis service is temporarily unavailable. "
-            "Please retry shortly."
-        )
+        yield json.dumps({
+            "type": "error",
+            "code": "PROVIDER_UNAVAILABLE",
+            "message": "LLM synthesis service failed. Please retry shortly.",
+        })
     except Exception:
         _query_logger.warning(
             "Streaming LLM provider error, yielding degraded response",
             exc_info=True,
         )
-        yield (
-            "The LLM synthesis service is temporarily unavailable. "
-            "Please retry shortly."
-        )
+        yield json.dumps({
+            "type": "error",
+            "code": "PROVIDER_ERROR",
+            "message": "LLM synthesis encountered an unexpected error.",
+        })
 
 
 async def _llm_synthesize(
@@ -535,19 +538,21 @@ async def _llm_synthesize(
         )
     except CircuitOpenError:
         _query_logger.warning("LLM circuit open, returning degraded response")
-        return (
-            "The LLM synthesis service is temporarily unavailable due to "
-            "circuit breaker activation. Please retry shortly."
-        )
+        return json.dumps({
+            "type": "error",
+            "code": "CIRCUIT_OPEN",
+            "message": "LLM circuit breaker is open. Please retry shortly.",
+        })
     except LLMError:
         _query_logger.warning(
             "All LLM providers failed, returning degraded response",
             exc_info=True,
         )
-        return (
-            "The LLM synthesis service is temporarily unavailable. "
-            "All configured providers failed. Please retry shortly."
-        )
+        return json.dumps({
+            "type": "error",
+            "code": "ALL_PROVIDERS_FAILED",
+            "message": "All LLM providers failed. Please retry shortly.",
+        })
 
 
 def classify_query_node(state: QueryState) -> dict:

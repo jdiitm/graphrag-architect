@@ -1100,9 +1100,11 @@ class TestCircuitBreakerWiring:
         ):
             result = await _do_synthesize(state)
 
-        assert "circuit" in result["answer"].lower() or "unavailable" in result["answer"].lower(), (
+        import json as _json
+        parsed = _json.loads(result["answer"])
+        assert parsed["type"] == "error", (
             "When LLM circuit breaker is open, synthesis must return a "
-            f"degraded response, got: {result['answer']}"
+            f"structured JSON error, got: {result['answer']}"
         )
 
     @pytest.mark.asyncio
@@ -1160,8 +1162,10 @@ class TestCircuitBreakerWiring:
         ):
             result = await _do_synthesize(state)
 
-        assert "circuit" in result["answer"].lower() or "unavailable" in result["answer"].lower(), (
-            "Synthesis must mention circuit/unavailable when CB is open, "
+        import json as _json
+        parsed_answer = _json.loads(result["answer"])
+        assert parsed_answer["type"] == "error", (
+            "Synthesis must return structured JSON error when CB is open, "
             f"got: {result['answer']}"
         )
         assert len(result["sources"]) > 0, (

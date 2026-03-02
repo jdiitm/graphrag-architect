@@ -52,6 +52,7 @@ class TraversalConfig:
     max_visited: int = MAX_VISITED
     timeout: float = 30.0
     beam_width: int = 50
+    min_pagerank: float = 0.0
 
     @classmethod
     def from_env(cls) -> TraversalConfig:
@@ -77,6 +78,9 @@ class TraversalConfig:
             ),
             timeout=float(os.environ.get("TRAVERSAL_TIMEOUT", "30.0")),
             beam_width=int(os.environ.get("TRAVERSAL_BEAM_WIDTH", "50")),
+            min_pagerank=float(
+                os.environ.get("TRAVERSAL_MIN_PAGERANK", "0.0")
+            ),
         )
 
 
@@ -107,6 +111,7 @@ _NEIGHBOR_DISCOVERY_TEMPLATE = (
     "-[r]->(target) "
     "WHERE target.tenant_id = $tenant_id "
     "AND r.tombstoned_at IS NULL "
+    "AND coalesce(target.pagerank, 0) >= $min_pagerank "
     "AND ($is_admin OR target.team_owner = $acl_team "
     "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
     "RETURN target.id AS target_id, target.name AS target_name, "
@@ -118,6 +123,7 @@ _SAMPLED_NEIGHBOR_TEMPLATE = (
     "MATCH (source {id: $source_id, tenant_id: $tenant_id})"
     "-[r]->(target) "
     "WHERE target.tenant_id = $tenant_id AND r.tombstoned_at IS NULL "
+    "AND coalesce(target.pagerank, 0) >= $min_pagerank "
     "AND ($is_admin OR target.team_owner = $acl_team "
     "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
     "RETURN target.id AS target_id, target.name AS target_name, "
@@ -134,6 +140,7 @@ _NEIGHBOR_DISCOVERY_NO_ACL = (
     "-[r]->(target) "
     "WHERE target.tenant_id = $tenant_id "
     "AND r.tombstoned_at IS NULL "
+    "AND coalesce(target.pagerank, 0) >= $min_pagerank "
     "RETURN target.id AS target_id, target.name AS target_name, "
     "type(r) AS rel_type, labels(target)[0] AS target_label "
     "ORDER BY coalesce(target.pagerank, 0) DESC, "
@@ -145,6 +152,7 @@ _SAMPLED_NEIGHBOR_NO_ACL = (
     "MATCH (source {id: $source_id, tenant_id: $tenant_id})"
     "-[r]->(target) "
     "WHERE target.tenant_id = $tenant_id AND r.tombstoned_at IS NULL "
+    "AND coalesce(target.pagerank, 0) >= $min_pagerank "
     "RETURN target.id AS target_id, target.name AS target_name, "
     "type(r) AS rel_type, labels(target)[0] AS target_label "
     "ORDER BY coalesce(target.pagerank, 0) DESC, "
@@ -156,6 +164,7 @@ _SEMANTIC_PRUNED_NEIGHBOR_TEMPLATE = (
     "MATCH (source {id: $source_id, tenant_id: $tenant_id})"
     "-[r]->(target) "
     "WHERE target.tenant_id = $tenant_id AND r.tombstoned_at IS NULL "
+    "AND coalesce(target.pagerank, 0) >= $min_pagerank "
     "AND ($is_admin OR target.team_owner = $acl_team "
     "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
     "AND (CASE WHEN $query_embedding IS NOT NULL "
@@ -172,6 +181,7 @@ _SEMANTIC_PRUNED_NEIGHBOR_NO_ACL = (
     "MATCH (source {id: $source_id, tenant_id: $tenant_id})"
     "-[r]->(target) "
     "WHERE target.tenant_id = $tenant_id AND r.tombstoned_at IS NULL "
+    "AND coalesce(target.pagerank, 0) >= $min_pagerank "
     "AND (CASE WHEN $query_embedding IS NOT NULL "
     "THEN vector.similarity.cosine(target.embedding, $query_embedding) > $sim_threshold "
     "ELSE true END) "
@@ -403,6 +413,7 @@ async def _run_sampled_query(
         "source_id": source_id,
         "tenant_id": tenant_id,
         "sample_size": sample_size,
+        "min_pagerank": 0.0,
         **acl_params,
     }
     if query_embedding is not None:
@@ -449,6 +460,7 @@ async def execute_hop(
         "tenant_id": tenant_id,
         "limit": limit,
         "sample_size": sample_size,
+        "min_pagerank": 0.0,
         **acl_params,
     }
     provider.validate_query(
@@ -484,6 +496,7 @@ async def execute_hop(
             "source_id": source_id,
             "tenant_id": tenant_id,
             "limit": limit,
+            "min_pagerank": 0.0,
             **acl_params,
         }
 
@@ -531,6 +544,7 @@ async def execute_batched_hop(
             "tenant_id": tenant_id,
             "limit": limit,
             "per_source_limit": per_source_limit,
+            "min_pagerank": 0.0,
             **acl_params,
         }
         provider.validate_query(batched_query, params)
@@ -606,6 +620,7 @@ async def _batched_supernode_expansion(
         "source_ids": source_ids,
         "tenant_id": tenant_id,
         "sample_size": sample_size,
+        "min_pagerank": 0.0,
         **acl_params,
     }
     provider.validate_query(query, params)

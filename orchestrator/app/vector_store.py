@@ -22,20 +22,6 @@ class SearchResult:
     metadata: Dict[str, Any]
 
 
-def resolve_collection_name(
-    base_collection: str, tenant_id: Optional[str],
-) -> str:
-    if not tenant_id:
-        return base_collection
-    safe: list[str] = []
-    for ch in tenant_id:
-        if ch.isalnum() or ch == "-":
-            safe.append(ch)
-        else:
-            safe.append(f"_{ord(ch):02x}")
-    return f"{base_collection}__{''.join(safe)}"
-
-
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
     if len(a) != len(b):
         raise ValueError("Vectors must have the same dimension")
@@ -122,19 +108,14 @@ class InMemoryVectorStore:
         limit: int = 10,
         deployment_mode: str = "",
     ) -> List[SearchResult]:
-        if deployment_mode == "production" and tenant_id:
-            target_collection = resolve_collection_name(collection, tenant_id)
-            if target_collection not in self._store:
-                return []
-            records = list(self._store[target_collection].values())
-        else:
-            if collection not in self._store:
-                return []
-            records = list(self._store[collection].values())
-            records = [
-                r for r in records
-                if not tenant_id or r.metadata.get("tenant_id") == tenant_id
-            ]
+        _ = deployment_mode
+        if collection not in self._store:
+            return []
+        records = list(self._store[collection].values())
+        records = [
+            r for r in records
+            if not tenant_id or r.metadata.get("tenant_id") == tenant_id
+        ]
 
         scored: List[tuple[VectorRecord, float]] = []
         for record in records:
@@ -267,33 +248,25 @@ class QdrantVectorStore:
         limit: int = 10,
         deployment_mode: str = "",
     ) -> List[SearchResult]:
-        effective_mode = deployment_mode or self._deployment_mode
+        _ = deployment_mode
 
         async def _do_search() -> List[SearchResult]:
             client = self._get_client()
-            if effective_mode == "production" and tenant_id:
-                target = resolve_collection_name(collection, tenant_id)
-                results = await client.search(
-                    collection_name=target,
-                    query_vector=query_vector,
-                    limit=limit,
-                )
-            else:
-                from qdrant_client.models import FieldCondition, Filter, MatchValue
-                query_filter = Filter(
-                    must=[
-                        FieldCondition(
-                            key="tenant_id",
-                            match=MatchValue(value=tenant_id),
-                        ),
-                    ],
-                )
-                results = await client.search(
-                    collection_name=collection,
-                    query_vector=query_vector,
-                    query_filter=query_filter,
-                    limit=limit,
-                )
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+            query_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="tenant_id",
+                        match=MatchValue(value=tenant_id),
+                    ),
+                ],
+            )
+            results = await client.search(
+                collection_name=collection,
+                query_vector=query_vector,
+                query_filter=query_filter,
+                limit=limit,
+            )
             return [
                 SearchResult(
                     id=str(hit.id),

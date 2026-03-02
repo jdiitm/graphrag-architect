@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -159,10 +160,12 @@ class TestSynthesisUsesFallbackChain:
                 tenant_id="t1",
             )
 
-        assert "unavailable" in result.lower(), (
+        parsed = json.loads(result)
+        assert parsed["type"] == "error", (
             "When all LLM providers fail (LLMError), synthesis must return "
-            f"a degraded response, got: {result}"
+            f"a structured JSON error, got: {result}"
         )
+        assert parsed["code"] == "ALL_PROVIDERS_FAILED"
 
     @pytest.mark.asyncio
     async def test_circuit_open_still_returns_degraded(self) -> None:
@@ -178,7 +181,9 @@ class TestSynthesisUsesFallbackChain:
                 "test query", [{"name": "svc"}], tenant_id="t1",
             )
 
-        assert "unavailable" in result.lower()
+        parsed = json.loads(result)
+        assert parsed["type"] == "error"
+        assert parsed["code"] == "CIRCUIT_OPEN"
 
 
 class TestAinvokeMessagesProtocol:
