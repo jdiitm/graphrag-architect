@@ -1004,11 +1004,10 @@ async def compress_context(state: QueryState) -> dict:
 
         compressed = compress_context_map_reduce(
             context,
-            query=state.get("query", ""),
             budget=_DEFAULT_TOKEN_BUDGET,
         )
 
-        is_compressed = compressed is not context and len(compressed) != len(context)
+        is_compressed = compressed is not context
 
         if is_compressed:
             return {

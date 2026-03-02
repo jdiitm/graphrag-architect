@@ -335,14 +335,20 @@ class FastRPEmbeddingBackend:
 
 
 _GDS_PROJECT_CYPHER = (
-    "CALL gds.graph.project("
-    "$graph_name, $node_labels, $relationship_types"
+    "CALL gds.graph.project.cypher("
+    "$graph_name, "
+    "'MATCH (n) WHERE n.tenant_id = $tenant_id RETURN id(n) AS id', "
+    "'MATCH (a)-[r]->(b) "
+    "WHERE a.tenant_id = $tenant_id AND b.tenant_id = $tenant_id "
+    "RETURN id(a) AS source, id(b) AS target, type(r) AS type', "
+    "{parameters: {tenant_id: $tenant_id}}"
     ") YIELD graphName, nodeCount, relationshipCount"
 )
 
 _GDS_DROP_CYPHER = "CALL gds.graph.drop($graph_name) YIELD graphName"
 
 _DEFAULT_MUTATION_THRESHOLD = 100
+_PROJECTION_TTL_SECONDS = 3600
 
 
 class GDSProjectionManager:
@@ -355,7 +361,6 @@ class GDSProjectionManager:
         self._driver = driver
         self._redis = redis_conn
         self._mutation_threshold = mutation_threshold
-        self._mutation_counts: Dict[str, int] = {}
 
     def graph_name(self, tenant_id: str) -> str:
         return f"graphrag_{tenant_id}"
@@ -363,20 +368,23 @@ class GDSProjectionManager:
     def _cache_key(self, tenant_id: str) -> str:
         return f"gds:projection:{tenant_id}:exists"
 
-    def record_mutation(self, tenant_id: str) -> None:
-        self._mutation_counts[tenant_id] = (
-            self._mutation_counts.get(tenant_id, 0) + 1
-        )
+    def _mutation_key(self, tenant_id: str) -> str:
+        return f"gds:mutations:{tenant_id}"
 
-    def _check_and_reset_mutations(self, tenant_id: str) -> bool:
-        count = self._mutation_counts.get(tenant_id, 0)
+    async def record_mutation(self, tenant_id: str) -> None:
+        await self._redis.incr(self._mutation_key(tenant_id))
+
+    async def _check_and_reset_mutations(self, tenant_id: str) -> bool:
+        key = self._mutation_key(tenant_id)
+        raw = await self._redis.get(key)
+        count = int(raw) if raw is not None else 0
         if count >= self._mutation_threshold:
-            self._mutation_counts[tenant_id] = 0
+            await self._redis.set(key, "0")
             return True
         return False
 
     async def ensure_projection(self, tenant_id: str) -> bool:
-        stale = self._check_and_reset_mutations(tenant_id)
+        stale = await self._check_and_reset_mutations(tenant_id)
         if stale:
             await self.invalidate_projection(tenant_id)
 
@@ -385,7 +393,9 @@ class GDSProjectionManager:
             return False
 
         await self._project_graph(tenant_id)
-        await self._redis.set(self._cache_key(tenant_id), "1")
+        await self._redis.set(
+            self._cache_key(tenant_id), "1", ex=_PROJECTION_TTL_SECONDS,
+        )
         return True
 
     async def invalidate_projection(self, tenant_id: str) -> None:
@@ -426,8 +436,7 @@ class GDSProjectionManager:
         await tx.run(
             _GDS_PROJECT_CYPHER,
             graph_name=graph_name,
-            node_labels=["Service", "KafkaTopic", "K8sDeployment"],
-            relationship_types=["CALLS", "PRODUCES", "CONSUMES", "DEPLOYED_IN"],
+            tenant_id=tenant_id,
         )
 
     @staticmethod

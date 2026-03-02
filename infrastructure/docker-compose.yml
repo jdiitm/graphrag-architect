@@ -1,4 +1,7 @@
 services:
+  # Neo4j Enterprise is required for multi-database/tenant isolation and GDS.
+  # NEO4J_ACCEPT_LICENSE_AGREEMENT auto-accepts the Neo4j Enterprise license
+  # — review https://neo4j.com/licensing/ for commercial implications.
   neo4j:
     image: neo4j:5.26-enterprise
     ports:

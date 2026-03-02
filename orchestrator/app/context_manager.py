@@ -642,7 +642,6 @@ def _enforce_budget_on_serialized(
 
 def compress_context_map_reduce(
     context: List[Dict[str, Any]],
-    query: str,
     budget: TokenBudget,
 ) -> List[Dict[str, Any]]:
     if not context:

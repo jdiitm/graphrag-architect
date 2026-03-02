@@ -44,7 +44,6 @@ class TestContextCompression:
 
         result = compress_context_map_reduce(
             large_context,
-            query="How do services communicate?",
             budget=budget,
         )
         result_tokens = sum(
@@ -61,7 +60,6 @@ class TestContextCompression:
         ]
         result = compress_context_map_reduce(
             small_context,
-            query="What calls what?",
             budget=budget,
         )
         assert result == small_context
@@ -71,7 +69,6 @@ class TestContextCompression:
         large_context = _make_large_context(100)
         result = compress_context_map_reduce(
             large_context,
-            query="dependency chain",
             budget=tight_budget,
         )
         result_tokens = sum(
@@ -84,7 +81,6 @@ class TestContextCompression:
         context = _make_large_context(200)
         result = compress_context_map_reduce(
             context,
-            query="cross-service dependencies",
             budget=budget,
         )
         has_bridge_info = any(
@@ -106,7 +102,6 @@ class TestContextCompression:
         ):
             result = compress_context_map_reduce(
                 large_context,
-                query="test fallback",
                 budget=budget,
             )
         assert len(result) > 0
