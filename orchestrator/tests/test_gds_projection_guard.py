@@ -184,3 +184,107 @@ class TestGDSProjectionGuard:
         )
         assert mgr._guard is not None
         assert mgr._guard.max_projection_nodes == 500_000
+
+
+class TestProjectionMemoryGuard:
+
+    def test_config_has_max_memory_mb(self) -> None:
+        cfg = ProjectionGuardConfig()
+        assert hasattr(cfg, "max_memory_mb")
+        assert isinstance(cfg.max_memory_mb, int)
+        assert cfg.max_memory_mb > 0
+
+    def test_config_has_estimated_bytes_per_node(self) -> None:
+        cfg = ProjectionGuardConfig()
+        assert hasattr(cfg, "estimated_bytes_per_node")
+        assert isinstance(cfg.estimated_bytes_per_node, int)
+        assert cfg.estimated_bytes_per_node > 0
+
+    def test_from_env_reads_max_memory_mb(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GDS_MAX_MEMORY_MB", "2048")
+        cfg = ProjectionGuardConfig.from_env()
+        assert cfg.max_memory_mb == 2048
+
+    def test_from_env_reads_estimated_bytes_per_node(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GDS_ESTIMATED_BYTES_PER_NODE", "4096")
+        cfg = ProjectionGuardConfig.from_env()
+        assert cfg.estimated_bytes_per_node == 4096
+
+    @pytest.fixture
+    def mock_redis(self) -> AsyncMock:
+        redis = AsyncMock()
+        redis.get = AsyncMock(return_value=None)
+        redis.set = AsyncMock()
+        redis.delete = AsyncMock()
+        redis.incr = AsyncMock()
+        return redis
+
+    @pytest.fixture
+    def mock_driver(self) -> MagicMock:
+        driver = MagicMock()
+        session = AsyncMock()
+        session.execute_write = AsyncMock()
+        driver.session = MagicMock(return_value=session)
+        driver.session.return_value.__aenter__ = AsyncMock(
+            return_value=session,
+        )
+        driver.session.return_value.__aexit__ = AsyncMock(return_value=False)
+        return driver
+
+    @pytest.mark.asyncio
+    async def test_projection_rejected_when_memory_exceeds_limit(
+        self, mock_driver: MagicMock, mock_redis: AsyncMock,
+    ) -> None:
+        guard_cfg = ProjectionGuardConfig(
+            max_projection_nodes=1_000_000,
+            max_memory_mb=1,
+            estimated_bytes_per_node=2048,
+        )
+        mgr = GDSProjectionManager(
+            driver=mock_driver,
+            redis_conn=mock_redis,
+            guard_config=guard_cfg,
+        )
+        mgr._estimate_tenant_graph_size = AsyncMock(return_value=1000)
+        with pytest.raises(GraphTooLargeError, match="memory"):
+            await mgr.ensure_projection("tenant-oom")
+
+    @pytest.mark.asyncio
+    async def test_projection_allowed_within_memory_limit(
+        self, mock_driver: MagicMock, mock_redis: AsyncMock,
+    ) -> None:
+        guard_cfg = ProjectionGuardConfig(
+            max_projection_nodes=1_000_000,
+            max_memory_mb=100,
+            estimated_bytes_per_node=2048,
+        )
+        mgr = GDSProjectionManager(
+            driver=mock_driver,
+            redis_conn=mock_redis,
+            guard_config=guard_cfg,
+        )
+        mgr._estimate_tenant_graph_size = AsyncMock(return_value=100)
+        result = await mgr.ensure_projection("tenant-ok")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_memory_check_uses_bytes_per_node_estimate(
+        self, mock_driver: MagicMock, mock_redis: AsyncMock,
+    ) -> None:
+        guard_cfg = ProjectionGuardConfig(
+            max_projection_nodes=1_000_000,
+            max_memory_mb=10,
+            estimated_bytes_per_node=10_000,
+        )
+        mgr = GDSProjectionManager(
+            driver=mock_driver,
+            redis_conn=mock_redis,
+            guard_config=guard_cfg,
+        )
+        mgr._estimate_tenant_graph_size = AsyncMock(return_value=2000)
+        with pytest.raises(GraphTooLargeError, match="memory"):
+            await mgr.ensure_projection("tenant-heavy")

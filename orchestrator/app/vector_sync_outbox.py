@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -10,11 +11,38 @@ from typing import Any, Dict, List, Protocol, Tuple, runtime_checkable
 
 from pydantic import BaseModel, Field, field_validator
 
-from orchestrator.app.vector_store import VectorRecord
-
 logger = logging.getLogger(__name__)
 
 _DEFAULT_VECTOR_SYNC_TOPIC = "graphrag.vector-sync"
+
+
+async def _serialize_event_payload(
+    pruned_ids: List[str],
+    vectors: List[Any],
+) -> Tuple[str, str]:
+    def _do_serialize() -> Tuple[str, str]:
+        pruned_json = json.dumps(pruned_ids)
+        vectors_json = json.dumps([
+            dataclasses.asdict(v)
+            if dataclasses.is_dataclass(v) and not isinstance(v, type)
+            else v
+            for v in vectors
+        ])
+        return pruned_json, vectors_json
+    return await asyncio.to_thread(_do_serialize)
+
+
+async def _deserialize_event_payload(
+    pruned_ids_raw: str,
+    vectors_raw: str,
+) -> Tuple[List[str], List[Any]]:
+    from orchestrator.app.vector_store import VectorRecord
+
+    def _do_deserialize() -> Tuple[List[str], List[Any]]:
+        pruned_ids = json.loads(pruned_ids_raw)
+        raw_vectors = json.loads(vectors_raw)
+        return pruned_ids, [VectorRecord(**v) for v in raw_vectors]
+    return await asyncio.to_thread(_do_deserialize)
 
 
 class OutboxOverflowError(RuntimeError):
@@ -383,15 +411,6 @@ return 1
         return f"{self._KEY_PREFIX}{event_id}"
 
     @staticmethod
-    def _serialize_vectors(vectors: List[Any]) -> str:
-        return json.dumps([
-            dataclasses.asdict(v)
-            if dataclasses.is_dataclass(v) and not isinstance(v, type)
-            else v
-            for v in vectors
-        ])
-
-    @staticmethod
     def _dedup_key_for(event: VectorSyncEvent) -> str:
         if event.operation == "upsert" and event.vectors:
             ids = sorted(getattr(v, "id", "") for v in event.vectors)
@@ -404,12 +423,15 @@ return 1
 
     async def write_event(self, event: VectorSyncEvent) -> None:
         dedup_rkey = self._dedup_redis_key(event)
+        pruned_json, vectors_json = await _serialize_event_payload(
+            event.pruned_ids, event.vectors,
+        )
         mapping = {
             "event_id": event.event_id,
             "collection": event.collection,
             "operation": event.operation,
-            "pruned_ids": json.dumps(event.pruned_ids),
-            "vectors": self._serialize_vectors(event.vectors),
+            "pruned_ids": pruned_json,
+            "vectors": vectors_json,
             "status": event.status,
             "retry_count": str(event.retry_count),
             "_dedup_rkey": dedup_rkey,
@@ -437,15 +459,15 @@ return 1
             if not data:
                 await self._redis.srem(self._INDEX_KEY, eid)
                 continue
+            pruned_ids, vectors = await _deserialize_event_payload(
+                data["pruned_ids"], data.get("vectors", "[]"),
+            )
             events.append(VectorSyncEvent(
                 event_id=data["event_id"],
                 collection=data["collection"],
                 operation=data.get("operation", "delete"),
-                pruned_ids=json.loads(data["pruned_ids"]),
-                vectors=[
-                    VectorRecord(**v)
-                    for v in json.loads(data.get("vectors", "[]"))
-                ],
+                pruned_ids=pruned_ids,
+                vectors=vectors,
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", "0")),
             ))
@@ -504,15 +526,15 @@ return 1
             data = await self._redis.hgetall(self._event_key(eid_str))
             if not data:
                 continue
+            pruned_ids, vectors = await _deserialize_event_payload(
+                data["pruned_ids"], data.get("vectors", "[]"),
+            )
             claimed.append(VectorSyncEvent(
                 event_id=data["event_id"],
                 collection=data["collection"],
                 operation=data.get("operation", "delete"),
-                pruned_ids=json.loads(data["pruned_ids"]),
-                vectors=[
-                    VectorRecord(**v)
-                    for v in json.loads(data.get("vectors", "[]"))
-                ],
+                pruned_ids=pruned_ids,
+                vectors=vectors,
                 status="claimed",
                 retry_count=int(data.get("retry_count", "0")),
             ))
@@ -613,35 +635,36 @@ class Neo4jOutboxStore:
     def __init__(self, driver: Any) -> None:
         self._driver = driver
 
-    def _event_params(self, event: VectorSyncEvent) -> dict:
+    async def _event_params_async(self, event: VectorSyncEvent) -> dict:
+        pruned_json, vectors_json = await _serialize_event_payload(
+            event.pruned_ids, event.vectors,
+        )
         return {
             "event_id": event.event_id,
             "collection": event.collection,
             "operation": event.operation,
-            "pruned_ids": json.dumps(event.pruned_ids),
-            "vectors": json.dumps([
-                dataclasses.asdict(v)
-                if dataclasses.is_dataclass(v) and not isinstance(v, type)
-                else v
-                for v in event.vectors
-            ]),
+            "pruned_ids": pruned_json,
+            "vectors": vectors_json,
             "status": event.status,
             "retry_count": event.retry_count,
         }
 
     async def write_in_tx(self, tx: Any, event: VectorSyncEvent) -> None:
-        await tx.run(self._CREATE_QUERY, **self._event_params(event))
+        params = await self._event_params_async(event)
+        await tx.run(self._CREATE_QUERY, **params)
 
     async def write_after_tx(self, events: List[VectorSyncEvent]) -> None:
         if not events:
             return
         create_query = self._CREATE_QUERY
-        params_fn = self._event_params
+        pre_serialized = [
+            await self._event_params_async(e) for e in events
+        ]
         async with self._driver.session(default_access_mode="WRITE") as session:
 
             async def _batch_create(tx: Any) -> None:
-                for event in events:
-                    await tx.run(create_query, **params_fn(event))
+                for params in pre_serialized:
+                    await tx.run(create_query, **params)
 
             await session.execute_write(_batch_create)
 
@@ -654,15 +677,15 @@ class Neo4jOutboxStore:
             records = await session.execute_read(self._read_pending)
         events: List[VectorSyncEvent] = []
         for data in records:
+            pruned_ids, vectors = await _deserialize_event_payload(
+                data["pruned_ids"], data.get("vectors", "[]"),
+            )
             events.append(VectorSyncEvent(
                 event_id=data["event_id"],
                 collection=data["collection"],
                 operation=data.get("operation", "delete"),
-                pruned_ids=json.loads(data["pruned_ids"]),
-                vectors=[
-                    VectorRecord(**v)
-                    for v in json.loads(data.get("vectors", "[]"))
-                ],
+                pruned_ids=pruned_ids,
+                vectors=vectors,
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", 0)),
             ))
@@ -711,15 +734,15 @@ class Neo4jOutboxStore:
             )
         events: List[VectorSyncEvent] = []
         for data in records:
+            pruned_ids, vectors = await _deserialize_event_payload(
+                data["pruned_ids"], data.get("vectors", "[]"),
+            )
             events.append(VectorSyncEvent(
                 event_id=data["event_id"],
                 collection=data["collection"],
                 operation=data.get("operation", "delete"),
-                pruned_ids=json.loads(data["pruned_ids"]),
-                vectors=[
-                    VectorRecord(**v)
-                    for v in json.loads(data.get("vectors", "[]"))
-                ],
+                pruned_ids=pruned_ids,
+                vectors=vectors,
                 status="claimed",
                 retry_count=int(data.get("retry_count", 0)),
             ))

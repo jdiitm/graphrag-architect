@@ -33,6 +33,8 @@ class ProjectionGuardConfig:
     max_projection_nodes: int = 500_000
     max_concurrent_projections: int = 3
     estimation_query_timeout: float = 5.0
+    max_memory_mb: int = 4096
+    estimated_bytes_per_node: int = 2048
 
     @classmethod
     def from_env(cls) -> ProjectionGuardConfig:
@@ -45,6 +47,12 @@ class ProjectionGuardConfig:
             ),
             estimation_query_timeout=float(
                 os.environ.get("GDS_ESTIMATION_QUERY_TIMEOUT", "5.0"),
+            ),
+            max_memory_mb=int(
+                os.environ.get("GDS_MAX_MEMORY_MB", "4096"),
+            ),
+            estimated_bytes_per_node=int(
+                os.environ.get("GDS_ESTIMATED_BYTES_PER_NODE", "2048"),
             ),
         )
 
@@ -449,6 +457,17 @@ class GDSProjectionManager:
                 f"Tenant {tenant_id!r} graph has {node_count} nodes, "
                 f"exceeding projection limit "
                 f"{self._guard.max_projection_nodes}"
+            )
+
+        estimated_mb = (
+            node_count * self._guard.estimated_bytes_per_node
+        ) / (1024 * 1024)
+        if estimated_mb > self._guard.max_memory_mb:
+            raise GraphTooLargeError(
+                f"Tenant {tenant_id!r} projection estimated at "
+                f"{estimated_mb:.1f} MB ({node_count} nodes x "
+                f"{self._guard.estimated_bytes_per_node} bytes/node), "
+                f"exceeding memory limit {self._guard.max_memory_mb} MB"
             )
 
         async with self._projection_semaphore:
