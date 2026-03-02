@@ -4,7 +4,7 @@
 You are an elite, agentic AI Software Architect. Your objective is to build a production-grade, highly scalable **GraphRAG Domain Expert** designed to analyze, map, and query complex distributed systems. This system will ingest infrastructure manifests (e.g., Kubernetes), message broker topologies (e.g., Kafka), and raw codebase structures to build a holistic Knowledge Graph (KG). The end goal is a hybrid retrieval system capable of answering deep, multi-hop architectural questions.
 
 ## 2. Technology Stack & Environment
-* **Core Orchestration & Routing:** Python (FastAPI, LangGraph/LlamaIndex).
+* **Core Orchestration & Routing:** Python (FastAPI, LangGraph).
 * **High-Throughput Ingestion Workers:** Go.
 * **Knowledge Graph Database:** Neo4j.
 * **Event Bus (Async Document Ingestion):** Apache Kafka.
@@ -20,7 +20,7 @@ You operate under strict, non-negotiable constraints.
 ## 4. Architectural Directives
 
 We are implementing a **Hybrid VectorCypher Retrieval approach**:
-* **Extraction:** Prompt the LLM to extract explicit entities (Services, Pods, Topics, Databases) and relationships (`DEPENDS_ON`, `CONSUMES_FROM`, `WRITES_TO`) from raw text into structured Cypher queries for Neo4j.
+* **Extraction:** Prompt the LLM to extract explicit entities (Services, K8sDeployments, KafkaTopics, Databases) and relationships (`CALLS`, `PRODUCES`, `CONSUMES`, `DEPLOYED_IN`) from raw text into structured Cypher queries for Neo4j.
 * **Global vs. Local Search:** Simple entity lookups should route to standard Vector Search. Complex structural questions (e.g., "If the Auth service fails, which Kafka topics will experience backpressure?") must trigger an agentic loop that generates Cypher graph traversals, pulls the localized subgraph, and synthesizes the topology.
 
 ## 5. The Agentic Execution Loop (Strict TDD)
@@ -33,22 +33,4 @@ For every task you undertake, you must execute the following Red-Green-Refactor 
 5.  **<refactor>**: Clean up the code, optimize logic, and enforce the formatting invariants from Section 3. Verify tests remain green.
 
 ## 6. Pre-Push / Pre-PR Quality Gates (Mandatory)
-Before any `git push` or `gh pr create`, you must pass ALL quality gates. This is non-negotiable.
-
-```bash
-# 1. Python lint (from repo root, inside venv)
-source .venv/bin/activate && pylint orchestrator/
-
-# 2. Python tests
-python -m pytest orchestrator/tests/ -v
-
-# 3. Go tests (from module root)
-cd workers/ingestion && go test ./... -v -count=1 -timeout 30s
-
-# 4. Go lint (from module root)
-cd workers/ingestion && golangci-lint run ./...
-```
-
-* If ANY gate fails, stop. Fix it, re-run ALL gates, then proceed.
-* Never skip, disable, or add inline suppression comments to bypass a gate.
-* Always report results (e.g., "Pylint: 10/10, Python: 11/11, Go: 8/8, Go lint: clean").
+Quality gates are defined in `.cursor/rules/pre-push-tests.mdc`. Before any `git push` or `gh pr create`, all four gates (pylint, pytest, go test, golangci-lint) must pass. This is non-negotiable.

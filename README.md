@@ -2,6 +2,8 @@
 
 A production-grade GraphRAG system that analyzes distributed systems by building a knowledge graph from source code, infrastructure manifests, and message broker topologies. It answers multi-hop architectural questions using hybrid Vector + Cypher retrieval over Neo4j.
 
+For the full system specification — data model, functional requirements, security architecture, SLOs, and roadmap — see [docs/SPEC.md](docs/SPEC.md).
+
 ## Architecture
 
 ```
@@ -19,9 +21,10 @@ A production-grade GraphRAG system that analyzes distributed systems by building
                                       │
                        ┌──────────────┼──────────────┐
                        ▼              ▼              ▼
-                    Neo4j          Kafka          Gemini
+                    Neo4j          Kafka        Gemini / Claude
                  (Knowledge      (Event Bus)     (LLM Entity
-                  Graph)                        Extraction)
+                  Graph)                       Extraction +
+                                               Synthesis)
 ```
 
 **Extraction pipeline** — LLM-powered structured extraction from `.go` and `.py` source files into typed Pydantic models (`ServiceNode`, `CallsEdge`, etc.), committed as Neo4j nodes and relationships.
@@ -36,119 +39,32 @@ A production-grade GraphRAG system that analyzes distributed systems by building
 
 | Component | Technology |
 |---|---|
-| Orchestration | Python, LangGraph, FastAPI |
+| Orchestration | Python 3.12, LangGraph, FastAPI |
 | Knowledge Graph | Neo4j 5.26 |
 | Event Bus | Apache Kafka 3.9 (KRaft) |
-| LLM Extraction | Gemini (via LangChain) |
+| LLM Providers | Gemini (extraction, via LangChain), Claude (complex synthesis) |
 | Data Models | Pydantic v2 |
-| Ingestion Workers | Go (worker pool + DLQ) |
+| Ingestion Workers | Go 1.24 (franz-go, worker pool + DLQ) |
+| Vector Search | Neo4j native / Qdrant |
+| Caching | Redis |
 
 ## Project Structure
 
 ```
 graphrag-architect/
-├── orchestrator/                        # Python LLM extraction pipeline
-│   ├── app/                             # 64 Python modules
-│   │   ├── access_control.py            # SecurityPrincipal, CypherPermissionFilter (FR-7)
-│   │   ├── agentic_traversal.py         # Incremental 1-hop LLM-guided traversal (FR-15)
-│   │   ├── ast_extraction.py            # Go/Python AST parsing for code extraction
-│   │   ├── circuit_breaker.py           # Three-state circuit breaker (NFR-6)
-│   │   ├── config.py                    # ExtractionConfig, Neo4jConfig, RedisConfig
-│   │   ├── context_manager.py           # Token budget management for synthesis (FR-11)
-│   │   ├── cypher_sandbox.py            # Cypher query sandboxing
-│   │   ├── cypher_validator.py          # Read-only Cypher query validation
-│   │   ├── entity_resolver.py           # Fuzzy cross-repo name deduplication
-│   │   ├── extraction_models.py         # Pydantic schemas (ServiceNode, CallsEdge, etc.)
-│   │   ├── graph_builder.py             # LangGraph ingestion DAG (7 nodes)
-│   │   ├── graph_embeddings.py          # Node2Vec structural embeddings (FR-17)
-│   │   ├── ingest_models.py             # IngestRequest/Response Pydantic models
-│   │   ├── llm_extraction.py            # ServiceExtractor (filter, batch, extract)
-│   │   ├── main.py                      # FastAPI endpoints (/health, /ingest, /query)
-│   │   ├── manifest_parser.py           # K8s + Kafka YAML parsing
-│   │   ├── neo4j_client.py              # Cypher MERGE operations
-│   │   ├── neo4j_pool.py               # Connection pooling for Neo4j
-│   │   ├── node_sink.py                # IncrementalNodeSink with namespace partitioning
-│   │   ├── observability.py             # OpenTelemetry TracerProvider + metrics (FR-8)
-│   │   ├── query_classifier.py          # Keyword-based query complexity classifier (FR-4)
-│   │   ├── query_engine.py              # LangGraph query DAG (7 nodes) (FR-4)
-│   │   ├── query_models.py              # QueryRequest/Response/State models (FR-4)
-│   │   ├── query_templates.py           # Parameterized Cypher template catalog (FR-10)
-│   │   ├── rag_evaluator.py             # Faithfulness/groundedness evaluation (FR-12)
-│   │   ├── reranker.py                  # Cross-encoder/BM25 reranking (FR-11)
-│   │   ├── schema_validation.py         # Pydantic validation + correction loop
-│   │   ├── semantic_partitioner.py      # Leiden community detection partitioning (FR-18)
-│   │   ├── tenant_isolation.py          # TenantAwareDriverPool (FR-9)
-│   │   ├── vector_store.py              # VectorStore protocol + Neo4j/Qdrant (FR-13)
-│   │   ├── workspace_loader.py          # Filesystem workspace scanner
-│   │   └── schema_init.cypher           # Neo4j constraints and indexes
-│   │   # ... plus 30 additional modules (guardrails, caching, audit, etc.)
-│   ├── tests/                           # 137 test files, 1800+ tests
-│   │   ├── conftest.py                  # Shared fixtures (query state, mock helpers)
-│   │   ├── test_access_control.py
-│   │   ├── test_agentic_traversal.py
-│   │   ├── test_circuit_breaker.py
-│   │   ├── test_graph_builder.py
-│   │   ├── test_graph_embeddings.py
-│   │   ├── test_ingest_api.py
-│   │   ├── test_integration.py
-│   │   ├── test_manifest_parser.py
-│   │   ├── test_neo4j_client.py
-│   │   ├── test_observability.py
-│   │   ├── test_query_api.py
-│   │   ├── test_query_classifier.py
-│   │   ├── test_query_engine.py
-│   │   ├── test_query_templates.py
-│   │   ├── test_rag_evaluator.py
-│   │   ├── test_schema_validation.py
-│   │   ├── test_semantic_partitioner.py
-│   │   ├── test_service_extractor.py
-│   │   ├── test_tenant_isolation.py
-│   │   ├── test_vector_store.py
-│   │   ├── test_workspace_loader.py
-│   │   └── ... (104 more test files)
+├── orchestrator/               # Python orchestrator (84 modules, 3,299 tests)
+│   ├── app/                    # LangGraph DAGs, FastAPI, Neo4j client, LLM extraction
+│   ├── tests/                  # 260 test files (unit, integration, security defeat)
 │   └── requirements.txt
-├── workers/                             # Go high-throughput ingestion
-│   └── ingestion/
-│       ├── cmd/                          # Entry point + Kafka wiring
-│       │   ├── main.go
-│       │   ├── kafka.go
-│       │   └── dlq_sink.go
-│       ├── internal/
-│       │   ├── blobstore/               # Blob storage abstraction
-│       │   ├── consumer/consumer.go      # JobSource interface + Consumer loop
-│       │   ├── dedup/                   # Content-hash deduplication
-│       │   ├── dispatcher/              # Worker pool (dispatcher + tests)
-│       │   ├── dlq/                     # Dead Letter Queue (handler + file sink)
-│       │   ├── domain/job.go            # Job, Result value types
-│       │   ├── healthz/                 # Liveness/readiness probes
-│       │   ├── metrics/                 # Prometheus metrics (consumer lag, batch duration, DLQ, jobs)
-│       │   ├── outbox/                  # Transactional outbox pattern
-│       │   ├── parser/                  # Go/Python file AST parsing
-│       │   ├── processor/              # DocumentProcessor interface (5 implementations)
-│       │   ├── ratelimit/              # Token-bucket rate limiting
-│       │   └── telemetry/              # OpenTelemetry TracerProvider + span helpers (FR-8)
-│       └── go.mod
+├── workers/ingestion/          # Go high-throughput Kafka ingestion workers
+│   ├── cmd/                    # Entry point, Kafka wiring, DLQ sink
+│   └── internal/               # consumer, dispatcher, processor, dlq, blobstore, dedup, metrics
 ├── infrastructure/
-│   ├── docker-compose.yml               # Neo4j + Kafka
-│   ├── helm/graphrag/                   # Helm chart for production deployment
-│   │   ├── Chart.yaml
-│   │   ├── values.yaml
-│   │   └── templates/
-│   └── k8s/                             # Kubernetes deployment manifests
-│       ├── namespace.yaml
-│       ├── configmap.yaml
-│       ├── secrets.yaml
-│       ├── orchestrator-deployment.yaml
-│       ├── ingestion-worker-deployment.yaml
-│       ├── neo4j-statefulset.yaml
-│       ├── kafka-statefulset.yaml
-│       ├── hpa.yaml
-│       ├── ingress.yaml
-│       ├── network-policies.yaml
-│       ├── alerting.yaml
-│       └── neo4j-schema-job.yaml
-├── docs/SPEC.md                         # Consolidated system specification
-└── CLAUDE.md                            # AI agent invariants
+│   ├── docker-compose.yml      # Neo4j, Kafka, Redis, Postgres (local dev)
+│   ├── helm/graphrag/          # Helm chart for production deployment
+│   └── k8s/                    # Raw Kubernetes manifests (11 files)
+├── docs/SPEC.md                # Consolidated system specification
+└── CLAUDE.md                   # AI agent invariants and TDD protocol
 ```
 
 ## Prerequisites
@@ -167,7 +83,7 @@ cd infrastructure
 docker compose up -d
 ```
 
-This starts Neo4j (ports 7474/7687) and Kafka (port 9092).
+This starts Neo4j (ports 7474/7687), Kafka (port 9092), Redis (port 6379), and Postgres (port 5432).
 
 ### 2. Set up Python environment
 
@@ -183,13 +99,17 @@ pip install pytest pytest-asyncio
 ```bash
 export GOOGLE_API_KEY="your-gemini-api-key"
 
-# Optional overrides
-export EXTRACTION_MODEL="gemini-2.5-pro"           # default: gemini-2.0-flash
-export EXTRACTION_MAX_CONCURRENCY="5"              # default: 5
-export EXTRACTION_TOKEN_BUDGET="200000"            # default: 200000
-export EXTRACTION_MAX_RETRIES="5"                  # default: 5
-export EXTRACTION_RETRY_MIN_WAIT="1.0"             # default: 1.0s
-export EXTRACTION_RETRY_MAX_WAIT="60.0"            # default: 60.0s
+# Optional orchestrator overrides
+export NEO4J_URI="bolt://localhost:7687"              # default: bolt://localhost:7687
+export REDIS_URL="redis://localhost:6379"              # default: redis://localhost:6379
+export EXTRACTION_MODEL="gemini-2.5-pro"               # default: gemini-2.0-flash
+export EXTRACTION_MAX_CONCURRENCY="5"                  # default: 5
+export EXTRACTION_TOKEN_BUDGET="200000"                # default: 200000
+
+# Optional Go worker overrides
+export KAFKA_BROKERS="localhost:9092"                   # default: localhost:9092
+export ORCHESTRATOR_URL="http://localhost:8000"         # default: http://localhost:8000
+export PROCESSOR_MODE="kafka"                           # kafka | ast | http
 ```
 
 ### 4. Run tests
@@ -202,30 +122,6 @@ python -m pytest orchestrator/tests/ -v
 cd workers/ingestion && go test ./... -v
 ```
 
-## Graph Schema
-
-**Nodes:**
-- `Service` — id, name, language, framework, opentelemetry_enabled, team_owner, namespace_acl
-- `Database` — id, type, team_owner, namespace_acl
-- `KafkaTopic` — name, partitions, retention_ms, team_owner, namespace_acl
-- `K8sDeployment` — id, namespace, replicas, team_owner, namespace_acl
-
-**Edges:**
-- `CALLS` — source_service_id → target_service_id (protocol)
-- `PRODUCES` — service_id → topic_name (event_schema)
-- `CONSUMES` — service_id → topic_name (consumer_group)
-- `DEPLOYED_IN` — service_id → deployment_id
-
 ## Development
 
-This project follows strict TDD (Red-Green-Refactor). See `CLAUDE.md` for the agentic execution loop and coding invariants.
-
-## Testing Philosophy
-
-The test suite prioritizes **behavioral correctness over implementation coverage**:
-
-- **Behavior-first testing** — Assert outcomes and side effects, not call sequences or internal method dispatch. Tests should fail when the feature breaks, not when the implementation is refactored.
-- **Minimal mocking** — Only mock external boundaries (Neo4j, LLM providers, Redis, Kafka). Internal components are tested against real implementations wherever possible.
-- **Security defeat tests** — Adversarial inputs that verify defenses hold: SQL/Cypher injection, path traversal, ACL bypass, prompt injection, cross-tenant leakage.
-- **Observability contract tests** — Span names and metric labels are treated as API contracts; tests verify their existence because downstream dashboards and alerting depend on them.
-- **Schema compliance tests** — Cypher MERGE/MATCH patterns are scanned to verify tenant_id inclusion, preventing cross-tenant data leakage at the query level.
+This project follows strict TDD (Red-Green-Refactor). See `CLAUDE.md` for the agentic execution loop and coding invariants. Quality gates (pylint, pytest, go test, golangci-lint) are enforced before every push via `.cursor/rules/pre-push-tests.mdc`.

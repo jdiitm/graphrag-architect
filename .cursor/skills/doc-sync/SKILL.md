@@ -41,9 +41,10 @@ git status --porcelain      # must be empty
 
 ## Principle: Code is Truth
 
-- The PRD (`docs/prd/`) defines what the system SHOULD do — do NOT modify PRD files.
-- The architecture spec (`docs/architecture/`) defines the target design — update it ONLY when implementation has materially diverged (new components, removed components, changed interfaces).
-- All other docs (`README.md`, `architecture_state.md`) MUST reflect reality.
+- `docs/SPEC.md` is the canonical system specification. Update it when implementation status, counts, file maps, or schema DDL have materially diverged from code.
+- `CLAUDE.md` defines AI agent invariants — update only when the tech stack, entity types, or edge types change.
+- `README.md` is the user-facing entry point — keep it accurate (counts, quickstart, project structure).
+- `.cursor/skills/*/SKILL.md` reference specification files — update when canonical file paths change.
 
 ## Step 1: Read the Entire Codebase
 
@@ -72,17 +73,16 @@ For each source file, extract:
 **Get actual counts:**
 
 ```bash
-cd /home/j/side/graphrag-architect
 source .venv/bin/activate
 
 # Python test count
 python -m pytest orchestrator/tests/ -v --co -q 2>/dev/null | tail -1
 
 # Go test count
-cd /home/j/side/graphrag-architect/workers/ingestion && go test ./... -v -count=1 -timeout 30s 2>&1 | grep -c '^--- PASS'
+cd workers/ingestion && go test ./... -v -count=1 -timeout 30s 2>&1 | grep -c '^--- PASS'
 
 # File tree
-cd /home/j/side/graphrag-architect && find . -type f \
+cd "$(git rev-parse --show-toplevel)" && find . -type f \
   ! -path './.git/*' \
   ! -path './.venv/*' \
   ! -path '*__pycache__*' \
@@ -96,9 +96,8 @@ Read each of these files in full:
 
 ```
 README.md
-architecture_state.md
-docs/architecture/01_SYSTEM_DESIGN.md
-docs/architecture/02_DATA_DICTIONARY.md
+CLAUDE.md
+docs/SPEC.md
 ```
 
 ## Step 3: Identify Discrepancies
@@ -110,33 +109,30 @@ Build a comparison table for each mutable doc. Check every factual claim against
 | Check | Source of Truth |
 |-------|----------------|
 | Project structure tree | Actual `find` output |
-| File descriptions | Actual file contents |
-| Test counts in "Run tests" section | Actual pytest/go test output |
-| Test file list | Actual `orchestrator/tests/` contents |
+| Module/test counts | Actual pytest --collect-only / go test output |
 | Tech stack table | Actual imports in requirements.txt and go.mod |
-| Graph schema section | Actual `extraction_models.py` fields |
+| Docker-compose services | Actual `infrastructure/docker-compose.yml` |
 | Quickstart instructions | Actual `requirements.txt`, actual env vars in `config.py` |
-| Prerequisites | Actual toolchain requirements |
 
-### architecture_state.md checks
-
-| Check | Source of Truth |
-|-------|----------------|
-| Component map (ASCII diagram) | Actual modules and their connections |
-| Component descriptions | Actual code in each module |
-| Data flow description | Actual `graph_builder.py` DAG and `main.py` endpoints |
-| Graph schema (nodes/edges) | Actual `extraction_models.py` |
-| File listings per component | Actual files on disk |
-
-### docs/architecture/01_SYSTEM_DESIGN.md checks
+### CLAUDE.md checks
 
 | Check | Source of Truth |
 |-------|----------------|
-| File tree listings per component | Actual files on disk |
-| DAG node status table (Implemented/Stub) | Actual `graph_builder.py` and referenced modules |
-| IngestionState fields | Actual TypedDict in `graph_builder.py` |
-| Config fields and defaults | Actual `config.py` |
-| Test counts per component | Actual test output |
+| Tech stack | Actual imports (LangGraph vs LlamaIndex, etc.) |
+| Entity types | Actual `extraction_models.py` class names |
+| Edge types | Actual relationship names in `extraction_models.py` |
+
+### docs/SPEC.md checks
+
+| Check | Source of Truth |
+|-------|----------------|
+| Section 4.3 module/test counts | Actual file counts and pytest/go test output |
+| Section 5.5 schema DDL | Actual `schema_init.cypher` |
+| Section 13.2 API endpoints | Actual `@app.get`/`@app.post` decorators in `main.py` |
+| Section 16 CI pipeline | Actual `.github/workflows/ci.yml` |
+| Section 19.1 production checklist | Actual code (verify Implemented items still hold) |
+| Appendix A file maps | Actual files on disk |
+| All numeric claims | Actual counts, defaults in `config.py` |
 
 ## Step 4: Apply Updates
 
@@ -148,37 +144,36 @@ For each discrepancy found, update the doc to match reality. Follow these rules:
 4. **Never deflate.** If something IS implemented, make sure the doc reflects it.
 5. **Update counts.** Test counts, file counts, and line counts must be exact.
 6. **Update trees.** Project structure trees must match `find` output exactly.
-7. **Do NOT modify PRD files** (`docs/prd/*`). These are the spec, not the implementation record.
+7. **Preserve spec intent.** Update factual claims (counts, file paths, DDL) but do not change architectural decisions or requirement definitions in `docs/SPEC.md`.
 
 ### Specific update targets
 
 **README.md:**
-- Project structure tree
-- Test counts in quickstart section
-- File descriptions if files were added/removed/renamed
-- Graph schema if models changed
+- Project structure tree and module/test counts
+- Docker-compose service list
+- Tech stack table
 
-**architecture_state.md:**
-- Component descriptions if new modules were added
-- ASCII diagram if data flow changed
-- File listings if files were added/removed
+**CLAUDE.md:**
+- Tech stack line (ensure no stale framework references)
+- Entity types and edge types (must match extraction_models.py)
 
-**docs/architecture/01_SYSTEM_DESIGN.md:**
-- DAG node status table (Implemented/Stub column)
-- File tree listings per component
-- IngestionState fields if they changed
-- Only update if there's a material factual error (not style preferences)
+**docs/SPEC.md:**
+- Section 4.3: module/test counts
+- Section 5.5: schema DDL (must match schema_init.cypher verbatim)
+- Section 13.2: API endpoints (implemented vs planned)
+- Section 16: test counts and CI pipeline status
+- Section 19.1: production checklist statuses
+- Appendix A: file maps (add new files, remove deleted files)
 
 ## Step 5: Run Quality Gates
 
 After making changes, verify nothing is broken:
 
 ```bash
-cd /home/j/side/graphrag-architect
 source .venv/bin/activate
 pylint orchestrator/
 python -m pytest orchestrator/tests/ -v
-cd /home/j/side/graphrag-architect/workers/ingestion && go test ./... -v -count=1 -timeout 30s
+cd workers/ingestion && go test ./... -v -count=1 -timeout 30s
 ```
 
 ## Step 6: Commit
@@ -186,8 +181,7 @@ cd /home/j/side/graphrag-architect/workers/ingestion && go test ./... -v -count=
 If any docs were changed:
 
 ```bash
-cd /home/j/side/graphrag-architect
-git add README.md architecture_state.md docs/architecture/
+git add README.md CLAUDE.md docs/SPEC.md
 git commit -m "$(cat <<'EOF'
 docs: sync documentation with codebase reality
 
@@ -217,8 +211,9 @@ Present a summary to the user:
 ### Already Accurate (No Changes)
 - <file>: verified, no discrepancies
 
-### Skipped (Immutable)
-- docs/prd/*: specification files, not modified
+### Skipped
+- .cursor/skills/*: skill files (update only when canonical file paths change)
+- .cursor/rules/*: rule files (update only when quality gate commands change)
 ```
 
 ## Step 8: HALT

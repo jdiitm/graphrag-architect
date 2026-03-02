@@ -56,7 +56,7 @@ Apply these rules mechanically. No judgment calls.
 | **YELLOW** | No RED triggers, but at least one HIGH finding with file:line evidence |
 | **GREEN** | All quality gates pass, all FRs implemented with tests, zero CRITICAL or HIGH findings |
 
-All FRs (FR-1 through FR-8) are implemented. The audit verifies they remain functional.
+All FRs (FR-1 through FR-18) are defined in `docs/SPEC.md` Section 8. The audit verifies implemented FRs remain functional.
 
 ## Precondition Gate
 
@@ -71,9 +71,9 @@ git status --porcelain      # must be empty
 
 Read in full:
 
-- `docs/prd/02_SYSTEM_REQUIREMENTS.md`
-- `docs/architecture/01_SYSTEM_DESIGN.md`
-- `docs/architecture/02_DATA_DICTIONARY.md`
+- `docs/SPEC.md` (Sections 8-9: Functional Requirements FR-1 through FR-18, NFRs and SLOs)
+- `docs/SPEC.md` (Section 4: System Architecture)
+- `docs/SPEC.md` (Section 5: Data Model — node types, edge types, constraints)
 - `CLAUDE.md`
 
 Note which FRs exist, their scope, and their acceptance criteria. These are claims to verify.
@@ -141,7 +141,7 @@ orchestrator/tests/test_cypher_validator.py
 
 **A1. Requirement Coverage:**
 
-For each FR (FR-1 through FR-8):
+For each FR (FR-1 through FR-18):
 
 | Status | Meaning | Verdict Impact |
 |--------|---------|----------------|
@@ -266,7 +266,6 @@ workers/ingestion/internal/metrics/metrics.go
 workers/ingestion/internal/metrics/observer.go
 pyproject.toml
 README.md
-architecture_state.md
 ```
 
 Also read any files from Step 3 discovery not covered by Sub-Audits A-B.
@@ -338,7 +337,7 @@ Merge all sub-audit findings. Write to `audit-report.md`. **Only include section
 ## Executive Summary
 
 - Quality Gates: Pylint X/10, Python A/B, Go C/D
-- FRs: N/8 implemented
+- FRs: N/18 implemented
 - Findings: X CRITICAL, Y HIGH, Z LOW
 - **Verdict: RED / YELLOW / GREEN**
 ```
@@ -346,7 +345,7 @@ Merge all sub-audit findings. Write to `audit-report.md`. **Only include section
 **If GREEN:** The report ends after the Executive Summary. Add:
 
 ```markdown
-All quality gates pass. All requirements (FR-1 through FR-8) implemented with tests.
+All quality gates pass. All requirements (FR-1 through FR-18) implemented with tests.
 No CRITICAL or HIGH findings. System is healthy.
 
 ## Verdict
