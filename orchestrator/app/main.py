@@ -4,7 +4,7 @@ import binascii
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, AsyncIterator, Dict, Generator, List, Optional
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
@@ -17,9 +17,8 @@ from orchestrator.app.access_control import (
     InvalidTokenError,
     SecurityPrincipal,
 )
+from orchestrator.app.checkpoint_store import close_checkpointer, init_checkpointer
 from orchestrator.app.circuit_breaker import CircuitOpenError
-from orchestrator.app.graph_builder import IngestionDegradedError
-from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.config import (
     AuthConfig,
     JobStoreConfig,
@@ -27,10 +26,13 @@ from orchestrator.app.config import (
     ProductionConfigValidator,
     RateLimitConfig,
 )
-from orchestrator.app.query_templates import TemplateCatalog
-from orchestrator.app.tenant_security import TenantScopeVerifier
+from orchestrator.app.distributed_lock import create_ingestion_semaphore
 from orchestrator.app.executor import shutdown_pool, shutdown_thread_pool
-from orchestrator.app.graph_builder import ingestion_graph, run_streaming_pipeline
+from orchestrator.app.graph_builder import (
+    IngestionDegradedError,
+    ingestion_graph,
+    run_streaming_pipeline,
+)
 from orchestrator.app.ingest_models import (
     IngestJobResponse,
     IngestRequest,
@@ -38,7 +40,6 @@ from orchestrator.app.ingest_models import (
     create_ingest_job_store,
 )
 from orchestrator.app.kafka_consumer import AsyncKafkaConsumer
-from orchestrator.app.checkpoint_store import close_checkpointer, init_checkpointer
 from orchestrator.app.neo4j_pool import close_driver, init_driver
 from orchestrator.app.observability import configure_metrics, configure_telemetry
 from orchestrator.app.query_engine import get_eval_store, query_graph
@@ -48,8 +49,10 @@ from orchestrator.app.query_models import (
     QueryResponse,
     create_job_store,
 )
+from orchestrator.app.query_templates import TemplateCatalog
+from orchestrator.app.tenant_isolation import TenantContext
+from orchestrator.app.tenant_security import TenantScopeVerifier
 from orchestrator.app.token_bucket import create_rate_limiter
-from orchestrator.app.distributed_lock import create_ingestion_semaphore
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +114,7 @@ async def _kafka_ingest_callback(raw_files: List[Dict[str, str]]) -> Dict[str, A
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ProductionConfigValidator.from_env().validate_production_invariants()
     deployment_mode = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
     TenantScopeVerifier(TemplateCatalog()).enforce_startup(deployment_mode)
@@ -343,9 +346,9 @@ async def _invoke_ingestion_graph(
     raw_files: List[Dict[str, str]],
 ) -> Dict[str, Any]:
     try:
-        return await ingestion_graph.ainvoke(
-            _build_ingestion_initial_state(raw_files)
-        )
+        state: Any = _build_ingestion_initial_state(raw_files)
+        result: Dict[str, Any] = await ingestion_graph.ainvoke(state)
+        return result
     except (CircuitOpenError, IngestionDegradedError):
         raise
     except Exception as exc:
@@ -485,7 +488,8 @@ async def query(
 
     initial_state = _build_query_state(request, authorization or "")
     try:
-        result = await query_graph.ainvoke(initial_state)
+        graph_input: Any = initial_state
+        result = await query_graph.ainvoke(graph_input)
     except AuthConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except InvalidTokenError as exc:
@@ -503,7 +507,8 @@ async def _run_query_job(job_id: str, initial_state: Dict[str, Any]) -> None:
     await _JOB_STORE.mark_running(job_id)
     await _JOB_STORE.heartbeat(job_id)
     try:
-        result = await query_graph.ainvoke(initial_state)
+        graph_input: Any = initial_state
+        result = await query_graph.ainvoke(graph_input)
         response = _result_to_response(result)
         await _JOB_STORE.complete(job_id, response)
     except Exception as exc:

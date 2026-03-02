@@ -73,7 +73,7 @@ def _bm25_score(
 
 
 def _candidate_text(candidate: Dict[str, Any]) -> str:
-    parts = []
+    parts: list[str] = []
     for key in ("name", "id", "source", "target", "result"):
         val = candidate.get(key)
         if val is not None:

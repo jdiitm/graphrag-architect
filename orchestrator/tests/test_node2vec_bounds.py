@@ -1,11 +1,11 @@
 import pytest
 
 from orchestrator.app.graph_embeddings import (
+    MAX_PYTHON_NODES,
     GraphTooLargeError,
     GraphTopology,
     Node2VecConfig,
     Node2VecEmbedder,
-    MAX_PYTHON_NODES,
 )
 
 

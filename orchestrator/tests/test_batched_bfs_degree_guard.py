@@ -9,7 +9,6 @@ from orchestrator.app.agentic_traversal import (
     execute_batched_hop,
 )
 
-
 _DEFAULT_ACL = {
     "is_admin": True,
     "acl_team": "",

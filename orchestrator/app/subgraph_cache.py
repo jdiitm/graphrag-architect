@@ -7,13 +7,16 @@ import os
 import sys
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 from orchestrator.app.redis_client import (
     create_async_redis,
     delete_keys_by_prefix,
     require_redis,
 )
+
+if TYPE_CHECKING:
+    from orchestrator.app.cypher_tokenizer import CypherToken
 
 logger = logging.getLogger(__name__)
 
@@ -26,21 +29,21 @@ class CacheStats:
     maxsize: int
 
 
-def _prev_non_ws(tokens: list, idx: int) -> "CypherToken | None":
+def _prev_non_ws(tokens: list[CypherToken], idx: int) -> CypherToken | None:
     for i in range(idx - 1, -1, -1):
         if tokens[i].token_type.value != "whitespace":
             return tokens[i]
     return None
 
 
-def _next_non_ws(tokens: list, idx: int) -> "CypherToken | None":
+def _next_non_ws(tokens: list[CypherToken], idx: int) -> CypherToken | None:
     for i in range(idx + 1, len(tokens)):
         if tokens[i].token_type.value != "whitespace":
             return tokens[i]
     return None
 
 
-def _is_variable_position(tokens: list, idx: int) -> bool:
+def _is_variable_position(tokens: list[CypherToken], idx: int) -> bool:
     from orchestrator.app.cypher_tokenizer import TokenType
 
     tok = tokens[idx]
@@ -333,11 +336,11 @@ class RedisSubgraphCache:
     async def get(self, key: str) -> Optional[List[Dict[str, Any]]]:
         l1_result = self._l1.get(key)
         if l1_result is not None:
-            return l1_result
+            return list(l1_result)
         try:
             raw = await self._redis.get(self._rkey(key))
             if raw is not None:
-                value = json.loads(raw)
+                value: list[dict[str, Any]] = json.loads(raw)
                 self._l1.put(key, value)
                 return value
         except Exception:
@@ -372,8 +375,8 @@ class RedisSubgraphCache:
     async def invalidate_by_nodes(self, node_ids: Set[str]) -> int:
         count = self._l1.invalidate_by_nodes(node_ids)
         try:
-            keys_to_delete: set = set()
-            tag_keys: list = []
+            keys_to_delete: set[str] = set()
+            tag_keys: list[str] = []
             for nid in node_ids:
                 tag_key = f"{self._prefix}{self._NODE_TAG_PREFIX}{nid}"
                 tag_keys.append(tag_key)

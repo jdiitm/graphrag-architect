@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from orchestrator.app.agentic_traversal import (
-    MAX_NODE_DEGREE,
     _SAMPLED_NEIGHBOR_TEMPLATE,
+    MAX_NODE_DEGREE,
     execute_hop,
 )
 

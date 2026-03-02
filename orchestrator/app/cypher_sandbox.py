@@ -7,8 +7,8 @@ from typing import Any, Dict, FrozenSet, List, Optional
 
 from orchestrator.app.cypher_tokenizer import (
     TokenType,
-    tokenize_cypher,
     reconstruct_cypher,
+    tokenize_cypher,
 )
 from orchestrator.app.cypher_validator import (
     CypherValidationError,
@@ -121,6 +121,7 @@ class SandboxedQueryExecutor:
                 sandboxed, **(params or {}),
                 timeout=self._config.query_timeout_seconds,
             )
-            return await result.data()
+            records: list[dict[str, Any]] = await result.data()
+            return records
 
-        return await session.execute_read(_tx)
+        return list(await session.execute_read(_tx))

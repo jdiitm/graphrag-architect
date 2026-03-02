@@ -28,7 +28,7 @@ class _FakeSession:
         self.execute_write = AsyncMock()
         self.execute_read = AsyncMock(return_value=[])
 
-    async def __aenter__(self) -> "_FakeSession":
+    async def __aenter__(self) -> _FakeSession:
         return self
 
     async def __aexit__(self, *args: Any) -> None:

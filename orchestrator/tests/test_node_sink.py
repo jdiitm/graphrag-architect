@@ -5,7 +5,7 @@ from typing import Any, List
 
 import pytest
 
-from orchestrator.app.node_sink import IncrementalNodeSink, DurableNodeSink
+from orchestrator.app.node_sink import DurableNodeSink, IncrementalNodeSink
 
 
 class FakeRepository:

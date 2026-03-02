@@ -5,7 +5,7 @@ import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import AbstractSet, Any, Dict, List, Optional, Set, Tuple
 
 from orchestrator.app.graph_embeddings import GraphTopology
 from orchestrator.app.macro_node import MacroNode
@@ -146,8 +146,8 @@ def identify_connected_paths(
 
 
 def _candidate_rank(candidate: Dict[str, Any]) -> float:
-    pr = candidate.get("pagerank", 0.0)
-    score = candidate.get("score", 0.0)
+    pr = float(candidate.get("pagerank", 0.0))
+    score = float(candidate.get("score", 0.0))
     if pr > 0.0:
         return pr * 0.7 + score * 0.3
     return score
@@ -214,7 +214,7 @@ def _pagerank_scores(
         return {}
     nodes = list(adjacency.keys())
     n = len(nodes)
-    scores: Dict[str, float] = {node: 1.0 / n for node in nodes}
+    scores: Dict[str, float] = dict.fromkeys(nodes, 1.0 / n)
     for _ in range(iterations):
         new_scores: Dict[str, float] = {}
         for node in nodes:
@@ -330,7 +330,7 @@ def _count_cross_community_edges(
 
 def _collect_bridge_edges_for_community(
     component: List[Dict[str, Any]],
-    community_members: Set[str],
+    community_members: AbstractSet[str],
     node_to_community: Dict[str, str],
 ) -> List[Dict[str, str]]:
     bridge_edges: List[Dict[str, str]] = []

@@ -6,9 +6,9 @@ from orchestrator.app.query_models import QueryComplexity
 class TestQueryRouterImportable:
     def test_query_router_importable(self) -> None:
         from orchestrator.app.query_router import (
+            _ROUTE_MAP,
             classify_query_node,
             route_query,
-            _ROUTE_MAP,
         )
         assert callable(classify_query_node)
         assert callable(route_query)
@@ -18,10 +18,10 @@ class TestQueryRouterImportable:
 class TestQueryRetrieverImportable:
     def test_query_retriever_importable(self) -> None:
         from orchestrator.app.query_retriever import (
-            vector_retrieve,
-            single_hop_retrieve,
             cypher_retrieve,
             hybrid_retrieve,
+            single_hop_retrieve,
+            vector_retrieve,
         )
         assert callable(vector_retrieve)
         assert callable(single_hop_retrieve)
@@ -32,8 +32,8 @@ class TestQueryRetrieverImportable:
 class TestQuerySynthesizerImportable:
     def test_query_synthesizer_importable(self) -> None:
         from orchestrator.app.query_synthesizer import (
-            synthesize_answer,
             _llm_synthesize,
+            synthesize_answer,
         )
         assert callable(synthesize_answer)
         assert callable(_llm_synthesize)
@@ -47,17 +47,17 @@ class TestBackwardCompatImports:
 
     def test_retriever_symbols_from_engine(self) -> None:
         from orchestrator.app.query_engine import (
-            vector_retrieve,
-            single_hop_retrieve,
+            _CB_EMBEDDING_GLOBAL,
+            _SEMANTIC_CACHE,
+            _SUBGRAPH_CACHE,
+            _build_acl_filter,
+            _embed_query,
+            _execute_sandboxed_read,
+            _neo4j_session,
             cypher_retrieve,
             hybrid_retrieve,
-            _embed_query,
-            _neo4j_session,
-            _build_acl_filter,
-            _execute_sandboxed_read,
-            _SUBGRAPH_CACHE,
-            _SEMANTIC_CACHE,
-            _CB_EMBEDDING_GLOBAL,
+            single_hop_retrieve,
+            vector_retrieve,
         )
         assert callable(vector_retrieve)
         assert callable(single_hop_retrieve)
@@ -73,11 +73,11 @@ class TestBackwardCompatImports:
 
     def test_synthesizer_symbols_from_engine(self) -> None:
         from orchestrator.app.query_engine import (
-            synthesize_answer,
-            _llm_synthesize,
-            _raw_llm_synthesize,
             _CB_LLM_GLOBAL,
             _do_synthesize,
+            _llm_synthesize,
+            _raw_llm_synthesize,
+            synthesize_answer,
         )
         assert callable(synthesize_answer)
         assert callable(_llm_synthesize)
@@ -87,10 +87,10 @@ class TestBackwardCompatImports:
 
     def test_engine_own_symbols(self) -> None:
         from orchestrator.app.query_engine import (
+            _EVAL_STORE,
             evaluate_response,
             get_eval_store,
             query_graph,
-            _EVAL_STORE,
         )
         assert callable(evaluate_response)
         assert callable(get_eval_store)

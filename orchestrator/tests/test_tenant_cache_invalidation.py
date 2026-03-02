@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from orchestrator.app.subgraph_cache import SubgraphCache
 from orchestrator.app.semantic_cache import SemanticQueryCache
+from orchestrator.app.subgraph_cache import SubgraphCache
 
 
 class TestSubgraphCacheTenantInvalidation:

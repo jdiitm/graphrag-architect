@@ -3,12 +3,12 @@ from __future__ import annotations
 import os
 from unittest import mock
 
-from orchestrator.app.reranker import Reranker
 from orchestrator.app.density_reranker import (
     DensityReranker,
     DensityRerankerConfig,
     _jaccard_similarity,
 )
+from orchestrator.app.reranker import Reranker
 
 
 class TestDensityRerankerProtocol:

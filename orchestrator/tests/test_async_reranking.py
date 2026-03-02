@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.app.reranker import BM25Reranker, ScoredCandidate
 from orchestrator.app.density_reranker import DensityReranker
+from orchestrator.app.reranker import BM25Reranker, ScoredCandidate
 
 
 def _sample_candidates() -> List[Dict[str, Any]]:

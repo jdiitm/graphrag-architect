@@ -6,8 +6,8 @@ import time
 import pytest
 
 from orchestrator.app.ingestion_resume import (
-    IngestionStatusStore,
     IngestionStatus,
+    IngestionStatusStore,
     InMemoryStatusStore,
 )
 

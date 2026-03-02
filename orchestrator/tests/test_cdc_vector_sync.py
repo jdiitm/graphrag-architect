@@ -86,11 +86,11 @@ class TestVectorSyncRouter:
 
     def test_collection_name_consistency(self):
         from orchestrator.app.graph_builder import resolve_vector_collection
-        from orchestrator.app.query_engine import _VECTOR_COLLECTION as qe_collection
+        from orchestrator.app.query_engine import _VECTOR_COLLECTION as _qe_collection
 
         builder_collection = resolve_vector_collection()
         assert builder_collection == "service_embeddings"
-        assert qe_collection == "service_embeddings"
+        assert _qe_collection == "service_embeddings"
 
 
 class TestVectorSyncRouterFromEnv:

@@ -7,7 +7,6 @@ import pytest
 
 from orchestrator.app.extraction_models import CallsEdge, ServiceNode
 
-
 _ENV_VARS = {
     "NEO4J_PASSWORD": "test",
     "NEO4J_URI": "bolt://localhost:7687",

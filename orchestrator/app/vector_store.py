@@ -4,7 +4,8 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, cast, runtime_checkable
+from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +262,8 @@ class QdrantVectorStore:
             ]
 
         try:
-            return await self._circuit_breaker.call(_do_search)
+            raw: list[SearchResult] = await self._circuit_breaker.call(_do_search)
+            return raw
         except asyncio.TimeoutError as exc:
             raise VectorDegradedError(
                 f"Qdrant search timed out after {self._search_timeout}s"
@@ -270,13 +272,17 @@ class QdrantVectorStore:
     async def delete(self, collection: str, ids: List[str], tenant_id: str = "") -> int:
         client = self._get_client()
         from qdrant_client.models import PointIdsList
+        id_values: list[int | str | UUID] = cast("list[int | str | UUID]", list(ids))
         if tenant_id:
             from qdrant_client.models import (
-                FieldCondition, Filter, HasIdCondition, MatchValue,
+                FieldCondition,
+                Filter,
+                HasIdCondition,
+                MatchValue,
             )
             compound = Filter(
                 must=[
-                    HasIdCondition(has_id=ids),
+                    HasIdCondition(has_id=id_values),
                     FieldCondition(
                         key="tenant_id", match=MatchValue(value=tenant_id),
                     ),
@@ -292,10 +298,10 @@ class QdrantVectorStore:
             if self._shard_by_tenant:
                 delete_kwargs["shard_key_selector"] = tenant_id
             await client.delete(**delete_kwargs)
-            return count_result.count
+            return int(count_result.count)
         await client.delete(
             collection_name=collection,
-            points_selector=PointIdsList(points=ids),
+            points_selector=PointIdsList(points=id_values),
         )
         return len(ids)
 
@@ -343,7 +349,8 @@ class QdrantVectorStore:
             ]
 
         try:
-            return await self._circuit_breaker.call(_do_search)
+            raw: list[SearchResult] = await self._circuit_breaker.call(_do_search)
+            return raw
         except asyncio.TimeoutError as exc:
             raise VectorDegradedError(
                 f"Qdrant search timed out after {self._search_timeout}s"

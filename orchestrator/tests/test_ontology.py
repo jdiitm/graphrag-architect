@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import tempfile
 import os
+import tempfile
 
 import pytest
 
@@ -13,7 +13,6 @@ from orchestrator.app.ontology import (
     generate_merge_cypher,
     generate_unwind_cypher,
 )
-
 
 SAMPLE_YAML = """
 node_types:

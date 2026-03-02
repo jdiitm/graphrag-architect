@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, cast
 
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
@@ -77,7 +77,7 @@ _REPLICA_STATE: dict[str, Optional[ReplicaAwarePool]] = {
 async def close_driver() -> None:
     driver = _state.get("driver")
     if driver is not None:
-        await driver.close()
+        await cast(AsyncDriver, driver).close()
         _state["driver"] = None
 
 
@@ -87,7 +87,7 @@ def get_query_timeout() -> float:
         raise RuntimeError(
             "Neo4j driver not initialized. Call init_driver() first."
         )
-    return timeout
+    return cast(float, timeout)
 
 
 def get_database() -> str:
@@ -96,7 +96,7 @@ def get_database() -> str:
         raise RuntimeError(
             "Neo4j driver not initialized. Call init_driver() first."
         )
-    return database
+    return cast(str, database)
 
 
 def get_driver() -> AsyncDriver:
@@ -105,7 +105,7 @@ def get_driver() -> AsyncDriver:
         raise RuntimeError(
             "Neo4j driver not initialized. Call init_driver() first."
         )
-    return driver
+    return cast(AsyncDriver, driver)
 
 
 def get_read_driver() -> AsyncDriver:

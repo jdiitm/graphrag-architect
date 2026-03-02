@@ -4,8 +4,8 @@ import pytest
 
 from orchestrator.app.query_templates import (
     QueryTemplate,
-    TemplateMatch,
     TemplateCatalog,
+    TemplateMatch,
     match_template,
 )
 

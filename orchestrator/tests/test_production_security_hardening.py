@@ -189,8 +189,8 @@ class TestQueryEngineVectorFallback:
     async def test_vector_retrieve_falls_back_on_circuit_open(
         self, base_query_state,
     ) -> None:
-        from orchestrator.app.query_engine import vector_retrieve
         from orchestrator.app.circuit_breaker import CircuitOpenError
+        from orchestrator.app.query_engine import vector_retrieve
 
         state = {**base_query_state, "query": "What is auth-service?"}
 

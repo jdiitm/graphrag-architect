@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set, Tuple, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -14,9 +14,30 @@ from opentelemetry.trace import StatusCode
 
 from orchestrator.app.ast_dlq import ASTDeadLetterQueue, create_ast_dlq
 from orchestrator.app.ast_extraction import GoASTExtractor, PythonASTExtractor
+from orchestrator.app.ast_grpc_client import GRPCASTClient
+from orchestrator.app.ast_result_consumer import ASTResultConsumer
+from orchestrator.app.checkpoint_store import get_checkpointer
 from orchestrator.app.checkpointing import ExtractionCheckpoint, FileStatus
-from orchestrator.app.config import ConfigurationError, ExtractionConfig
+from orchestrator.app.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    CircuitOpenError,
+)
+from orchestrator.app.config import (
+    ASTExtractionConfig,
+    ASTPoolConfig,
+    ConfigurationError,
+    ExtractionConfig,
+    GRPCASTConfig,
+    IngestionConfig,
+    VectorStoreConfig,
+)
 from orchestrator.app.container import AppContainer
+from orchestrator.app.distributed_lock import (
+    BoundedTaskSet,
+    create_ingestion_lock,
+)
+from orchestrator.app.entity_resolver import EntityResolver
 from orchestrator.app.extraction_models import (
     CallsEdge,
     ConsumesEdge,
@@ -28,25 +49,16 @@ from orchestrator.app.extraction_models import (
 )
 from orchestrator.app.llm_extraction import ServiceExtractor
 from orchestrator.app.manifest_parser import parse_all_manifests
-from orchestrator.app.circuit_breaker import (
-    CircuitBreaker,
-    CircuitBreakerConfig,
-    CircuitOpenError,
-)
-from orchestrator.app.entity_resolver import EntityResolver
-from orchestrator.app.neo4j_client import GraphRepository
-from orchestrator.app.neo4j_pool import get_driver
-from orchestrator.app.telemetry_ports import get_metrics_port, get_tracing_port
-from orchestrator.app.schema_validation import validate_topology
-from orchestrator.app.checkpoint_store import get_checkpointer
-from orchestrator.app.node_sink import IncrementalNodeSink
-from orchestrator.app.vector_store import create_vector_store
-from orchestrator.app.config import VectorStoreConfig
 from orchestrator.app.mutation_publisher import (
     GraphMutationEvent,
     KafkaMutationPublisher,
 )
-from orchestrator.app.workspace_loader import load_directory_chunked, load_directory_stream
+from orchestrator.app.neo4j_client import GraphRepository
+from orchestrator.app.neo4j_pool import get_driver
+from orchestrator.app.node_sink import IncrementalNodeSink
+from orchestrator.app.schema_validation import validate_topology
+from orchestrator.app.telemetry_ports import get_metrics_port, get_tracing_port
+from orchestrator.app.vector_store import create_vector_store
 from orchestrator.app.vector_sync_outbox import (
     CoalescingOutbox,
     DurableOutboxDrainer,
@@ -56,15 +68,7 @@ from orchestrator.app.vector_sync_outbox import (
     VectorSyncEvent,
     VectorSyncOutbox,
 )
-from orchestrator.app.config import IngestionConfig
-from orchestrator.app.distributed_lock import (
-    BoundedTaskSet,
-    create_ingestion_lock,
-)
-
-from orchestrator.app.config import ASTExtractionConfig, ASTPoolConfig, GRPCASTConfig
-from orchestrator.app.ast_grpc_client import GRPCASTClient
-from orchestrator.app.ast_result_consumer import ASTResultConsumer
+from orchestrator.app.workspace_loader import load_directory_chunked, load_directory_stream
 
 _VECTOR_COLLECTION = "service_embeddings"
 
@@ -246,11 +250,11 @@ def create_outbox_drainer(
     neo4j_driver: Any = None,
 ) -> OutboxDrainer | DurableOutboxDrainer:
     if neo4j_driver is not None:
-        store = Neo4jOutboxStore(driver=neo4j_driver)
-        return DurableOutboxDrainer(store=store, vector_store=vector_store)
+        neo4j_store = Neo4jOutboxStore(driver=neo4j_driver)
+        return DurableOutboxDrainer(store=neo4j_store, vector_store=vector_store)
     if redis_conn is not None:
-        store = RedisOutboxStore(redis_conn=redis_conn)
-        return DurableOutboxDrainer(store=store, vector_store=vector_store)
+        redis_store = RedisOutboxStore(redis_conn=redis_conn)
+        return DurableOutboxDrainer(store=redis_store, vector_store=vector_store)
     if _is_production_mode():
         raise SystemExit(
             "FATAL: DEPLOYMENT_MODE=production but no durable outbox store "
@@ -375,8 +379,8 @@ async def invalidate_caches_after_ingest(
         )
     try:
         from orchestrator.app.query_engine import (
-            _SUBGRAPH_CACHE,
             _SEMANTIC_CACHE,
+            _SUBGRAPH_CACHE,
         )
         if node_ids:
             sg_result = _SUBGRAPH_CACHE.invalidate_by_nodes(node_ids)
@@ -449,7 +453,7 @@ def _load_files_sync(
     return files, skipped
 
 
-async def load_workspace_files(state: IngestionState) -> dict:
+async def load_workspace_files(state: IngestionState) -> Dict[str, Any]:
     with get_tracing_port().start_span("ingestion.load_workspace") as span:
         start = time.monotonic()
         directory_path = state.get("directory_path", "")
@@ -562,7 +566,7 @@ async def _extract_via_grpc(
     return nodes
 
 
-async def parse_source_ast(state: IngestionState) -> dict:
+async def parse_source_ast(state: IngestionState) -> Dict[str, Any]:
     with get_tracing_port().start_span("ingestion.parse_source_ast"):
         start = time.monotonic()
         raw_files = state.get("raw_files", [])
@@ -649,7 +653,7 @@ def _load_or_create_checkpoint(
     return ExtractionCheckpoint.from_files(raw_files)
 
 
-async def enrich_with_llm(state: IngestionState) -> dict:
+async def enrich_with_llm(state: IngestionState) -> Dict[str, Any]:
     with get_tracing_port().start_span("ingestion.enrich_with_llm"):
         start = time.monotonic()
         existing = list(state.get("extracted_nodes", []))
@@ -687,7 +691,7 @@ async def enrich_with_llm(state: IngestionState) -> dict:
         )
         return {"extracted_nodes": existing}
 
-async def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
+async def parse_k8s_and_kafka_manifests(state: IngestionState) -> Dict[str, Any]:
     with get_tracing_port().start_span("ingestion.parse_manifests"):
         start = time.monotonic()
         raw_files = state.get("raw_files", [])
@@ -711,7 +715,7 @@ async def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
             "extraction_checkpoint": checkpoint.to_dict(),
         }
 
-async def validate_extracted_schema(state: IngestionState) -> dict:
+async def validate_extracted_schema(state: IngestionState) -> Dict[str, Any]:
     with get_tracing_port().start_span("ingestion.validate_schema"):
         errors = await asyncio.to_thread(
             validate_topology, state.get("extracted_nodes", []),
@@ -752,7 +756,7 @@ def _dedup_llm_against_ast(
     return services, calls
 
 
-async def fix_extraction_errors(state: IngestionState) -> dict:
+async def fix_extraction_errors(state: IngestionState) -> Dict[str, Any]:
     with get_tracing_port().start_span("ingestion.fix_errors"):
         start = time.monotonic()
         existing = state.get("extracted_nodes", [])
@@ -791,7 +795,7 @@ def _stamp_ingestion_metadata(
     entities: List[Any], ingestion_id: str,
 ) -> List[Any]:
     edge_types = _EDGE_TYPES
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(UTC).isoformat()
     for entity in entities:
         if isinstance(entity, edge_types):
             entity.ingestion_id = ingestion_id
@@ -800,7 +804,7 @@ def _stamp_ingestion_metadata(
 
 
 async def _enqueue_vector_cleanup(
-    pruned_ids: list, span: Any, tenant_id: str = "",
+    pruned_ids: List[str], span: Any, tenant_id: str = "",
     neo4j_driver: Any = None,
 ) -> None:
     if not pruned_ids:
@@ -828,7 +832,7 @@ async def _enqueue_vector_cleanup(
 
 
 async def _enqueue_vector_cleanup_durable(
-    pruned_ids: list, span: Any, tenant_id: str,
+    pruned_ids: List[str], span: Any, tenant_id: str,
     neo4j_driver: Any,
 ) -> None:
     collection = resolve_vector_collection(tenant_id or None)
@@ -997,7 +1001,7 @@ class PeriodicVectorDrainer:
                 pass
 
 
-async def commit_to_neo4j(state: IngestionState) -> dict:
+async def commit_to_neo4j(state: IngestionState) -> Dict[str, Any]:
     with get_tracing_port().start_span("ingestion.commit_neo4j") as span:
         start = time.monotonic()
         try:
@@ -1081,7 +1085,7 @@ class StreamingIngestionPipeline:
     def commit_status(self) -> str:
         return self._commit_status
 
-    async def process_directory(self, directory_path: str) -> dict:
+    async def process_directory(self, directory_path: str) -> Dict[str, Any]:
         async for chunk in load_directory_stream(
             directory_path,
             chunk_size=self._chunk_size,
@@ -1091,7 +1095,7 @@ class StreamingIngestionPipeline:
             await self._process_single_chunk(chunk)
         return self._build_result()
 
-    async def process_files(self, raw_files: List[Dict[str, str]]) -> dict:
+    async def process_files(self, raw_files: List[Dict[str, str]]) -> Dict[str, Any]:
         for i in range(0, len(raw_files), self._chunk_size):
             chunk = raw_files[i:i + self._chunk_size]
             await self._process_single_chunk(chunk)
@@ -1106,7 +1110,7 @@ class StreamingIngestionPipeline:
             self._commit_status = "failed"
         self._chunk_count += 1
 
-    def _build_result(self) -> dict:
+    def _build_result(self) -> Dict[str, Any]:
         return {
             "extracted_nodes": [],
             "commit_status": self._commit_status,
@@ -1115,7 +1119,7 @@ class StreamingIngestionPipeline:
         }
 
 
-async def run_streaming_pipeline(state: IngestionState) -> dict:
+async def run_streaming_pipeline(state: IngestionState) -> Dict[str, Any]:
     with get_tracing_port().start_span("ingestion.streaming_pipeline") as span:
         directory_path = state.get("directory_path", "")
         pipeline = StreamingIngestionPipeline()
@@ -1168,7 +1172,7 @@ builder.add_conditional_edges(
 builder.add_edge("fix_errors", "validate_schema")
 builder.add_edge("commit_graph", END)
 
-def _compile_ingestion_graph():
+def _compile_ingestion_graph() -> Any:
     try:
         checkpointer = get_checkpointer()
     except RuntimeError:

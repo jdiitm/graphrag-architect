@@ -11,7 +11,6 @@ from orchestrator.app.extraction_models import (
 )
 from orchestrator.app.neo4j_client import GraphRepository
 
-
 SAMPLE_SERVICE_A = ServiceNode(
     id="order-service",
     name="order-service",

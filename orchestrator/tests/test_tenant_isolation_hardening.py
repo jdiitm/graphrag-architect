@@ -48,11 +48,14 @@ def _ensure_qdrant_models_importable() -> None:
         setattr(models, attr, cls)
 
     pkg = types.ModuleType("qdrant_client")
-    setattr(pkg, "models", models)
+    pkg.models = models
 
     sys.modules["qdrant_client"] = pkg
     sys.modules["qdrant_client.models"] = models
 
+from contextlib import asynccontextmanager
+
+from orchestrator.app.context_manager import format_context_for_prompt
 from orchestrator.app.extraction_models import (
     CallsEdge,
     ConsumesEdge,
@@ -63,23 +66,19 @@ from orchestrator.app.extraction_models import (
     ProducesEdge,
     ServiceNode,
 )
+from orchestrator.app.lazy_traversal import personalized_pagerank
 from orchestrator.app.neo4j_client import (
     _CYPHER_DISPATCH,
     _UNWIND_QUERIES,
     cypher_op_for_entity,
 )
+from orchestrator.app.prompt_sanitizer import sanitize_source_content
+from orchestrator.app.query_engine import _neo4j_session
 from orchestrator.app.vector_store import (
     InMemoryVectorStore,
     QdrantVectorStore,
     VectorRecord,
 )
-from orchestrator.app.context_manager import format_context_for_prompt
-from orchestrator.app.prompt_sanitizer import sanitize_source_content
-from orchestrator.app.lazy_traversal import personalized_pagerank
-from contextlib import asynccontextmanager
-
-from orchestrator.app.query_engine import _neo4j_session
-
 
 _TENANT_IN_MERGE = re.compile(r"MERGE\s*\([^)]*tenant_id", re.IGNORECASE)
 _TENANT_IN_MATCH = re.compile(r"MATCH\s*\([^)]*tenant_id", re.IGNORECASE)

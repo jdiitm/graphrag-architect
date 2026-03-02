@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from orchestrator.app.graph_builder import create_durable_spillover_fn
 from orchestrator.app.vector_sync_outbox import (
     CoalescingOutbox,
     VectorSyncEvent,
     VectorSyncOutbox,
 )
-from orchestrator.app.graph_builder import create_durable_spillover_fn
 
 
 class TestCreateDurableSpilloverFn:

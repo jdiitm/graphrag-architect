@@ -4,13 +4,24 @@ import asyncio
 import logging
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from neo4j import AsyncDriver, AsyncManagedTransaction, READ_ACCESS, WRITE_ACCESS
+from neo4j import READ_ACCESS, WRITE_ACCESS, AsyncDriver, AsyncManagedTransaction
 
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from orchestrator.app.config import HotTargetConfig
+from orchestrator.app.extraction_models import (
+    CallsEdge,
+    ConsumesEdge,
+    DatabaseNode,
+    DeployedInEdge,
+    K8sDeploymentNode,
+    KafkaTopicNode,
+    ProducesEdge,
+    ServiceNode,
+    compute_content_hash,
+)
 from orchestrator.app.ontology import (
     Ontology,
     build_default_ontology,
@@ -18,17 +29,6 @@ from orchestrator.app.ontology import (
     generate_edge_unwind_cypher,
     generate_merge_cypher,
     generate_unwind_cypher,
-)
-from orchestrator.app.extraction_models import (
-    CallsEdge,
-    ConsumesEdge,
-    compute_content_hash,
-    DatabaseNode,
-    DeployedInEdge,
-    K8sDeploymentNode,
-    KafkaTopicNode,
-    ProducesEdge,
-    ServiceNode,
 )
 
 logger = logging.getLogger(__name__)
@@ -124,11 +124,7 @@ def compute_hashes(entities: List[Any]) -> List[Any]:
     for entity in entities:
         fields = getattr(type(entity), "model_fields", None)
         if fields is not None and "content_hash" in fields:
-            setattr(
-                entity,
-                "content_hash",
-                compute_content_hash(entity),
-            )
+            entity.content_hash = compute_content_hash(entity)
     return entities
 
 
@@ -318,12 +314,12 @@ class GraphRepository:
             f"RETURN n"
         )
 
-        async def _tx(tx: AsyncManagedTransaction) -> list:
+        async def _tx(tx: AsyncManagedTransaction) -> list[dict[str, Any]]:
             result = await tx.run(cypher, tenant_id=tenant_id)
-            return await result.data()
+            return list(await result.data())
 
         async with self._read_session() as session:
-            return await session.execute_read(_tx)
+            return list(await session.execute_read(_tx))
 
     async def commit_topology(self, entities: List[Any]) -> None:
         if not entities:
@@ -530,7 +526,7 @@ class GraphRepository:
         current_ingestion_id: str,
         tenant_id: str = "",
     ) -> tuple[int, list[str]]:
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = datetime.now(UTC).isoformat()
         total = 0
         affected_node_ids: list[str] = []
         async with self._write_session() as session:
@@ -585,7 +581,7 @@ class GraphRepository:
         batch_size: int = 100,
     ) -> int:
         cutoff = (
-            datetime.now(timezone.utc) - timedelta(days=ttl_days)
+            datetime.now(UTC) - timedelta(days=ttl_days)
         ).isoformat()
         total_reaped = 0
         while True:
@@ -597,10 +593,10 @@ class GraphRepository:
                 "DELETE r RETURN count(r) AS reaped"
             )
             async with self._session() as session:
-                reaped = await session.execute_write(
+                reaped = int(await session.execute_write(
                     self._run_reap, query=query,
                     cutoff=cutoff, batch_size=batch_size,
-                )
+                ))
                 total_reaped += reaped
                 if reaped < batch_size:
                     break
@@ -619,7 +615,7 @@ class GraphRepository:
         record = await result.single()
         if record is None:
             return 0
-        return record["reaped"]
+        return int(record["reaped"])
 
     async def ensure_tombstone_index(self) -> None:
         cypher = (

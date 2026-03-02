@@ -29,10 +29,10 @@ def _entity_sort_key(entity: Any) -> str:
 def _get_partition_key(entity: Any) -> str:
     namespace_acl = getattr(entity, "namespace_acl", None)
     if namespace_acl and isinstance(namespace_acl, list) and namespace_acl:
-        return namespace_acl[0]
+        return str(namespace_acl[0])
     team = getattr(entity, "team_owner", None)
     if team:
-        return team
+        return str(team)
     return "_default"
 
 

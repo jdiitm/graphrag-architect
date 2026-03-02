@@ -6,6 +6,10 @@ from typing import FrozenSet
 
 import pytest
 
+from orchestrator.app.query_engine import (
+    FulltextTenantRequired,
+    build_fulltext_fallback_cypher,
+)
 from orchestrator.app.query_templates import (
     QueryTemplate,
     TemplateCatalog,
@@ -13,10 +17,6 @@ from orchestrator.app.query_templates import (
 from orchestrator.app.tenant_security import (
     TenantScopeVerifier,
     TenantTemplateViolationError,
-)
-from orchestrator.app.query_engine import (
-    FulltextTenantRequired,
-    build_fulltext_fallback_cypher,
 )
 
 

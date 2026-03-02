@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -123,7 +123,7 @@ def _extract_kafka_topic(
     config: Dict[str, Any] = spec.get("config", {})
     if not isinstance(config, dict):
         config = {}
-    retention_raw: Union[str, int] = config.get("retention.ms", DEFAULT_RETENTION_MS)
+    retention_raw: str | int = config.get("retention.ms", DEFAULT_RETENTION_MS)
     topic_namespace = str(metadata.get("namespace", DEFAULT_NAMESPACE))
     team_owner = _extract_team_owner(metadata)
     namespace_acl = _extract_namespace_acl(metadata, manifest_namespace=topic_namespace)

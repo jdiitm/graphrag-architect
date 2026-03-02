@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 import tree_sitter_go
-from tree_sitter import Language, Parser, Node
+from tree_sitter import Language, Node, Parser
 
 from orchestrator.app.entity_resolver import resolve_entity_id
 from orchestrator.app.extraction_models import (
@@ -14,7 +14,6 @@ from orchestrator.app.extraction_models import (
     ServiceExtractionResult,
     ServiceNode,
 )
-
 
 GO_LANGUAGE = Language(tree_sitter_go.language())
 
@@ -103,6 +102,10 @@ class ASTExtractionResult:
         return ServiceExtractionResult(services=services, calls=calls)
 
 
+def _node_text(node: Node) -> str:
+    return (node.text or b"").decode("utf-8")
+
+
 def _derive_service_id(file_path: str) -> str:
     parts = file_path.replace("\\", "/").split("/")
     if len(parts) >= 2:
@@ -118,7 +121,7 @@ def _get_package_name(tree: Node) -> str:
         if child.type == "package_clause":
             for sub in child.children:
                 if sub.type == "package_identifier":
-                    return sub.text.decode("utf-8")
+                    return _node_text(sub)
     return ""
 
 
@@ -130,10 +133,10 @@ def _find_imports(tree: Node) -> Dict[str, str]:
                 path_node = spec.child_by_field_name("path")
                 if path_node is None:
                     continue
-                path_str = path_node.text.decode("utf-8").strip('"')
+                path_str = _node_text(path_node).strip('"')
                 alias_node = spec.child_by_field_name("name")
                 if alias_node:
-                    alias = alias_node.text.decode("utf-8")
+                    alias = _node_text(alias_node)
                 else:
                     alias = path_str.split("/")[-1]
                 imports[alias] = path_str
@@ -152,9 +155,9 @@ def _walk(node: Node, target_type: str) -> List[Node]:
 def _find_string_args(node: Node) -> List[str]:
     strings: List[str] = []
     for child in _walk(node, "interpreted_string_literal"):
-        strings.append(child.text.decode("utf-8").strip('"'))
+        strings.append(_node_text(child).strip('"'))
     for child in _walk(node, "raw_string_literal"):
-        strings.append(child.text.decode("utf-8").strip('`'))
+        strings.append(_node_text(child).strip('`'))
     return strings
 
 
@@ -165,14 +168,14 @@ def _detect_framework(
         alias, method = pattern.split(".")
         if alias in imports:
             for call_node in _walk(tree, "call_expression"):
-                text = call_node.text.decode("utf-8")
+                text = _node_text(call_node)
                 if f"{alias}.{method}" in text:
                     return framework_name
 
     for alias, path in imports.items():
-        if "google.golang.org/grpc" == path:
+        if path == "google.golang.org/grpc":
             for call_node in _walk(tree, "call_expression"):
-                text = call_node.text.decode("utf-8")
+                text = _node_text(call_node)
                 for pat in _GRPC_SERVER_PATTERNS:
                     if f"{alias}.{pat}" in text:
                         return "grpc"
@@ -219,7 +222,7 @@ class GoASTExtractor:
         self, root: Node, imports: Dict[str, str],
     ) -> bool:
         for call_node in _walk(root, "call_expression"):
-            text = call_node.text.decode("utf-8")
+            text = _node_text(call_node)
             for alias, path in imports.items():
                 if path == "net/http":
                     for pat in _HTTP_SERVER_PATTERNS:
@@ -245,7 +248,7 @@ class GoASTExtractor:
         result: ASTExtractionResult,
     ) -> None:
         for call_node in _walk(root, "call_expression"):
-            text = call_node.text.decode("utf-8")
+            text = _node_text(call_node)
             for alias, path in imports.items():
                 if path != "net/http":
                     continue
@@ -272,7 +275,7 @@ class GoASTExtractor:
         if not has_kafka_import:
             return
         for call_node in _walk(root, "call_expression"):
-            text = call_node.text.decode("utf-8")
+            text = _node_text(call_node)
             self._collect_kafka_topics(
                 text, call_node, _KAFKA_CONSUMER_FUNCS, result.topics_consumed,
             )

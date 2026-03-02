@@ -1,6 +1,5 @@
 from orchestrator.app.ast_extraction import PythonASTExtractor
 
-
 PYTHON_FASTAPI_APP = '''
 from fastapi import FastAPI
 

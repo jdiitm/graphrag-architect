@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, Optional, Protocol
 
 logger = logging.getLogger(__name__)
@@ -103,17 +103,17 @@ class TombstoneReaper:
 
     async def reap_once(self) -> int:
         cutoff = (
-            datetime.now(timezone.utc) - timedelta(days=self._config.ttl_days)
+            datetime.now(UTC) - timedelta(days=self._config.ttl_days)
         ).isoformat()
 
         total_reaped = 0
         effective_batch = self._config.batch_size
         while True:
-            reaped = await self._client.reap_tombstone_batch(
+            reaped = int(await self._client.reap_tombstone_batch(
                 batch_size=effective_batch,
                 cutoff=cutoff,
                 tenant_id=self._tenant_id,
-            )
+            ))
             total_reaped += reaped
             if reaped < effective_batch:
                 break

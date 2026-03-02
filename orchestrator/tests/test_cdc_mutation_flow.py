@@ -215,8 +215,8 @@ class TestMutationPublisherWiring:
 
     def test_get_mutation_publisher_returns_none_without_kafka(self) -> None:
         from orchestrator.app.graph_builder import (
-            _MutationPublisherHolder,
             _get_mutation_publisher,
+            _MutationPublisherHolder,
         )
         _MutationPublisherHolder.value = None
         with patch.dict("os.environ", {}, clear=False):
@@ -228,8 +228,8 @@ class TestMutationPublisherWiring:
 
     def test_get_mutation_publisher_returns_publisher_with_kafka(self) -> None:
         from orchestrator.app.graph_builder import (
-            _MutationPublisherHolder,
             _get_mutation_publisher,
+            _MutationPublisherHolder,
         )
         _MutationPublisherHolder.value = None
         with patch.dict(
@@ -243,8 +243,8 @@ class TestMutationPublisherWiring:
 
     def test_mutation_publisher_is_cached(self) -> None:
         from orchestrator.app.graph_builder import (
-            _MutationPublisherHolder,
             _get_mutation_publisher,
+            _MutationPublisherHolder,
         )
         _MutationPublisherHolder.value = None
         with patch.dict(

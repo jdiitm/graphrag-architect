@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-
 _VALID_INGEST_BODY = {
     "documents": [{
         "file_path": "test.py",

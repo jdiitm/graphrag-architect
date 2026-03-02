@@ -4,7 +4,6 @@ import os
 from pathlib import PurePosixPath
 from typing import AsyncGenerator, Dict, Generator, List, Optional
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -84,7 +83,7 @@ def load_directory_chunked(
 
     chunk: List[Dict[str, str]] = []
     total_bytes = 0
-    loaded_paths: Optional[set] = set() if skipped is not None else None
+    loaded_paths: Optional[set[str]] = set() if skipped is not None else None
     limit_hit = False
 
     for entry in _iter_files(root):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, List, Optional, Protocol, runtime_checkable
+from typing import Any, List, Optional, Protocol, cast, runtime_checkable
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -29,9 +29,9 @@ class ProviderTimeoutError(LLMError):
 class LLMProvider(Protocol):
     async def ainvoke(self, prompt: str) -> str: ...
 
-    async def ainvoke_structured(self, prompt: str, messages: list) -> Any: ...
+    async def ainvoke_structured(self, prompt: str, messages: list[Any]) -> Any: ...
 
-    async def ainvoke_messages(self, messages: list) -> str: ...
+    async def ainvoke_messages(self, messages: list[Any]) -> str: ...
 
 
 class GeminiProvider:
@@ -49,11 +49,11 @@ class GeminiProvider:
         response = await self._llm.ainvoke(prompt)
         return str(response.content)
 
-    async def ainvoke_messages(self, messages: list) -> str:
+    async def ainvoke_messages(self, messages: list[Any]) -> str:
         response = await self._llm.ainvoke(messages)
         return str(response.content)
 
-    async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
+    async def ainvoke_structured(self, prompt: str, messages: list[Any]) -> Any:
         lc_messages: list[BaseMessage] = []
         for msg in messages:
             if isinstance(msg, BaseMessage):
@@ -77,10 +77,10 @@ class StubProvider:
     async def ainvoke(self, prompt: str) -> str:
         return self._ainvoke_response
 
-    async def ainvoke_messages(self, messages: list) -> str:
+    async def ainvoke_messages(self, messages: list[Any]) -> str:
         return self._ainvoke_response
 
-    async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
+    async def ainvoke_structured(self, prompt: str, messages: list[Any]) -> Any:
         return self._ainvoke_structured_response
 
 
@@ -124,22 +124,22 @@ class ProviderWithCircuitBreaker:
         try:
             result = await self._inner.ainvoke(prompt)
             self._record_success()
-            return result
+            return str(result)
         except Exception as exc:
             self._record_failure(exc)
             raise
 
-    async def ainvoke_messages(self, messages: list) -> str:
+    async def ainvoke_messages(self, messages: list[Any]) -> str:
         self._check_state()
         try:
             result = await self._inner.ainvoke_messages(messages)
             self._record_success()
-            return result
+            return str(result)
         except Exception as exc:
             self._record_failure(exc)
             raise
 
-    async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
+    async def ainvoke_structured(self, prompt: str, messages: list[Any]) -> Any:
         self._check_state()
         try:
             result = await self._inner.ainvoke_structured(prompt, messages)
@@ -158,23 +158,23 @@ class FallbackChain:
         last_error: Optional[Exception] = None
         for provider in self._providers:
             try:
-                return await provider.ainvoke(prompt)
+                return str(await provider.ainvoke(prompt))
             except Exception as exc:
                 _logger.warning("Provider %s failed: %s", type(provider).__name__, exc)
                 last_error = exc
         raise LLMError(f"All {len(self._providers)} providers failed") from last_error
 
-    async def ainvoke_messages(self, messages: list) -> str:
+    async def ainvoke_messages(self, messages: list[Any]) -> str:
         last_error: Optional[Exception] = None
         for provider in self._providers:
             try:
-                return await provider.ainvoke_messages(messages)
+                return str(await provider.ainvoke_messages(messages))
             except Exception as exc:
                 _logger.warning("Provider %s failed: %s", type(provider).__name__, exc)
                 last_error = exc
         raise LLMError(f"All {len(self._providers)} providers failed") from last_error
 
-    async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
+    async def ainvoke_structured(self, prompt: str, messages: list[Any]) -> Any:
         last_error: Optional[Exception] = None
         for provider in self._providers:
             try:
@@ -190,7 +190,7 @@ class ClaudeProvider:
         self._config = config
         try:
             from langchain_anthropic import ChatAnthropic
-            self._llm = ChatAnthropic(
+            self._llm = ChatAnthropic(  # type: ignore[call-arg]
                 model=config.claude_model_name,
                 anthropic_api_key=config.anthropic_api_key,
             )
@@ -207,11 +207,11 @@ class ClaudeProvider:
         response = await self._llm.ainvoke(prompt)
         return str(response.content)
 
-    async def ainvoke_messages(self, messages: list) -> str:
+    async def ainvoke_messages(self, messages: list[Any]) -> str:
         response = await self._llm.ainvoke(messages)
         return str(response.content)
 
-    async def ainvoke_structured(self, prompt: str, messages: list) -> Any:
+    async def ainvoke_structured(self, prompt: str, messages: list[Any]) -> Any:
         lc_messages: list[BaseMessage] = []
         for msg in messages:
             if isinstance(msg, BaseMessage):
@@ -228,11 +228,11 @@ def create_provider(
 ) -> LLMProvider:
     name = (provider_name or "gemini").strip().lower()
     if name == "gemini":
-        inner = GeminiProvider(config)
-        return ProviderWithCircuitBreaker(inner)
+        gemini = GeminiProvider(config)
+        return ProviderWithCircuitBreaker(gemini)
     if name == "claude":
-        inner = ClaudeProvider(config)
-        return ProviderWithCircuitBreaker(inner)
+        claude = ClaudeProvider(config)
+        return ProviderWithCircuitBreaker(claude)
     if name == "stub":
         return StubProvider()
     raise ValueError(f"Unknown LLM provider: {provider_name!r}")
@@ -259,6 +259,6 @@ def create_provider_with_failover(config: ExtractionConfig) -> LLMProvider:
         raise LLMError("No LLM providers available")
 
     if len(providers) == 1:
-        return providers[0]
+        return cast("LLMProvider", providers[0])
 
     return FallbackChain(providers=providers)

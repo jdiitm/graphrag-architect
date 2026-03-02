@@ -38,5 +38,5 @@ class VectorSyncStage:
 
     async def healthcheck(self) -> bool:
         if self._backend == "kafka" and self._kafka_publisher is not None:
-            return await self._kafka_publisher.healthcheck()
+            return bool(await self._kafka_publisher.healthcheck())
         return True

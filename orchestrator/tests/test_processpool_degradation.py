@@ -11,7 +11,6 @@ from orchestrator.app.circuit_breaker import (
     CircuitOpenError,
 )
 
-
 _ENV_VARS = {
     "NEO4J_PASSWORD": "test",
     "NEO4J_URI": "bolt://localhost:7687",
@@ -62,8 +61,8 @@ class TestLocalProcessPoolFallbackRemoved:
 
     @pytest.mark.asyncio
     async def test_remote_ast_false_allows_process_pool(self) -> None:
-        from orchestrator.app.graph_builder import parse_source_ast
         from orchestrator.app.ast_extraction import ASTExtractionResult
+        from orchestrator.app.graph_builder import parse_source_ast
 
         empty_result = ASTExtractionResult()
 
@@ -296,8 +295,8 @@ class TestDeadLetterQueueForFailedJobs:
         assert dlq[0]["tenant_id"] == "test-tenant"
 
     def test_dlq_is_bounded(self) -> None:
-        from orchestrator.app.ast_dlq import ASTDeadLetterQueue, InMemoryASTDLQ
         import orchestrator.app.graph_builder as gb
+        from orchestrator.app.ast_dlq import ASTDeadLetterQueue, InMemoryASTDLQ
 
         assert isinstance(gb._AST_DLQ, ASTDeadLetterQueue), (
             "DLQ must implement ASTDeadLetterQueue protocol"
@@ -316,12 +315,12 @@ class TestDeadLetterQueueForFailedJobs:
 
     @pytest.mark.asyncio
     async def test_dlq_evicts_oldest_when_full(self) -> None:
+        import orchestrator.app.graph_builder as gb
         from orchestrator.app.ast_dlq import InMemoryASTDLQ
         from orchestrator.app.graph_builder import (
             enqueue_ast_dlq,
             get_ast_dlq,
         )
-        import orchestrator.app.graph_builder as gb
 
         original = gb._AST_DLQ
         gb._AST_DLQ = InMemoryASTDLQ(max_size=3)

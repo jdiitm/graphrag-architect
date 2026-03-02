@@ -17,7 +17,6 @@ from orchestrator.app.extraction_models import (
 )
 from orchestrator.app.schema_validation import validate_topology
 
-
 AUTH_SERVICE = ServiceNode(
     id="auth-service",
     name="auth-service",

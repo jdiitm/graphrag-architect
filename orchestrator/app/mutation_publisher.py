@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Dict, List, Literal, Protocol
 
 from pydantic import BaseModel, Field
@@ -20,7 +20,7 @@ class GraphMutationEvent(BaseModel):
     entity_ids: List[str]
     tenant_id: str = ""
     timestamp: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        default_factory=lambda: datetime.now(UTC).isoformat(),
     )
 
 

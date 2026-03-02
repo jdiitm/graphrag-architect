@@ -14,7 +14,7 @@ _logger = logging.getLogger(__name__)
 
 def _build_undirected_adjacency(
     edges: List[Dict[str, Any]],
-) -> Tuple[Dict[str, List[str]], set]:
+) -> Tuple[Dict[str, List[str]], set[str]]:
     adjacency: Dict[str, List[str]] = defaultdict(list)
     nodes: set[str] = set()
     for edge in edges:
@@ -28,7 +28,7 @@ def _build_undirected_adjacency(
 
 
 def _ppr_iterate(
-    nodes: set,
+    nodes: set[str],
     adjacency: Dict[str, List[str]],
     personalization: Dict[str, float],
     iterations: int,
@@ -108,7 +108,7 @@ class LocalPageRankStrategy:
 
         valid_seeds = [s for s in seed_nodes if s in nodes] or list(nodes)
         seed_weight = 1.0 / len(valid_seeds)
-        personalization = {s: seed_weight for s in valid_seeds}
+        personalization = dict.fromkeys(valid_seeds, seed_weight)
 
         scores = _ppr_iterate(
             nodes, adjacency, personalization,
@@ -275,7 +275,7 @@ class GDSPageRankStrategy:
     async def _stream_pagerank(
         self, graph_name: str, top_n: int,
     ) -> List[Tuple[str, float]]:
-        async def _tx(tx: Any) -> list:
+        async def _tx(tx: Any) -> list[Any]:
             result = await tx.run(
                 _GDS_PAGERANK_QUERY,
                 graph_name=graph_name,
@@ -283,7 +283,7 @@ class GDSPageRankStrategy:
                 damping_factor=self._damping,
                 top_n=top_n,
             )
-            return await result.data()
+            return list(await result.data())
 
         async with self._driver.session() as session:
             records = await session.execute_read(_tx)
@@ -374,7 +374,7 @@ def personalized_pagerank(
 
     valid_seeds = [s for s in seed_nodes if s in nodes] or list(nodes)
     seed_weight = 1.0 / len(valid_seeds)
-    personalization = {s: seed_weight for s in valid_seeds}
+    personalization = dict.fromkeys(valid_seeds, seed_weight)
 
     scores = _ppr_iterate(nodes, adjacency, personalization, iterations, damping)
     ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)

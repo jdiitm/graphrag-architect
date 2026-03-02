@@ -53,7 +53,8 @@ async def _create_postgres_checkpointer(dsn: str) -> Any:
             "psycopg is required for the postgres checkpoint backend. "
             "Install with: pip install 'psycopg[binary]'"
         )
-    conn = await psycopg.AsyncConnection.connect(dsn)
+    raw_conn = await psycopg.AsyncConnection.connect(dsn)
+    conn: Any = raw_conn
     saver = AsyncPostgresSaver(conn=conn)
     await saver.setup()
     _state["connection"] = conn

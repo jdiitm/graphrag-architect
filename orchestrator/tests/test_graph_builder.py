@@ -9,7 +9,6 @@ from opentelemetry.trace import StatusCode
 
 from orchestrator.app.circuit_breaker import CircuitOpenError
 
-
 _ENV_VARS = {
     "NEO4J_PASSWORD": "test",
     "NEO4J_URI": "bolt://localhost:7687",
@@ -272,8 +271,8 @@ class TestCompletionTrackerWiredIntoCommit:
 
     @pytest.mark.asyncio
     async def test_commit_records_completion(self) -> None:
-        from orchestrator.app.graph_builder import commit_to_neo4j
         from orchestrator.app.extraction_models import ServiceNode
+        from orchestrator.app.graph_builder import commit_to_neo4j
 
         topology_calls: list[list] = []
 

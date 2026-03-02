@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_ENCODING_NAME = "cl100k_base"
 
-_encoding_cache: dict[str, object] = {}
+_encoding_cache: dict[str, Any] = {}
 
 
-def _get_encoding(encoding_name: str = _DEFAULT_ENCODING_NAME) -> Optional[object]:
+def _get_encoding(encoding_name: str = _DEFAULT_ENCODING_NAME) -> Any:
     if encoding_name in _encoding_cache:
         return _encoding_cache[encoding_name]
     try:

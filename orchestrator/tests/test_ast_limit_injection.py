@@ -5,7 +5,7 @@ import re
 import pytest
 
 from orchestrator.app.cypher_ast import inject_limit_ast
-from orchestrator.app.cypher_sandbox import SandboxedQueryExecutor, CypherSandboxConfig
+from orchestrator.app.cypher_sandbox import CypherSandboxConfig, SandboxedQueryExecutor
 
 
 class TestASTLimitInjectionBasics:
@@ -57,7 +57,7 @@ class TestASTLimitSubquerySemantics:
             "LIMIT inside a string literal must not be modified by AST injection. "
             f"Got: {result}"
         )
-        from orchestrator.app.cypher_tokenizer import tokenize_cypher, TokenType
+        from orchestrator.app.cypher_tokenizer import TokenType, tokenize_cypher
         tokens = tokenize_cypher(result)
         keyword_limits = [
             t for t in tokens

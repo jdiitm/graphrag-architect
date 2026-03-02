@@ -4,8 +4,8 @@ import time
 import pytest
 
 from orchestrator.app.config import JobStoreConfig
-from orchestrator.app.query_models import QueryJobStore
 from orchestrator.app.ingest_models import IngestJobStore
+from orchestrator.app.query_models import QueryJobStore
 
 
 class TestJobStoreConfigFromEnv:
@@ -78,7 +78,7 @@ class TestMainUsesConfigurableTTL:
 class TestHeartbeatWiredInProduction:
     @pytest.mark.asyncio
     async def test_run_query_job_calls_heartbeat(self):
-        from unittest.mock import AsyncMock, patch, MagicMock
+        from unittest.mock import AsyncMock, MagicMock, patch
         store = QueryJobStore(ttl_seconds=3600.0)
         job = await store.create()
         mock_graph = AsyncMock(return_value={
@@ -95,7 +95,7 @@ class TestHeartbeatWiredInProduction:
 
     @pytest.mark.asyncio
     async def test_run_ingest_job_calls_heartbeat(self):
-        from unittest.mock import AsyncMock, patch, MagicMock
+        from unittest.mock import AsyncMock, MagicMock, patch
         store = IngestJobStore(ttl_seconds=3600.0)
         job = await store.create()
         mock_graph = AsyncMock(return_value={

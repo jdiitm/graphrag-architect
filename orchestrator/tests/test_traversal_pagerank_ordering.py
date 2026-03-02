@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
+from orchestrator.app.agentic_traversal import _NEIGHBOR_DISCOVERY_NO_ACL
 from orchestrator.app.tenant_security import (
     build_traversal_batched_neighbor,
     build_traversal_neighbor_discovery,
 )
-from orchestrator.app.agentic_traversal import _NEIGHBOR_DISCOVERY_NO_ACL
 
 
 class TestNeighborDiscoveryPagerankOrdering:

@@ -5,7 +5,7 @@ import enum
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, TypeVar
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
 from neo4j.exceptions import ClientError, Neo4jError
@@ -26,6 +26,16 @@ from orchestrator.app.tenant_security import (
 )
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+async def _execute_read_tx(
+    session: Any,
+    work: Callable[..., Awaitable[_T]],
+    timeout: float,
+) -> Any:
+    return await session.execute_read(work, timeout=timeout)
 
 MAX_HOPS = 5
 MAX_VISITED = 50
@@ -391,10 +401,11 @@ async def bounded_path_expansion(
 
     async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
         result = await tx.run(cypher, **params)
-        return await result.data()
+        return list(await result.data())
 
     async with driver.session() as session:
-        return await session.execute_read(_tx, timeout=timeout)
+        result: list[dict[str, Any]] = await _execute_read_tx(session, _tx, timeout)
+        return result
 
 
 async def _run_sampled_query(
@@ -422,9 +433,10 @@ async def _run_sampled_query(
 
     async def _sample_tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
         result = await tx.run(effective_template, **params)
-        return await result.data()
+        return list(await result.data())
 
-    return await session.execute_read(_sample_tx, timeout=timeout)
+    result: list[dict[str, Any]] = await _execute_read_tx(session, _sample_tx, timeout)
+    return result
 
 
 async def execute_hop(
@@ -443,9 +455,11 @@ async def execute_hop(
     provider = TenantSecurityProvider()
     degree_params = {"source_id": source_id, "tenant_id": tenant_id}
 
+    degree_tx_params: Dict[str, Any] = degree_params
+
     async def _degree_tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
-        result = await tx.run(_DEGREE_CHECK_QUERY, **degree_params)
-        return await result.data()
+        result = await tx.run(_DEGREE_CHECK_QUERY, **degree_tx_params)
+        return list(await result.data())
 
     enforce_acl = not skip_acl
     if skip_acl:
@@ -468,7 +482,9 @@ async def execute_hop(
     )
 
     async with driver.session() as session:
-        degree_result = await session.execute_read(_degree_tx, timeout=timeout)
+        degree_result = await _execute_read_tx(
+            session, _degree_tx, timeout=timeout,
+        )
         if degree_result:
             degree = degree_result[0].get("degree", 0)
             if degree > max_degree:
@@ -502,9 +518,10 @@ async def execute_hop(
 
         async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
             result = await tx.run(neighbor_query, **params)
-            return await result.data()
+            return list(await result.data())
 
-        return await session.execute_read(_tx, timeout=timeout)
+        records: list[dict[str, Any]] = await _execute_read_tx(session, _tx, timeout)
+        return records
 
 
 async def execute_batched_hop(
@@ -551,11 +568,11 @@ async def execute_batched_hop(
 
         async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
             result = await tx.run(batched_query, **params)
-            return await result.data()
+            return list(await result.data())
 
         async with driver.session() as session:
             all_results.extend(
-                await session.execute_read(_tx, timeout=timeout)
+                await _execute_read_tx(session, _tx, timeout)
             )
 
     if super_nodes:
@@ -586,14 +603,14 @@ async def batch_check_degrees(
     if not source_ids:
         return {}
 
-    params = {"source_ids": source_ids, "tenant_id": tenant_id}
+    params: Dict[str, Any] = {"source_ids": source_ids, "tenant_id": tenant_id}
 
     async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
         result = await tx.run(_BATCH_DEGREE_CHECK_QUERY, **params)
-        return await result.data()
+        return list(await result.data())
 
     async with driver.session() as session:
-        records = await session.execute_read(_tx, timeout=timeout)
+        records = await _execute_read_tx(session, _tx, timeout)
 
     return {
         row["node_id"]: int(row["degree"])
@@ -627,10 +644,11 @@ async def _batched_supernode_expansion(
 
     async def _tx(tx: AsyncManagedTransaction) -> List[Dict[str, Any]]:
         result = await tx.run(query, **params)
-        return await result.data()
+        return list(await result.data())
 
     async with driver.session() as session:
-        return await session.execute_read(_tx, timeout=timeout)
+        records: list[dict[str, Any]] = await _execute_read_tx(session, _tx, timeout)
+        return records
 
 
 def _drain_frontier(state: TraversalState) -> List[str]:

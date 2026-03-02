@@ -12,7 +12,6 @@ from orchestrator.app.agentic_traversal import (
 )
 from orchestrator.app.context_manager import TokenBudget
 
-
 _SAMPLE_RESULTS = [
     {"target_id": "svc-a", "target_name": "auth-service", "target_label": "Service"},
     {"target_id": "svc-b", "target_name": "payment-service", "target_label": "Service"},

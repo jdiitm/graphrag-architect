@@ -11,7 +11,6 @@ from orchestrator.app.slo_rules import (
     generate_prometheus_rules,
 )
 
-
 EXPECTED_SLO_NAMES = {
     "ingestion_availability",
     "query_availability",
@@ -25,7 +24,7 @@ EXPECTED_SLO_NAMES = {
 class TestSLODefinitionsExist:
     def test_all_required_slos_present(self) -> None:
         actual_names = {slo.name for slo in PRODUCTION_SLOS}
-        assert EXPECTED_SLO_NAMES == actual_names
+        assert actual_names == EXPECTED_SLO_NAMES
 
     def test_slo_definitions_are_frozen(self) -> None:
         slo = PRODUCTION_SLOS[0]

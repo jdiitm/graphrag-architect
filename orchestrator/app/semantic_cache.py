@@ -849,7 +849,7 @@ class RedisSemanticQueryCache:
                 return None
             if entry.get("acl_key", "") != acl_key:
                 return None
-            result = entry.get("result")
+            result: dict[str, Any] | None = entry.get("result")
             if result is not None:
                 self._l1.store(
                     query=entry.get("query", ""),

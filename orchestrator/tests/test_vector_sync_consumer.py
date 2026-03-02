@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import pytest
 
+from orchestrator.app.config import VectorSyncConfig
 from orchestrator.app.mutation_publisher import GraphMutationEvent
 from orchestrator.app.vector_sync_consumer import VectorSyncKafkaConsumer
-from orchestrator.app.config import VectorSyncConfig
 
 
 class _FakeVectorDeleter:

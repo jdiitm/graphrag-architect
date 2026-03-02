@@ -221,9 +221,10 @@ class CypherParser:
         union_token = self._advance()
         ws = self._skip_whitespace()
         all_token: List[CypherToken] = []
-        if (self._current()
-                and self._current().token_type == TokenType.KEYWORD
-                and self._current().value.upper() == "ALL"):
+        cur = self._current()
+        if (cur is not None
+                and cur.token_type == TokenType.KEYWORD
+                and cur.value.upper() == "ALL"):
             all_token = [self._advance()]
             ws.extend(self._skip_whitespace())
 
@@ -370,7 +371,7 @@ def _is_limit_clause(clause: Any) -> bool:
     for t in clause.tokens:
         if t.token_type == TokenType.WHITESPACE:
             continue
-        return (
+        return bool(
             t.token_type == TokenType.KEYWORD
             and t.value.upper() == "LIMIT"
         )

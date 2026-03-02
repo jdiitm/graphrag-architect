@@ -16,13 +16,12 @@ from orchestrator.app.ontology import (
     EdgeTypeDefinition,
     NodeTypeDefinition,
     Ontology,
+    build_default_ontology,
     generate_edge_merge_cypher,
     generate_edge_unwind_cypher,
     generate_merge_cypher,
     generate_unwind_cypher,
-    build_default_ontology,
 )
-
 
 SAMPLE_SERVICE = ServiceNode(
     id="order-service",

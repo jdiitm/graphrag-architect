@@ -3,7 +3,6 @@ import re
 
 import yaml
 
-
 _INFRA_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
     "infrastructure", "k8s",

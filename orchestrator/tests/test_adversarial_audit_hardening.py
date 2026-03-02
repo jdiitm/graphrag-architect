@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
 import pytest
+import yaml
 
 from orchestrator.app.query_templates import TemplateCatalog
-
 
 INFRA_DIR = Path(__file__).resolve().parents[2] / "infrastructure"
 NETWORK_POLICIES_PATH = INFRA_DIR / "k8s" / "network-policies.yaml"

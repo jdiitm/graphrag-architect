@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.app.graph_embeddings import (
+    GDSEmbeddingBackend,
     GraphEmbeddingBackend,
     GraphTooLargeError,
     GraphTopology,
-    GDSEmbeddingBackend,
     LocalEmbeddingBackend,
     Node2VecConfig,
     create_embedding_backend,

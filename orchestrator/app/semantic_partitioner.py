@@ -184,7 +184,7 @@ class GDSPartitioner:
         node_label: str,
         relationship_type: str = "RELATES_TO",
     ) -> PartitionResult:
-        async def _tx(tx: Any) -> list:
+        async def _tx(tx: Any) -> list[Any]:
             result = await tx.run(
                 "CALL gds.leiden.stream($graph_name, {"
                 "  nodeLabels: [$node_label],"
@@ -196,7 +196,7 @@ class GDSPartitioner:
                 node_label=node_label,
                 rel_type=relationship_type,
             )
-            return await result.data()
+            return list(await result.data())
 
         async with self._driver.session() as session:
             records = await session.execute_read(_tx)
@@ -218,7 +218,7 @@ class GDSPartitioner:
         return self._fallback.partition(topology)
 
     @staticmethod
-    def _records_to_result(records: List[dict]) -> PartitionResult:
+    def _records_to_result(records: List[dict[str, Any]]) -> PartitionResult:
         if not records:
             return PartitionResult()
 

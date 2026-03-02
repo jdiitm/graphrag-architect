@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import pytest
 
+from orchestrator.app.call_isolation import (
+    ASTVisitor,
+    UnfilteredCallMatchError,
+    count_acl_injection_depth,
+    validate_call_subquery_acl,
+)
 from orchestrator.app.cypher_ast import (
     CallSubquery,
     CypherParser,
     MatchClause,
     inject_acl_all_scopes,
-)
-from orchestrator.app.call_isolation import (
-    ASTVisitor,
-    UnfilteredCallMatchError,
-    validate_call_subquery_acl,
-    count_acl_injection_depth,
 )
 
 

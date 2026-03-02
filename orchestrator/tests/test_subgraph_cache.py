@@ -109,6 +109,7 @@ class TestSubgraphCacheWiredIntoQueryEngine:
     @pytest.mark.asyncio
     async def test_cached_result_skips_neo4j_execution(self) -> None:
         from unittest.mock import AsyncMock, MagicMock, patch
+
         from orchestrator.app.query_engine import _execute_sandboxed_read
 
         mock_session = AsyncMock()

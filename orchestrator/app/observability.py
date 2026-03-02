@@ -45,7 +45,7 @@ class RecordAllSampler(Sampler):
         kind: Optional[SpanKind] = None,
         attributes: Optional[Attributes] = None,
         links: Optional[Sequence[Link]] = None,
-        trace_state: Optional["trace.TraceState"] = None,
+        trace_state: Optional[trace.TraceState] = None,
     ) -> SamplingResult:
         result = self._delegate.should_sample(
             parent_context, trace_id, name, kind, attributes, links, trace_state
@@ -68,7 +68,7 @@ class ErrorForceExportProcessor(SimpleSpanProcessor):
         self._error_exporter = span_exporter
 
     def on_start(
-        self, span: "ReadableSpan", parent_context: Optional["Context"] = None
+        self, span: ReadableSpan, parent_context: Optional[Context] = None
     ) -> None:
         pass
 

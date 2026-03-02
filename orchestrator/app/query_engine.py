@@ -5,7 +5,18 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    TypeVar,
+)
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
@@ -16,6 +27,7 @@ from orchestrator.app.access_control import (
     CypherPermissionFilter,
     SecurityPrincipal,
 )
+from orchestrator.app.agentic_traversal import run_traversal
 from orchestrator.app.circuit_breaker import (
     CircuitBreakerConfig,
     CircuitOpenError,
@@ -28,46 +40,29 @@ from orchestrator.app.config import (
     EmbeddingConfig,
     ExtractionConfig,
     RAGEvalConfig,
+    VectorStoreConfig,
 )
-from orchestrator.app.llm_provider import LLMError, LLMProvider, create_provider_with_failover
-from orchestrator.app.cypher_sandbox import (
-    SandboxedQueryExecutor,
-    TemplateHashRegistry,
-)
-from orchestrator.app.cypher_validator import CypherValidationError, estimate_query_cost
 from orchestrator.app.context_manager import (
     TokenBudget,
     compress_context_map_reduce,
     format_context_for_prompt,
     truncate_context_topology,
 )
-from orchestrator.app.prompt_sanitizer import (
-    InjectionResult,
-    PromptInjectionClassifier,
-    sanitize_query_input,
+from orchestrator.app.cypher_sandbox import (
+    SandboxedQueryExecutor,
+    TemplateHashRegistry,
 )
+from orchestrator.app.cypher_validator import CypherValidationError, estimate_query_cost
+from orchestrator.app.density_reranker import DensityReranker, DensityRerankerConfig
+from orchestrator.app.executor import get_thread_pool
 from orchestrator.app.graph_embeddings import (
     FusionHint,
     classify_fusion_hint,
     compute_centroid,
     rerank_with_structural,
 )
-from orchestrator.app.reranker import BM25Reranker
-from orchestrator.app.density_reranker import DensityReranker, DensityRerankerConfig
-from orchestrator.app.agentic_traversal import run_traversal
-from orchestrator.app.executor import get_thread_pool
-from orchestrator.app.tombstone_filter import filter_tombstoned_results
 from orchestrator.app.lazy_traversal import gds_pagerank_filter
-from orchestrator.app.query_templates import (
-    TemplateCatalog,
-    match_template,
-)
-from orchestrator.app.subgraph_cache import (
-    cache_key,
-    create_subgraph_cache,
-)
-from orchestrator.app.config import VectorStoreConfig
-from orchestrator.app.vector_store import SearchResult, VectorDegradedError, create_vector_store
+from orchestrator.app.llm_provider import LLMError, LLMProvider, create_provider_with_failover
 from orchestrator.app.neo4j_pool import (
     get_driver,
     get_query_timeout,
@@ -75,21 +70,51 @@ from orchestrator.app.neo4j_pool import (
     get_tenant_registry,
     resolve_driver_for_tenant,
 )
-from orchestrator.app.telemetry_ports import get_metrics_port, get_tracing_port
+from orchestrator.app.prompt_sanitizer import (
+    InjectionResult,
+    PromptInjectionClassifier,
+    sanitize_query_input,
+)
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
+from orchestrator.app.query_templates import (
+    TemplateCatalog,
+    match_template,
+)
 from orchestrator.app.rag_evaluator import (
     EvaluationStore,
     LLMEvaluator,
     RAGEvaluator,
+    RedisEvaluationStore,
     create_evaluation_store,
 )
+from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.semantic_cache import create_semantic_cache
+from orchestrator.app.subgraph_cache import (
+    cache_key,
+    create_subgraph_cache,
+)
+from orchestrator.app.telemetry_ports import get_metrics_port, get_tracing_port
+from orchestrator.app.tombstone_filter import filter_tombstoned_results
+from orchestrator.app.vector_store import SearchResult, VectorDegradedError, create_vector_store
 
+_OPENAI_MODULE: Any = None
 try:
-    import openai as _openai_module
+    import openai as _OPENAI_MODULE
 except ImportError:
-    _openai_module = None
+    pass
+
+_T = TypeVar("_T")
+
+
+async def _execute_read_tx(
+    session: Any,
+    work: Callable[..., Awaitable[_T]],
+    timeout: float,
+) -> _T:
+    result: _T = await session.execute_read(work, timeout=timeout)
+    return result
+
 
 _query_logger = logging.getLogger(__name__)
 
@@ -169,7 +194,7 @@ def _sandbox_inject_limit(cypher: str) -> str:
 
 class PromptInjectionBlockedError(Exception):
     def __init__(
-        self, query: str, score: float, patterns: list,
+        self, query: str, score: float, patterns: List[Any],
     ) -> None:
         self.query = query
         self.score = score
@@ -218,9 +243,9 @@ def _get_embedding_resources() -> Tuple[Optional[EmbeddingConfig], Any]:
     if (
         _EMBEDDING_STATE["client"] is None
         and cfg.provider == "openai"
-        and _openai_module is not None
+        and _OPENAI_MODULE is not None
     ):
-        _EMBEDDING_STATE["client"] = _openai_module.AsyncOpenAI()
+        _EMBEDDING_STATE["client"] = _OPENAI_MODULE.AsyncOpenAI()
     return cfg, _EMBEDDING_STATE["client"]
 
 
@@ -230,7 +255,7 @@ async def _raw_embed_query(text: str) -> Optional[List[float]]:
         response = await client.embeddings.create(
             input=[text], model=cfg.model_name
         )
-        return response.data[0].embedding
+        return [float(x) for x in response.data[0].embedding]
     return None
 
 
@@ -517,7 +542,7 @@ async def _raw_llm_synthesize_stream(
     try:
         async for chunk in llm.astream(messages):
             if hasattr(chunk, "content") and chunk.content:
-                yield chunk.content
+                yield str(chunk.content)
     except LLMError:
         _query_logger.warning(
             "Streaming LLM provider failed, yielding degraded response",
@@ -629,12 +654,12 @@ async def synthesize_with_concurrent_scan(
                     "Context injection classifier failed (non-fatal)",
                     exc_info=True,
                 )
-        return synthesis_result
+        return str(synthesis_result)
 
-    return await synthesis_task
+    return str(await synthesis_task)
 
 
-def classify_query_node(state: QueryState) -> dict:
+def classify_query_node(state: QueryState) -> Dict[str, Any]:
     with get_tracing_port().start_span("query.classify") as span:
         start = time.monotonic()
         complexity = classify_query(state["query"])
@@ -660,7 +685,7 @@ def route_query(state: QueryState) -> str:
     }.get(path, "vector_retrieve")
 
 
-async def vector_retrieve(state: QueryState) -> dict:
+async def vector_retrieve(state: QueryState) -> Dict[str, Any]:
     with get_tracing_port().start_span("query.vector_retrieve"):
         start = time.monotonic()
         try:
@@ -685,7 +710,7 @@ async def vector_retrieve(state: QueryState) -> dict:
                     "Vector store search failed, degrading to empty candidates",
                 )
                 return {"candidates": [], "retrieval_degraded": True}
-            result: dict = {"candidates": candidates}
+            result: Dict[str, Any] = {"candidates": candidates}
             if degraded:
                 result["retrieval_degraded"] = True
             return result
@@ -697,7 +722,7 @@ async def vector_retrieve(state: QueryState) -> dict:
 
 async def _fetch_candidates(
     driver: AsyncDriver, state: QueryState,
-) -> list:
+) -> List[Any]:
     tenant_id = state.get("tenant_id", "")
     query_embedding = await _embed_query(state["query"], tenant_id=tenant_id)
     return await _fetch_candidates_with_embedding(
@@ -709,7 +734,7 @@ async def _fetch_candidates_with_embedding(
     driver: AsyncDriver,
     state: QueryState,
     query_embedding: Optional[List[float]],
-) -> list:
+) -> List[Any]:
     limit = state.get("max_results", 10)
     tenant_id = state.get("tenant_id", "")
 
@@ -729,18 +754,18 @@ async def _fetch_candidates_with_embedding(
     base_cypher = build_fulltext_fallback_cypher(tenant_id=tenant_id)
     vec_cypher, vec_acl = _apply_acl(base_cypher, state, alias="node")
 
-    async def _vector_tx(tx: AsyncManagedTransaction) -> list:
+    async def _vector_tx(tx: AsyncManagedTransaction) -> List[Any]:
         params: Dict[str, Any] = {
             **vec_acl, "limit": limit, "query": state["query"],
         }
         if tenant_id:
             params["tenant_id"] = tenant_id
         result = await tx.run(vec_cypher, **params)
-        return await result.data()
+        return list(await result.data())
 
     timeout = _get_query_timeout()
     async with driver.session() as session:
-        return await session.execute_read(_vector_tx, timeout=timeout)
+        return await _execute_read_tx(session, _vector_tx, timeout)
 
 
 def _build_single_hop_cypher() -> str:
@@ -758,7 +783,7 @@ def _build_single_hop_cypher() -> str:
     )
 
 
-async def single_hop_retrieve(state: QueryState) -> dict:
+async def single_hop_retrieve(state: QueryState) -> Dict[str, Any]:
     with get_tracing_port().start_span("query.single_hop_retrieve"):
         start = time.monotonic()
         try:
@@ -775,19 +800,21 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                     state, alias="m",
                 )
 
-                async def _hop_tx(tx: AsyncManagedTransaction) -> list:
+                hop_acl_any: Dict[str, Any] = dict(hop_acl)
+
+                async def _hop_tx(tx: AsyncManagedTransaction) -> List[Any]:
                     result = await tx.run(
                         hop_cypher, names=names, hop_limit=hop_limit,
                         degree_cap=degree_cap,
                         tenant_id=state.get("tenant_id", ""),
-                        **hop_acl,
+                        **hop_acl_any,
                     )
-                    return await result.data()
+                    return list(await result.data())
 
                 timeout = _get_query_timeout()
                 async with driver.session() as session:
-                    hop_records = await session.execute_read(
-                        _hop_tx, timeout=timeout,
+                    hop_records = await _execute_read_tx(
+                        session, _hop_tx, timeout,
                     )
 
                 return {
@@ -804,15 +831,16 @@ async def single_hop_retrieve(state: QueryState) -> dict:
             )
 
 
-async def _cache_get(key: str) -> Optional[list]:
+async def _cache_get(key: str) -> Optional[List[Any]]:
     result = _SUBGRAPH_CACHE.get(key)
     if inspect.isawaitable(result):
-        return await result
-    return result
+        resolved: Optional[List[Any]] = await result
+        return resolved
+    return list(result) if result is not None else None
 
 
 async def _cache_put(
-    key: str, value: list, node_ids: Optional[Set[str]] = None,
+    key: str, value: list[Any], node_ids: Optional[Set[str]] = None,
 ) -> None:
     result = _SUBGRAPH_CACHE.put(key, value, node_ids=node_ids)
     if inspect.isawaitable(result):
@@ -823,7 +851,7 @@ async def _execute_sandboxed_read(
     driver: AsyncDriver,
     cypher: str,
     acl_params: Dict[str, str],
-) -> Optional[list]:
+) -> Optional[List[Any]]:
     cost = estimate_query_cost(cypher)
     max_cost = _get_max_query_cost()
     if cost > max_cost:
@@ -844,13 +872,13 @@ async def _execute_sandboxed_read(
         async def _tx(
             tx: AsyncManagedTransaction,
             _q: str = sandboxed,
-            _fp: tuple = frozen,
-        ) -> list:
+            _fp: Tuple[Any, ...] = frozen,
+        ) -> List[Any]:
             result = await tx.run(_q, **dict(_fp))
-            return await result.data()
+            return list(await result.data())
 
         timeout = _get_query_timeout()
-        records = await session.execute_read(_tx, timeout=timeout)
+        records = await _execute_read_tx(session, _tx, timeout)
 
     if records:
         await _cache_put(
@@ -862,7 +890,7 @@ async def _execute_sandboxed_read(
 
 async def _try_template_match(
     state: QueryState, driver: AsyncDriver,
-) -> Optional[dict]:
+) -> Optional[Dict[str, Any]]:
     tmatch = match_template(state["query"])
     if tmatch is None:
         return None
@@ -903,7 +931,7 @@ def _compute_acl_cache_key(state: QueryState) -> str:
 
 async def _check_semantic_cache(
     query: str, tenant_id: str, acl_key: str = "",
-) -> Tuple[Optional[dict], Optional[List[float]], bool]:
+) -> Tuple[Optional[Dict[str, Any]], Optional[List[float]], bool]:
     if _SEMANTIC_CACHE is None:
         return None, None, False
     query_embedding = await _embed_query(query, tenant_id=tenant_id)
@@ -917,8 +945,8 @@ async def _check_semantic_cache(
 
 def _store_in_semantic_cache(
     query: str,
-    query_embedding: Optional[list],
-    result: dict,
+    query_embedding: Optional[List[float]],
+    result: Dict[str, Any],
     tenant_id: str,
     complexity: str = "",
     acl_key: str = "",
@@ -936,7 +964,7 @@ def _store_in_semantic_cache(
     _SEMANTIC_CACHE.notify_complete(query_embedding, acl_key=acl_key)
 
 
-async def cypher_retrieve(state: QueryState) -> dict:
+async def cypher_retrieve(state: QueryState) -> Dict[str, Any]:
     with get_tracing_port().start_span("query.cypher_retrieve"):
         start = time.monotonic()
         try:
@@ -1030,7 +1058,7 @@ def extract_start_node_degree(
     return int(raw)
 
 
-async def hybrid_retrieve(state: QueryState) -> dict:
+async def hybrid_retrieve(state: QueryState) -> Dict[str, Any]:
     with get_tracing_port().start_span("query.hybrid_retrieve"):
         start = time.monotonic()
         try:
@@ -1071,7 +1099,7 @@ async def hybrid_retrieve(state: QueryState) -> dict:
             )
 
 
-async def compress_context(state: QueryState) -> dict:
+async def compress_context(state: QueryState) -> Dict[str, Any]:
     with get_tracing_port().start_span("query.compress_context"):
         context: List[Dict[str, Any]] = []
         if state.get("candidates"):
@@ -1098,7 +1126,7 @@ async def compress_context(state: QueryState) -> dict:
         return {"compressed": False}
 
 
-async def synthesize_answer(state: QueryState) -> dict:
+async def synthesize_answer(state: QueryState) -> Dict[str, Any]:
     with get_tracing_port().start_span("query.synthesize"):
         start = time.monotonic()
         result = await _do_synthesize(state)
@@ -1211,7 +1239,7 @@ async def _async_rerank_candidates(
     return ranked
 
 
-async def _do_synthesize(state: QueryState) -> dict:
+async def _do_synthesize(state: QueryState) -> Dict[str, Any]:
     context: List[Dict[str, Any]] = []
     if state.get("candidates"):
         context.extend(state["candidates"])
@@ -1279,11 +1307,11 @@ async def _do_synthesize(state: QueryState) -> dict:
 _EVAL_STORE = create_evaluation_store()
 
 
-def get_eval_store() -> EvaluationStore:
+def get_eval_store() -> EvaluationStore | RedisEvaluationStore:
     return _EVAL_STORE
 
 
-def _collect_context_embeddings(state: dict) -> List[List[float]]:
+def _collect_context_embeddings(state: Dict[str, Any]) -> List[List[float]]:
     embeddings: List[List[float]] = []
     for source in state.get("sources", []):
         if isinstance(source, dict):
@@ -1303,7 +1331,7 @@ def _classify_quality(score: float, threshold: float) -> str:
 
 async def _select_and_run_evaluator(
     eval_config: RAGEvalConfig,
-    state: dict,
+    state: Dict[str, Any],
     query_embedding: List[float],
     context_embeddings: List[List[float]],
 ) -> Tuple[float, str]:
@@ -1341,7 +1369,7 @@ async def _select_and_run_evaluator(
 
 async def _run_background_evaluation(
     query_id: str,
-    state: dict,
+    state: Dict[str, Any],
 ) -> None:
     with get_tracing_port().start_span("query.evaluate_background"):
         start = time.monotonic()
@@ -1381,7 +1409,7 @@ async def _run_background_evaluation(
             )
 
 
-def _on_eval_task_done(task: asyncio.Task) -> None:
+def _on_eval_task_done(task: asyncio.Task[Any]) -> None:
     if task.cancelled():
         return
     exc = task.exception()
@@ -1389,7 +1417,7 @@ def _on_eval_task_done(task: asyncio.Task) -> None:
         _query_logger.error("Background evaluation failed: %s", exc, exc_info=exc)
 
 
-async def evaluate_response(state: QueryState) -> dict:
+async def evaluate_response(state: QueryState) -> Dict[str, Any]:
     eval_config = RAGEvalConfig.from_env()
     if not eval_config.enable_evaluation:
         return {"evaluation_score": None, "retrieval_quality": "skipped", "query_id": ""}

@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.app.agentic_traversal import (
-    TraversalState,
     _BATCHED_NEIGHBOR_TEMPLATE,
+    TraversalState,
     _batched_bfs,
     _drain_frontier,
     execute_batched_hop,
@@ -45,7 +45,7 @@ def _make_mock_driver(query_results: list[list[dict]]) -> AsyncMock:
 
 
 async def _stub_low_degrees(driver, source_ids, tenant_id, timeout=30.0):
-    return {sid: 5 for sid in source_ids}
+    return dict.fromkeys(source_ids, 5)
 
 
 _DEFAULT_ACL = {

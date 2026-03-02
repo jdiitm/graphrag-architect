@@ -15,8 +15,9 @@ class TestResolveContextProductionMode:
             "NEO4J_PASSWORD": "password",
         }
         with patch.dict("os.environ", env, clear=False):
-            from orchestrator.app.main import _resolve_tenant_context
             from fastapi import HTTPException
+
+            from orchestrator.app.main import _resolve_tenant_context
             with pytest.raises(HTTPException) as exc_info:
                 _resolve_tenant_context(None)
             assert exc_info.value.status_code == 401
@@ -29,8 +30,9 @@ class TestResolveContextProductionMode:
             "NEO4J_PASSWORD": "password",
         }
         with patch.dict("os.environ", env, clear=False):
-            from orchestrator.app.main import _resolve_tenant_context
             from fastapi import HTTPException
+
+            from orchestrator.app.main import _resolve_tenant_context
             with pytest.raises(HTTPException) as exc_info:
                 _resolve_tenant_context("")
             assert exc_info.value.status_code == 401

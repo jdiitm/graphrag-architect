@@ -5,7 +5,6 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field, computed_field, field_validator
 
-
 _SAFE_ENTITY_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}$")
 _CYPHER_INJECTION_CHARS = re.compile(r"['\"{};\\`\x00]")
 _MAX_EDGE_REF_LENGTH = 512

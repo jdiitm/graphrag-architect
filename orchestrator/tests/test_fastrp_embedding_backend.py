@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.app.graph_embeddings import (
-    GraphEmbeddingBackend,
-    GraphTopology,
-    GDSEmbeddingBackend,
-    LocalEmbeddingBackend,
-    create_embedding_backend,
     FastRPConfig,
     FastRPEmbeddingBackend,
+    GDSEmbeddingBackend,
+    GraphEmbeddingBackend,
+    GraphTopology,
+    LocalEmbeddingBackend,
+    create_embedding_backend,
 )
 
 

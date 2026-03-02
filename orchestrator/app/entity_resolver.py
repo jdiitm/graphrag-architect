@@ -143,7 +143,7 @@ class EntityResolver:
             return entities
 
         resolved: List[Any] = []
-        seen_ids: set = set()
+        seen_ids: set[str] = set()
         for entity in entities:
             if isinstance(entity, ServiceNode):
                 new_id = id_mapping.get(entity.id, entity.id)
