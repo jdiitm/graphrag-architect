@@ -132,6 +132,6 @@ class TestGraphBuilderUnifiedCollection:
 
     def test_resolve_vector_collection_always_returns_base(self) -> None:
         from orchestrator.app.graph_builder import resolve_vector_collection
-        assert resolve_vector_collection("acme") == "services"
-        assert resolve_vector_collection("") == "services"
-        assert resolve_vector_collection(None) == "services"
+        assert resolve_vector_collection("acme") == "service_embeddings"
+        assert resolve_vector_collection("") == "service_embeddings"
+        assert resolve_vector_collection(None) == "service_embeddings"

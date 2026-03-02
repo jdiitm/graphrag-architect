@@ -334,6 +334,107 @@ class FastRPEmbeddingBackend:
         return asyncio.run(self.generate_embeddings_async(topology))
 
 
+_GDS_PROJECT_CYPHER = (
+    "CALL gds.graph.project("
+    "$graph_name, $node_labels, $relationship_types"
+    ") YIELD graphName, nodeCount, relationshipCount"
+)
+
+_GDS_DROP_CYPHER = "CALL gds.graph.drop($graph_name) YIELD graphName"
+
+_DEFAULT_MUTATION_THRESHOLD = 100
+
+
+class GDSProjectionManager:
+    def __init__(
+        self,
+        driver: Any,
+        redis_conn: Any,
+        mutation_threshold: int = _DEFAULT_MUTATION_THRESHOLD,
+    ) -> None:
+        self._driver = driver
+        self._redis = redis_conn
+        self._mutation_threshold = mutation_threshold
+        self._mutation_counts: Dict[str, int] = {}
+
+    def graph_name(self, tenant_id: str) -> str:
+        return f"graphrag_{tenant_id}"
+
+    def _cache_key(self, tenant_id: str) -> str:
+        return f"gds:projection:{tenant_id}:exists"
+
+    def record_mutation(self, tenant_id: str) -> None:
+        self._mutation_counts[tenant_id] = (
+            self._mutation_counts.get(tenant_id, 0) + 1
+        )
+
+    def _check_and_reset_mutations(self, tenant_id: str) -> bool:
+        count = self._mutation_counts.get(tenant_id, 0)
+        if count >= self._mutation_threshold:
+            self._mutation_counts[tenant_id] = 0
+            return True
+        return False
+
+    async def ensure_projection(self, tenant_id: str) -> bool:
+        stale = self._check_and_reset_mutations(tenant_id)
+        if stale:
+            await self.invalidate_projection(tenant_id)
+
+        cached = await self._redis.get(self._cache_key(tenant_id))
+        if cached is not None:
+            return False
+
+        await self._project_graph(tenant_id)
+        await self._redis.set(self._cache_key(tenant_id), "1")
+        return True
+
+    async def invalidate_projection(self, tenant_id: str) -> None:
+        await self._redis.delete(self._cache_key(tenant_id))
+        try:
+            gname = self.graph_name(tenant_id)
+            async with self._driver.session() as session:
+                await session.execute_write(
+                    self._drop_tx, graph_name=gname,
+                )
+        except Exception:
+            logger.debug(
+                "GDS graph drop failed for tenant=%s (may not exist)",
+                tenant_id,
+                exc_info=True,
+            )
+
+    async def _project_graph(self, tenant_id: str) -> None:
+        gname = self.graph_name(tenant_id)
+        try:
+            async with self._driver.session() as session:
+                await session.execute_write(
+                    self._project_tx,
+                    graph_name=gname,
+                    tenant_id=tenant_id,
+                )
+        except Exception:
+            logger.warning(
+                "GDS graph projection failed for tenant=%s",
+                tenant_id,
+                exc_info=True,
+            )
+
+    @staticmethod
+    async def _project_tx(
+        tx: Any, graph_name: str, tenant_id: str,
+    ) -> None:
+        await tx.run(
+            _GDS_PROJECT_CYPHER,
+            graph_name=graph_name,
+            node_labels=["Service", "KafkaTopic", "K8sDeployment"],
+            relationship_types=["CALLS", "PRODUCES", "CONSUMES", "DEPLOYED_IN"],
+        )
+
+    @staticmethod
+    async def _drop_tx(tx: Any, graph_name: str) -> None:
+        await tx.run(_GDS_DROP_CYPHER, graph_name=graph_name)
+
+
 def create_embedding_backend(
     backend_type: str = "local",
     driver: Any = None,

@@ -18,6 +18,8 @@ from orchestrator.app.token_counter import count_tokens
 
 _context_logger = logging.getLogger(__name__)
 
+TOKEN_COMPRESSION_THRESHOLD = 24_000
+
 _CONTENT_FIREWALL = ContentFirewall()
 _HMAC_DELIMITER = HMACDelimiter()
 
@@ -636,6 +638,33 @@ def _enforce_budget_on_serialized(
         budget.max_context_tokens,
     )
     return records
+
+
+def compress_context_map_reduce(
+    context: List[Dict[str, Any]],
+    query: str,
+    budget: TokenBudget,
+) -> List[Dict[str, Any]]:
+    if not context:
+        return []
+
+    total_tokens = sum(
+        estimate_tokens(_serialize_candidate(c)) for c in context
+    )
+    if total_tokens <= TOKEN_COMPRESSION_THRESHOLD:
+        return context
+
+    try:
+        compressed = compress_component_to_summaries(context, budget)
+        if compressed:
+            return compressed
+    except Exception:
+        _context_logger.warning(
+            "Community-based compression failed, falling back to truncation",
+            exc_info=True,
+        )
+
+    return truncate_context(context, budget)
 
 
 _CONTEXT_BLOCK_TAG = re.compile(

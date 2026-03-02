@@ -67,7 +67,7 @@ from orchestrator.app.config import ASTExtractionConfig, ASTPoolConfig, GRPCASTC
 from orchestrator.app.ast_grpc_client import GRPCASTClient
 from orchestrator.app.ast_result_consumer import ASTResultConsumer
 
-_VECTOR_COLLECTION = "services"
+_VECTOR_COLLECTION = "service_embeddings"
 
 _AST_POOL_CFG = ASTPoolConfig.from_env()
 _PROCESS_POOL_MAX_WORKERS = min(
