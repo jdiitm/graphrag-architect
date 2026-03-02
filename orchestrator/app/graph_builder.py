@@ -68,6 +68,7 @@ from orchestrator.app.vector_sync_outbox import (
     VectorSyncEvent,
     VectorSyncOutbox,
 )
+from orchestrator.app.secret_scanner import scan_and_redact
 from orchestrator.app.workspace_loader import load_directory_chunked, load_directory_stream
 
 _VECTOR_COLLECTION = "service_embeddings"
@@ -658,8 +659,24 @@ async def enrich_with_llm(state: IngestionState) -> Dict[str, Any]:
         start = time.monotonic()
         existing = list(state.get("extracted_nodes", []))
         try:
+            sanitized_files: List[Dict[str, str]] = []
+            for raw_file in state["raw_files"]:
+                redacted_content, findings = scan_and_redact(
+                    raw_file["content"],
+                )
+                if findings:
+                    logger.warning(
+                        "Secret scanner found %d secret(s) in %s: %s",
+                        len(findings),
+                        raw_file["path"],
+                        ", ".join(f.pattern_name for f in findings),
+                    )
+                sanitized_files.append({
+                    "path": raw_file["path"],
+                    "content": redacted_content,
+                })
             extractor = _build_extractor()
-            result = await extractor.extract_all(state["raw_files"])
+            result = await extractor.extract_all(sanitized_files)
             for svc in result.services:
                 svc.confidence = 0.7
                 existing_svc = next(
