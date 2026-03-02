@@ -152,11 +152,11 @@ class TestFulltextUnscopedUnreachableInProduction:
             else:
                 os.environ["DEPLOYMENT_MODE"] = original
 
-    def test_dev_mode_returns_unscoped_without_tenant_id(self) -> None:
-        result = build_fulltext_fallback_cypher(
-            tenant_id="", deployment_mode="dev",
-        )
-        assert "tenant_id" not in result
+    def test_dev_mode_raises_without_tenant_id(self) -> None:
+        with pytest.raises(FulltextTenantRequired):
+            build_fulltext_fallback_cypher(
+                tenant_id="", deployment_mode="dev",
+            )
 
     def test_tenant_id_always_returns_scoped(self) -> None:
         result = build_fulltext_fallback_cypher(

@@ -301,10 +301,11 @@ class TestSynthesisPipelineIntegration:
             from orchestrator.app.query_engine import _raw_llm_synthesize
             await _raw_llm_synthesize("What depends on auth?", malicious_context)
 
-        mock_classify.assert_called_once()
-        classified_text = mock_classify.call_args[0][0]
-        assert classified_text == "What depends on auth?"
-        assert "ignore all previous instructions" not in classified_text.lower()
+        assert mock_classify.call_count == 2
+        query_text = mock_classify.call_args_list[0][0][0]
+        assert query_text == "What depends on auth?"
+        context_text = mock_classify.call_args_list[1][0][0]
+        assert "ignore all previous instructions" in context_text.lower()
 
     @pytest.mark.asyncio
     async def test_guardrails_disabled_skips_classifier(self) -> None:

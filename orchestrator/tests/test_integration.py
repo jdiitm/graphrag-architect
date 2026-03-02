@@ -281,6 +281,7 @@ class TestQueryDAGRouting:
                 "max_results": 10,
                 "iteration_count": 0,
                 "authorization": "",
+                "tenant_id": "test-tenant",
             })
 
             assert result["complexity"].value == "entity_lookup"

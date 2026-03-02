@@ -714,7 +714,7 @@ class TestVectorStoreWiring:
         ])
 
         mock_driver = MagicMock()
-        state = _make_state(base_query_state, query="auth-svc info")
+        state = _make_state(base_query_state, query="auth-svc info", tenant_id="")
 
         with patch(
             "orchestrator.app.query_engine._VECTOR_STORE", mock_store,

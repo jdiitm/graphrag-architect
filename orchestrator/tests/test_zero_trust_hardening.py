@@ -40,6 +40,15 @@ class TestTenantRouterFailClosed:
 
 class TestQueryEngineRegistryWiring:
 
+    @pytest.fixture(autouse=True)
+    def _mock_tenant_driver_resolution(self):
+        from orchestrator.app.neo4j_pool import resolve_driver_for_tenant as _real
+        with patch(
+            "orchestrator.app.query_engine.resolve_driver_for_tenant",
+            side_effect=_real,
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_neo4j_session_uses_tenant_registry(self) -> None:
         from orchestrator.app.query_engine import _neo4j_session
@@ -114,10 +123,10 @@ class TestPromptClassificationScope:
                 [{"name": "auth-service", "type": "Service"}],
             )
 
-            mock_classify.assert_called_once()
-            classified_text = mock_classify.call_args[0][0]
-            assert "auth-service" not in classified_text or "What calls" in classified_text
-            assert len(classified_text) < 500
+            assert mock_classify.call_count == 2
+            first_classified = mock_classify.call_args_list[0][0][0]
+            assert "What calls" in first_classified
+            assert len(first_classified) < 500
 
     @pytest.mark.asyncio
     async def test_context_injection_patterns_not_flagged(self) -> None:
@@ -151,8 +160,11 @@ class TestPromptClassificationScope:
             ]
             await _raw_llm_synthesize("What is evil-pod?", context_with_injection)
 
-            classified_text = mock_classify.call_args[0][0]
-            assert "ignore previous instructions" not in classified_text
+            assert mock_classify.call_count == 2
+            query_text = mock_classify.call_args_list[0][0][0]
+            assert "ignore previous instructions" not in query_text
+            context_text = mock_classify.call_args_list[1][0][0]
+            assert "ignore previous instructions" in context_text
 
 
 class TestPerTenantRateLimiting:

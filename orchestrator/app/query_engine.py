@@ -45,7 +45,11 @@ from orchestrator.app.prompt_sanitizer import (
     PromptInjectionClassifier,
     sanitize_query_input,
 )
-from orchestrator.app.graph_embeddings import compute_centroid, rerank_with_structural
+from orchestrator.app.graph_embeddings import (
+    classify_fusion_hint,
+    compute_centroid,
+    rerank_with_structural,
+)
 from orchestrator.app.reranker import BM25Reranker
 from orchestrator.app.density_reranker import DensityReranker, DensityRerankerConfig
 from orchestrator.app.agentic_traversal import run_traversal
@@ -176,13 +180,6 @@ class FulltextTenantRequired(Exception):
     pass
 
 
-_FULLTEXT_UNSCOPED = (
-    "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
-    "YIELD node, score "
-    "RETURN node {.*, score: score} AS result "
-    "ORDER BY score DESC LIMIT $limit"
-)
-
 _FULLTEXT_TENANT_SCOPED = (
     "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
     "YIELD node, score "
@@ -200,15 +197,12 @@ def build_fulltext_fallback_cypher(
     tenant_id: str,
     deployment_mode: str = "",
 ) -> str:
-    if tenant_id:
-        return _FULLTEXT_TENANT_SCOPED
-    effective_mode = deployment_mode or os.environ.get("DEPLOYMENT_MODE", "dev")
-    if effective_mode.lower() == "production":
+    if not tenant_id:
         raise FulltextTenantRequired(
-            "Fulltext fallback queries require tenant_id in production mode. "
+            "Fulltext fallback queries require tenant_id. "
             "Unscoped fulltext queries risk cross-tenant data leakage."
         )
-    return _FULLTEXT_UNSCOPED
+    return _FULLTEXT_TENANT_SCOPED
 
 
 _EMBEDDING_STATE: Dict[str, Any] = {"cfg": None, "client": None}
@@ -422,6 +416,11 @@ async def _raw_llm_synthesize(
                 injection_result.detected_patterns,
             )
 
+        context_text = _serialize_context_for_classification(context)
+        context_injection = await _classify_async(context_text)
+        if context_injection.is_flagged:
+            context = _strip_context_values(context, context_injection)
+
     context_block = format_context_for_prompt(context)
     messages = [
         SystemMessage(
@@ -472,6 +471,11 @@ async def _raw_llm_synthesize_stream(
                 injection_result.score,
                 injection_result.detected_patterns,
             )
+
+        context_text = _serialize_context_for_classification(context)
+        context_injection = await _classify_async(context_text)
+        if context_injection.is_flagged:
+            context = _strip_context_values(context, context_injection)
 
     from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -560,6 +564,7 @@ def classify_query_node(state: QueryState) -> dict:
     with tracer.start_as_current_span("query.classify") as span:
         start = time.monotonic()
         complexity = classify_query(state["query"])
+        fusion_hint = classify_fusion_hint(state["query"])
         span.set_attribute("query.complexity", complexity.value)
         QUERY_DURATION.record(
             (time.monotonic() - start) * 1000, {"node": "classify"}
@@ -567,6 +572,7 @@ def classify_query_node(state: QueryState) -> dict:
         return {
             "complexity": complexity,
             "retrieval_path": _ROUTE_MAP[complexity],
+            "fusion_hint": fusion_hint,
         }
 
 
@@ -1013,6 +1019,7 @@ def set_structural_embeddings(embeddings: Dict[str, List[float]]) -> None:
 def _apply_structural_rerank(
     candidates: List[Dict[str, Any]],
     complexity: Optional[QueryComplexity] = None,
+    hint: Any = None,
 ) -> List[Dict[str, Any]]:
     if not _STRUCTURAL_EMBEDDINGS or not candidates:
         return candidates
@@ -1041,6 +1048,7 @@ def _apply_structural_rerank(
         search_results, _STRUCTURAL_EMBEDDINGS, query_structural,
         complexity=complexity,
         fusion_strategy=fusion_strategy,
+        hint=hint,
     )
     return [r.metadata for r in reranked]
 
@@ -1069,6 +1077,7 @@ async def _async_rerank_candidates(
     query: str,
     candidates: List[Dict[str, Any]],
     complexity: Optional[QueryComplexity] = None,
+    hint: Any = None,
 ) -> List[Dict[str, Any]]:
     if not candidates:
         return []
@@ -1082,7 +1091,7 @@ async def _async_rerank_candidates(
 
     if _STRUCTURAL_EMBEDDINGS:
         ranked = await loop.run_in_executor(
-            pool, _apply_structural_rerank, ranked, complexity,
+            pool, _apply_structural_rerank, ranked, complexity, hint,
         )
 
     if _DENSITY_CFG.enable_density_rerank:
@@ -1112,10 +1121,13 @@ async def _do_synthesize(state: QueryState) -> dict:
     ranking_config = ContextRankingConfig.from_env()
     rerank_timeout = ranking_config.rerank_timeout_seconds or None
 
+    fusion_hint = state.get("fusion_hint")
+
     try:
         ranked_context = await asyncio.wait_for(
             _async_rerank_candidates(
                 state["query"], context, complexity=state.get("complexity"),
+                hint=fusion_hint,
             ),
             timeout=rerank_timeout,
         )

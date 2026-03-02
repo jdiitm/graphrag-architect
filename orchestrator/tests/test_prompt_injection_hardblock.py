@@ -105,7 +105,8 @@ class TestPromptInjectionHardBlock:
             ),
         ):
             await _raw_llm_synthesize("normal query", [{"data": "x"}])
-            mock_classify.assert_called_once_with("normal query")
+            assert mock_classify.call_count == 2
+            mock_classify.assert_any_call("normal query")
 
     @pytest.mark.asyncio
     async def test_hard_block_disabled_falls_back_to_warning(self) -> None:
