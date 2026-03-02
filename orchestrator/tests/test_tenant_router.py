@@ -9,6 +9,7 @@ from orchestrator.app.tenant_isolation import (
     TenantConfig,
     TenantRegistry,
     TenantRouter,
+    UnknownTenantError,
 )
 
 
@@ -29,10 +30,11 @@ class TestTenantRouter:
         router = TenantRouter(registry)
         assert router.resolve_database("bigcorp") == "bigcorp_db"
 
-    def test_unknown_tenant_returns_default(self) -> None:
+    def test_unknown_tenant_raises_error(self) -> None:
         registry = TenantRegistry()
         router = TenantRouter(registry)
-        assert router.resolve_database("unknown") == "neo4j"
+        with pytest.raises(UnknownTenantError):
+            router.resolve_database("unknown")
 
     def test_session_kwargs_include_database(self) -> None:
         registry = TenantRegistry()

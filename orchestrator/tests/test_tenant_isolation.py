@@ -113,10 +113,13 @@ class TestTenantRouterInline:
         router = TenantRouter(registry)
         assert router.resolve_database("bigcorp") == "bigcorp_db"
 
-    def test_returns_default_for_unknown(self) -> None:
+    def test_returns_error_for_unknown(self) -> None:
+        from orchestrator.app.tenant_isolation import UnknownTenantError
+
         registry = TenantRegistry()
         router = TenantRouter(registry)
-        assert router.resolve_database("unknown") == "neo4j"
+        with pytest.raises(UnknownTenantError):
+            router.resolve_database("unknown")
 
 
 class TestTenantAwarePoolIntegration:

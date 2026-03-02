@@ -79,7 +79,7 @@ class TestPromptInjectionHardBlock:
             provider.ainvoke_messages.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_strip_flagged_content_called_before_synthesis(self) -> None:
+    async def test_classifier_receives_user_query_not_context(self) -> None:
         from orchestrator.app.query_engine import _raw_llm_synthesize
 
         provider = _stub_provider()
@@ -98,18 +98,14 @@ class TestPromptInjectionHardBlock:
                 "orchestrator.app.query_engine._classify_async",
                 new_callable=AsyncMock,
                 return_value=classify_result,
-            ),
+            ) as mock_classify,
             patch(
                 "orchestrator.app.query_engine._build_synthesis_provider",
                 return_value=provider,
             ),
-            patch(
-                "orchestrator.app.query_engine._INJECTION_CLASSIFIER",
-            ) as mock_classifier,
         ):
-            mock_classifier.strip_flagged_content.return_value = "cleaned text"
             await _raw_llm_synthesize("normal query", [{"data": "x"}])
-            mock_classifier.strip_flagged_content.assert_called_once()
+            mock_classify.assert_called_once_with("normal query")
 
     @pytest.mark.asyncio
     async def test_hard_block_disabled_falls_back_to_warning(self) -> None:
