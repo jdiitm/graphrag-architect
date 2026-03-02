@@ -24,6 +24,10 @@ class GraphTooLargeError(ValueError):
     pass
 
 
+class ConfigurationError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class Node2VecConfig:
     walk_length: int = DEFAULT_WALK_LENGTH
@@ -336,7 +340,19 @@ def create_embedding_backend(
     config: Optional[Node2VecConfig] = None,
     fastrp_config: Optional[FastRPConfig] = None,
 ) -> GraphEmbeddingBackend:
+    graphrag_env = os.environ.get("GRAPHRAG_ENV", "").lower()
+    if backend_type == "local" and graphrag_env == "production":
+        raise ConfigurationError(
+            "LocalEmbeddingBackend is not supported in production. "
+            "Configure EMBEDDING_BACKEND=gds or EMBEDDING_BACKEND=fastrp "
+            "and ensure Neo4j GDS plugin is installed."
+        )
     if backend_type == "local":
+        logger.warning(
+            "LocalEmbeddingBackend is deprecated and will be removed in a "
+            "future release. Migrate to EMBEDDING_BACKEND=gds or "
+            "EMBEDDING_BACKEND=fastrp for production-grade graph embeddings."
+        )
         return LocalEmbeddingBackend(config=config)
     if backend_type == "gds":
         return GDSEmbeddingBackend(driver=driver, config=config)
@@ -411,6 +427,37 @@ def _batch_cosine_similarities(
     return sims
 
 
+_STRUCTURAL_SIGNAL_PHRASES = (
+    "connected to", "depends on", "dependency", "upstream", "downstream",
+    "calls", "produces", "consumes", "deployed in", "topology",
+    "path between", "hop", "traversal", "relationship",
+    "blast radius", "failure propagation", "backpressure",
+)
+
+_TEXT_SIGNAL_PHRASES = (
+    "describe", "explain", "what does", "summary", "overview",
+    "purpose", "role of", "tell me about",
+)
+
+
+@dataclass(frozen=True)
+class FusionHint:
+    text_weight: float
+    structural_weight: float
+
+
+def classify_fusion_hint(query: str) -> Optional[FusionHint]:
+    lower = query.lower()
+    structural_hits = sum(1 for p in _STRUCTURAL_SIGNAL_PHRASES if p in lower)
+    text_hits = sum(1 for p in _TEXT_SIGNAL_PHRASES if p in lower)
+    total = structural_hits + text_hits
+    if total == 0:
+        return None
+    structural_weight = structural_hits / total
+    text_weight = 1.0 - structural_weight
+    return FusionHint(text_weight=text_weight, structural_weight=structural_weight)
+
+
 @dataclass(frozen=True)
 class FusionWeights:
     text: float
@@ -428,7 +475,13 @@ class FusionWeightResolver:
     _LEGACY: ClassVar[FusionWeights] = FusionWeights(text=0.7, structural=0.3)
 
     @classmethod
-    def resolve(cls, complexity: Optional[Any] = None) -> FusionWeights:
+    def resolve(
+        cls,
+        complexity: Optional[Any] = None,
+        hint: Optional[FusionHint] = None,
+    ) -> FusionWeights:
+        if hint is not None:
+            return FusionWeights(text=hint.text_weight, structural=hint.structural_weight)
         if complexity is None:
             return cls._LEGACY
         key = complexity.value if hasattr(complexity, "value") else str(complexity)
@@ -443,6 +496,7 @@ def rerank_with_structural(
     structural_weight: float = 0.3,
     complexity: Optional[Any] = None,
     fusion_strategy: str = "linear",
+    hint: Optional[FusionHint] = None,
 ) -> List[Any]:
     if not text_results:
         return []
@@ -454,7 +508,11 @@ def rerank_with_structural(
             text_results, structural_embeddings, query_structural,
         )
 
-    if complexity is not None:
+    if hint is not None:
+        resolved = FusionWeightResolver.resolve(hint=hint)
+        text_weight = resolved.text
+        structural_weight = resolved.structural
+    elif complexity is not None:
         resolved = FusionWeightResolver.resolve(complexity)
         text_weight = resolved.text
         structural_weight = resolved.structural

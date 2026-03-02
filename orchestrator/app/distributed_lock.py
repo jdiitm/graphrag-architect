@@ -205,6 +205,36 @@ class LocalFallbackSemaphore:
         return len(self._active)
 
 
+class LockHeartbeat:
+    def __init__(self, lock: Any, ttl: float) -> None:
+        self._lock = lock
+        self._ttl = ttl
+        self._interval = ttl / 3.0
+        self._task: asyncio.Task[None] | None = None
+        self.abort_event = asyncio.Event()
+
+    def start(self) -> asyncio.Task[None]:
+        self._task = asyncio.create_task(self._run())
+        return self._task
+
+    def stop(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+
+    async def _run(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self._interval)
+                try:
+                    await self._lock.extend(self._ttl)
+                except Exception:
+                    logger.warning("Lock extend failed, aborting", exc_info=True)
+                    self.abort_event.set()
+                    return
+        except asyncio.CancelledError:
+            return
+
+
 class BoundedTaskSet:
     def __init__(
         self,

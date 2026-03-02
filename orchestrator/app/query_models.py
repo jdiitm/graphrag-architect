@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+from orchestrator.app.graph_embeddings import FusionHint
 from orchestrator.app.redis_client import create_async_redis, require_redis
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class QueryState(TypedDict, total=False):
     retrieval_quality: str
     query_id: str
     retrieval_degraded: bool
+    fusion_hint: Optional[FusionHint]
 
 
 class QueryJobStore:

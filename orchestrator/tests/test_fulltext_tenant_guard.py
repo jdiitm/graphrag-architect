@@ -23,16 +23,15 @@ class TestFulltextTenantGuard:
                 tenant_id="", deployment_mode="production",
             )
 
-    def test_empty_tenant_dev_returns_unscoped(self) -> None:
-        cypher = build_fulltext_fallback_cypher(
-            tenant_id="", deployment_mode="dev",
-        )
-        assert "service_name_index" in cypher
-        assert "tenant_id" not in cypher
+    def test_empty_tenant_dev_raises(self) -> None:
+        with pytest.raises(FulltextTenantRequired):
+            build_fulltext_fallback_cypher(
+                tenant_id="", deployment_mode="dev",
+            )
 
-    def test_empty_tenant_defaults_to_dev(self) -> None:
-        cypher = build_fulltext_fallback_cypher(tenant_id="")
-        assert "service_name_index" in cypher
+    def test_empty_tenant_always_raises(self) -> None:
+        with pytest.raises(FulltextTenantRequired):
+            build_fulltext_fallback_cypher(tenant_id="")
 
     def test_fulltext_index_name_consistent(self) -> None:
         cypher = build_fulltext_fallback_cypher(tenant_id="t1")

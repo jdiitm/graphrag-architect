@@ -298,14 +298,53 @@ class TenantCircuitBreakerRegistry:
             return breaker
 
 
+class ProviderBreakerRegistry:
+    def __init__(
+        self,
+        config: CircuitBreakerConfig,
+        name_prefix: str = "provider",
+        max_providers: int = 100,
+        store: StateStore | None = None,
+    ) -> None:
+        self._config = config
+        self._name_prefix = name_prefix
+        self._max_providers = max_providers
+        self._store = store
+        self._breakers: OrderedDict[str, CircuitBreaker] = OrderedDict()
+        self._lock: asyncio.Lock | None = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    async def for_provider(self, provider_name: str) -> CircuitBreaker:
+        lock = self._get_lock()
+        async with lock:
+            if provider_name in self._breakers:
+                self._breakers.move_to_end(provider_name)
+                return self._breakers[provider_name]
+            if len(self._breakers) >= self._max_providers:
+                self._breakers.popitem(last=False)
+            breaker = CircuitBreaker(
+                config=self._config,
+                store=self._store,
+                name=f"{self._name_prefix}-{provider_name}",
+            )
+            self._breakers[provider_name] = breaker
+            return breaker
+
+
 class GlobalProviderBreaker:
     def __init__(
         self,
         registry: TenantCircuitBreakerRegistry,
         global_config: CircuitBreakerConfig | None = None,
         store: StateStore | None = None,
+        provider_registry: ProviderBreakerRegistry | None = None,
     ) -> None:
         self._registry = registry
+        self._provider_registry = provider_registry
         cfg = global_config or CircuitBreakerConfig(
             failure_threshold=5,
             recovery_timeout=60.0,
@@ -331,18 +370,50 @@ class GlobalProviderBreaker:
         tenant_id: str,
         func: Callable[..., Awaitable[T]],
         *args: Any,
+        provider_name: str = "",
         **kwargs: Any,
     ) -> T:
+        if provider_name and self._provider_registry is not None:
+            prov_cb = await self._provider_registry.for_provider(provider_name)
+            if prov_cb.state == CircuitState.OPEN:
+                raise CircuitOpenError(
+                    f"Circuit breaker open for provider {provider_name}"
+                )
+
         if self._global.state != CircuitState.CLOSED:
             async def _tenant_guarded() -> T:
                 tenant_breaker = await self._registry.for_tenant(tenant_id)
-                return await tenant_breaker.call(func, *args, **kwargs)
+                try:
+                    result = await tenant_breaker.call(func, *args, **kwargs)
+                except Exception as exc:
+                    if provider_name and self._provider_registry is not None:
+                        prov_cb = await self._provider_registry.for_provider(
+                            provider_name,
+                        )
+                        if not isinstance(exc, CircuitOpenError):
+                            await prov_cb.record_failure()
+                    raise
+                if provider_name and self._provider_registry is not None:
+                    prov_cb = await self._provider_registry.for_provider(
+                        provider_name,
+                    )
+                    await prov_cb.record_success()
+                return result
             return await self._global.call(_tenant_guarded)
 
         tenant_breaker = await self._registry.for_tenant(tenant_id)
         try:
-            return await tenant_breaker.call(func, *args, **kwargs)
+            result = await tenant_breaker.call(func, *args, **kwargs)
         except Exception as exc:
+            if provider_name and self._provider_registry is not None:
+                prov_cb = await self._provider_registry.for_provider(provider_name)
+                if not isinstance(exc, CircuitOpenError):
+                    await prov_cb.record_failure()
             if self._is_global_failure(exc):
                 await self._global.record_failure()
             raise
+
+        if provider_name and self._provider_registry is not None:
+            prov_cb = await self._provider_registry.for_provider(provider_name)
+            await prov_cb.record_success()
+        return result

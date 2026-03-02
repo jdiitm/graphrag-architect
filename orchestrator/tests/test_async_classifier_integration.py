@@ -52,7 +52,8 @@ class TestAsyncClassifierIntegration:
             from orchestrator.app.query_engine import _raw_llm_synthesize
             await _raw_llm_synthesize("test query", [{"key": "val"}])
 
-        mock_classify.assert_called_once()
+        assert mock_classify.call_count == 2
+        mock_classify.assert_any_call("test query")
 
     @pytest.mark.asyncio
     async def test_streaming_guardrails_use_async_classify(
@@ -85,7 +86,8 @@ class TestAsyncClassifierIntegration:
             ):
                 chunks.append(chunk)
 
-        mock_classify.assert_called_once()
+        assert mock_classify.call_count == 2
+        mock_classify.assert_any_call("test query")
 
     @pytest.mark.asyncio
     async def test_flagged_content_still_logs_warning(

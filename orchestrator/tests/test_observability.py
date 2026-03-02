@@ -297,6 +297,7 @@ class TestMissingQuerySpans:
             "iteration_count": 0,
             "answer": "",
             "sources": [],
+            "tenant_id": "test-tenant",
         }
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver"
@@ -331,6 +332,7 @@ class TestMissingQuerySpans:
             "iteration_count": 0,
             "answer": "",
             "sources": [],
+            "tenant_id": "test-tenant",
         }
         with patch(
             "orchestrator.app.query_engine._get_neo4j_driver"

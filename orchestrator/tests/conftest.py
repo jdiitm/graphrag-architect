@@ -29,6 +29,17 @@ def _default_query_timeout():
 
 
 @pytest.fixture(autouse=True)
+def _mock_tenant_driver_resolution():
+    import orchestrator.app.query_engine as _qe
+
+    def _fallback(_registry, _tenant_id):
+        return _qe._get_neo4j_driver(), "neo4j"
+
+    with patch.object(_qe, "resolve_driver_for_tenant", side_effect=_fallback):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_subgraph_cache():
     from orchestrator.app.query_engine import _SUBGRAPH_CACHE
     _SUBGRAPH_CACHE.invalidate_all()
@@ -50,6 +61,7 @@ def base_query_state():
         "answer": "",
         "sources": [],
         "authorization": "",
+        "tenant_id": "test-tenant",
     }
 
 
