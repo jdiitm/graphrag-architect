@@ -1,0 +1,64 @@
+{
+  "uid": "graphrag-query-engine",
+  "title": "Query Engine",
+  "tags": ["graphrag", "query", "engine"],
+  "editable": true,
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Query Request Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{endpoint='/query'}[5m]))",
+          "legendFormat": "queries/s"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Query Latency by Strategy",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{endpoint='/query'}[5m])) by (le, strategy))",
+          "legendFormat": "p99 {{strategy}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Cache Hit Rate",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "sum(rate(cache_hits_total[5m])) / (sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m])))",
+          "legendFormat": "hit rate"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Queries Executed by Complexity",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(queries_executed_total[5m])) by (complexity)",
+          "legendFormat": "{{complexity}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Query Errors",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{endpoint='/query',status=~'5..'}[5m]))",
+          "legendFormat": "errors/s"
+        }
+      ]
+    }
+  ]
+}

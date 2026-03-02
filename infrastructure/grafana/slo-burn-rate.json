@@ -1,0 +1,64 @@
+{
+  "uid": "graphrag-slo-burn-rate",
+  "title": "SLO Burn Rate",
+  "tags": ["graphrag", "slo", "burn-rate"],
+  "editable": true,
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Ingestion Availability SLO",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{endpoint='/ingest',status=~'2..'}[5m])) / sum(rate(http_requests_total{endpoint='/ingest',status!~'4..'}[5m]))",
+          "legendFormat": "availability"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Query Latency SLO (Vector p99 < 500ms)",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "sum(rate(http_request_duration_seconds_bucket{endpoint='/query',strategy='vector',le='0.5'}[5m])) / sum(rate(http_request_duration_seconds_count{endpoint='/query',strategy='vector'}[5m]))",
+          "legendFormat": "compliance"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Query Latency SLO (Graph p99 < 3s)",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "sum(rate(http_request_duration_seconds_bucket{endpoint='/query',strategy='graph',le='3.0'}[5m])) / sum(rate(http_request_duration_seconds_count{endpoint='/query',strategy='graph'}[5m]))",
+          "legendFormat": "compliance"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "DLQ Error Rate SLO",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "1 - (sum(rate(dlq_messages_total[5m])) / sum(rate(documents_ingested_total[5m])))",
+          "legendFormat": "compliance"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Error Budget Burn Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{status=~'5..'}[1h])) / sum(rate(http_requests_total{status!~'4..'}[1h])) / (1 - 0.999)",
+          "legendFormat": "burn rate"
+        }
+      ]
+    }
+  ]
+}

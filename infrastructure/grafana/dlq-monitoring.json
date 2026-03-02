@@ -1,0 +1,53 @@
+{
+  "uid": "graphrag-dlq-monitoring",
+  "title": "DLQ Monitoring",
+  "tags": ["graphrag", "dlq", "dead-letter-queue"],
+  "editable": true,
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "title": "DLQ Ingestion Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(dlq_messages_total[5m]))",
+          "legendFormat": "dlq/s"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "DLQ by Error Type",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(dlq_messages_total[5m])) by (error_type)",
+          "legendFormat": "{{error_type}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "DLQ vs Total Ingested",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(dlq_messages_total[5m])) / sum(rate(documents_ingested_total[5m]))",
+          "legendFormat": "dlq ratio"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Total Documents Ingested",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(increase(documents_ingested_total[24h]))",
+          "legendFormat": "24h total"
+        }
+      ]
+    }
+  ]
+}
