@@ -14,6 +14,56 @@ from orchestrator.app.vector_store import VectorRecord
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_VECTOR_SYNC_TOPIC = "graphrag.vector-sync"
+
+
+@runtime_checkable
+class KafkaPublisher(Protocol):
+    async def publish(self, event: "VectorSyncEvent") -> None: ...
+
+
+class VectorSyncRouter:
+    def __init__(
+        self,
+        mode: str = "memory",
+        kafka_publisher: Any = None,
+        memory_outbox: Any = None,
+    ) -> None:
+        self._mode = mode
+        self._kafka_publisher = kafka_publisher
+        self._memory_outbox = memory_outbox
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    async def route(self, event: "VectorSyncEvent") -> None:
+        if self._mode == "kafka" and self._kafka_publisher is not None:
+            try:
+                await self._kafka_publisher.publish(event)
+                return
+            except Exception as exc:
+                logger.warning(
+                    "Kafka publish failed, fallback to in-memory outbox: %s",
+                    exc,
+                )
+        if self._memory_outbox is not None:
+            self._memory_outbox.enqueue(event)
+
+    @classmethod
+    def from_env(
+        cls,
+        memory_outbox: Any = None,
+        kafka_publisher: Any = None,
+    ) -> "VectorSyncRouter":
+        import os
+        mode = os.environ.get("VECTOR_SYNC_MODE", "memory").lower()
+        return cls(
+            mode=mode,
+            kafka_publisher=kafka_publisher,
+            memory_outbox=memory_outbox,
+        )
+
 
 
 class VectorSyncEvent(BaseModel):

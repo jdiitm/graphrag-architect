@@ -37,6 +37,7 @@ from orchestrator.app.cypher_sandbox import (
 from orchestrator.app.cypher_validator import CypherValidationError, estimate_query_cost
 from orchestrator.app.context_manager import (
     TokenBudget,
+    compress_context_map_reduce,
     format_context_for_prompt,
     truncate_context_topology,
 )
@@ -989,6 +990,34 @@ async def hybrid_retrieve(state: QueryState) -> dict:
             )
 
 
+async def compress_context(state: QueryState) -> dict:
+    tracer = get_tracer()
+    with tracer.start_as_current_span("query.compress_context"):
+        context: List[Dict[str, Any]] = []
+        if state.get("candidates"):
+            context.extend(state["candidates"])
+        if state.get("cypher_results"):
+            context.extend(state["cypher_results"])
+
+        if not context:
+            return {"compressed": False}
+
+        compressed = compress_context_map_reduce(
+            context,
+            budget=_DEFAULT_TOKEN_BUDGET,
+        )
+
+        is_compressed = compressed is not context
+
+        if is_compressed:
+            return {
+                "candidates": compressed,
+                "cypher_results": [],
+                "compressed": True,
+            }
+        return {"compressed": False}
+
+
 async def synthesize_answer(state: QueryState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("query.synthesize"):
@@ -1302,6 +1331,7 @@ builder.add_node("vector_retrieve", vector_retrieve)
 builder.add_node("single_hop_retrieve", single_hop_retrieve)
 builder.add_node("cypher_retrieve", cypher_retrieve)
 builder.add_node("hybrid_retrieve", hybrid_retrieve)
+builder.add_node("compress_context", compress_context)
 builder.add_node("synthesize", synthesize_answer)
 builder.add_node("evaluate", evaluate_response)
 
@@ -1316,10 +1346,11 @@ builder.add_conditional_edges(
         "hybrid_retrieve": "hybrid_retrieve",
     },
 )
-builder.add_edge("vector_retrieve", "synthesize")
-builder.add_edge("single_hop_retrieve", "synthesize")
-builder.add_edge("cypher_retrieve", "synthesize")
-builder.add_edge("hybrid_retrieve", "synthesize")
+builder.add_edge("vector_retrieve", "compress_context")
+builder.add_edge("single_hop_retrieve", "compress_context")
+builder.add_edge("cypher_retrieve", "compress_context")
+builder.add_edge("hybrid_retrieve", "compress_context")
+builder.add_edge("compress_context", "synthesize")
 builder.add_edge("synthesize", "evaluate")
 builder.add_edge("evaluate", END)
 

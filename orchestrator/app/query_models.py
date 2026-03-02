@@ -69,6 +69,7 @@ class QueryState(TypedDict, total=False):
     query_id: str
     retrieval_degraded: bool
     fusion_hint: Optional[FusionHint]
+    compressed: bool
 
 
 class QueryJobStore:
