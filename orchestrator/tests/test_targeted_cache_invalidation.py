@@ -274,14 +274,14 @@ class TestInvalidateCachesWithNodeIds:
         subgraph_cache.invalidate_tenant.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_invalidate_falls_back_to_tenant_when_no_node_ids(self) -> None:
+    async def test_invalidate_advances_generation_when_no_node_ids(self) -> None:
         from orchestrator.app.graph_builder import invalidate_caches_after_ingest
 
         subgraph_cache = MagicMock()
-        subgraph_cache.invalidate_tenant = MagicMock(return_value=2)
+        subgraph_cache.advance_generation = MagicMock(return_value=2)
 
         semantic_cache = MagicMock()
-        semantic_cache.invalidate_tenant = MagicMock(return_value=1)
+        semantic_cache.advance_generation = MagicMock(return_value=2)
 
         with (
             patch(
@@ -295,7 +295,8 @@ class TestInvalidateCachesWithNodeIds:
         ):
             await invalidate_caches_after_ingest(tenant_id="team-alpha")
 
-        subgraph_cache.invalidate_tenant.assert_called_once_with("team-alpha")
+        subgraph_cache.advance_generation.assert_called_once()
+        subgraph_cache.invalidate_tenant.assert_not_called()
 
 
 class TestCachePutPropagatesNodeIds:
@@ -367,17 +368,16 @@ class TestSemanticCacheNodeLevelInvalidationWiring:
         semantic_cache.invalidate_tenant.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_invalidate_falls_back_to_tenant_when_no_node_ids_for_semantic(
+    async def test_invalidate_advances_generation_when_no_node_ids_for_semantic(
         self,
     ) -> None:
         from orchestrator.app.graph_builder import invalidate_caches_after_ingest
 
         subgraph_cache = MagicMock()
-        subgraph_cache.invalidate_tenant = MagicMock(return_value=1)
+        subgraph_cache.advance_generation = MagicMock(return_value=2)
 
         semantic_cache = MagicMock()
-        semantic_cache.invalidate_by_nodes = MagicMock(return_value=0)
-        semantic_cache.invalidate_tenant = MagicMock(return_value=1)
+        semantic_cache.advance_generation = MagicMock(return_value=2)
 
         with (
             patch("orchestrator.app.query_engine._SUBGRAPH_CACHE", new=subgraph_cache),
@@ -385,7 +385,8 @@ class TestSemanticCacheNodeLevelInvalidationWiring:
         ):
             await invalidate_caches_after_ingest(tenant_id="team-x")
 
-        semantic_cache.invalidate_tenant.assert_called_once_with("team-x")
+        semantic_cache.advance_generation.assert_called_once()
+        semantic_cache.invalidate_tenant.assert_not_called()
         semantic_cache.invalidate_by_nodes.assert_not_called()
 
 

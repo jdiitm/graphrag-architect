@@ -64,7 +64,7 @@ class TestGlobalCacheInvalidationRejected:
         from orchestrator.app.graph_builder import invalidate_caches_after_ingest
 
         mock_cache = MagicMock()
-        mock_cache.invalidate_tenant = MagicMock()
+        mock_cache.advance_generation = MagicMock(return_value=2)
         with (
             patch(
                 "orchestrator.app.query_engine._SUBGRAPH_CACHE",
@@ -77,7 +77,7 @@ class TestGlobalCacheInvalidationRejected:
         ):
             await invalidate_caches_after_ingest(tenant_id="tenant-abc")
 
-        mock_cache.invalidate_tenant.assert_called_once_with("tenant-abc")
+        mock_cache.advance_generation.assert_called_once()
 
 
 class TestDurableOutboxWiring:

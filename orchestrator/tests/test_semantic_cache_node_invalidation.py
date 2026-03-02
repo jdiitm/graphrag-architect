@@ -185,15 +185,15 @@ class TestGraphBuilderSemanticCacheNodeInvalidation:
         )
 
     @pytest.mark.asyncio
-    async def test_invalidate_falls_back_to_tenant_when_no_node_ids(
+    async def test_invalidate_advances_generation_when_no_node_ids(
         self,
     ) -> None:
         from orchestrator.app.graph_builder import invalidate_caches_after_ingest
 
         mock_subgraph = MagicMock()
-        mock_subgraph.invalidate_tenant = MagicMock(return_value=2)
+        mock_subgraph.advance_generation = MagicMock(return_value=2)
         mock_semantic = MagicMock()
-        mock_semantic.invalidate_tenant = MagicMock(return_value=1)
+        mock_semantic.advance_generation = MagicMock(return_value=2)
 
         with patch(
             "orchestrator.app.query_engine._SUBGRAPH_CACHE", mock_subgraph,
@@ -204,5 +204,7 @@ class TestGraphBuilderSemanticCacheNodeInvalidation:
                 tenant_id="t1", node_ids=None,
             )
 
-        mock_subgraph.invalidate_tenant.assert_called_once_with("t1")
-        mock_semantic.invalidate_tenant.assert_called_once_with("t1")
+        mock_subgraph.advance_generation.assert_called_once()
+        mock_semantic.advance_generation.assert_called_once()
+        mock_subgraph.invalidate_tenant.assert_not_called()
+        mock_semantic.invalidate_tenant.assert_not_called()

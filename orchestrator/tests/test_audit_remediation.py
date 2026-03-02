@@ -261,36 +261,36 @@ class TestSanitizationInputCap:
 class TestCacheInvalidationGuard:
 
     @pytest.mark.asyncio
-    async def test_tenant_fallback_logs_warning(self) -> None:
+    async def test_tenant_fallback_advances_generation(self) -> None:
         from orchestrator.app.graph_builder import invalidate_caches_after_ingest
 
         mock_subgraph_cache = MagicMock()
-        mock_subgraph_cache.invalidate_tenant = MagicMock(return_value=None)
+        mock_subgraph_cache.advance_generation = MagicMock(return_value=2)
         mock_semantic_cache = MagicMock()
-        mock_semantic_cache.invalidate_tenant = MagicMock(return_value=None)
+        mock_semantic_cache.advance_generation = MagicMock(return_value=2)
 
         with (
             patch(
-                "orchestrator.app.graph_builder._SUBGRAPH_CACHE",
+                "orchestrator.app.query_engine._SUBGRAPH_CACHE",
                 mock_subgraph_cache,
-                create=True,
             ),
             patch(
-                "orchestrator.app.graph_builder._SEMANTIC_CACHE",
+                "orchestrator.app.query_engine._SEMANTIC_CACHE",
                 mock_semantic_cache,
-                create=True,
             ),
             patch("orchestrator.app.graph_builder.logger") as mock_logger,
         ):
             await invalidate_caches_after_ingest(
                 tenant_id="t1", node_ids=None,
             )
-            warning_calls = [
-                c for c in mock_logger.warning.call_args_list
-                if "tenant-wide" in str(c).lower()
-                or "fallback" in str(c).lower()
+            mock_subgraph_cache.advance_generation.assert_called_once()
+            mock_subgraph_cache.invalidate_tenant.assert_not_called()
+            swr_logs = [
+                c for c in mock_logger.info.call_args_list
+                if "swr" in str(c).lower()
+                or "generation" in str(c).lower()
             ]
-            assert len(warning_calls) >= 1
+            assert len(swr_logs) >= 1
 
     @pytest.mark.asyncio
     async def test_node_level_does_not_warn(self) -> None:

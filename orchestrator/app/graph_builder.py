@@ -360,21 +360,22 @@ async def invalidate_caches_after_ingest(
         if node_ids:
             sg_result = _SUBGRAPH_CACHE.invalidate_by_nodes(node_ids)
         else:
-            logger.warning(
-                "Tenant-wide cache fallback: no committed node_ids provided "
-                "for tenant=%s — invalidating entire tenant cache. "
-                "This triggers a thundering-herd risk.",
+            logger.info(
+                "SWR cache invalidation: advancing generation for tenant=%s "
+                "(stale entries served while revalidating)",
                 tenant_id,
             )
-            sg_result = _SUBGRAPH_CACHE.invalidate_tenant(tenant_id)
-        if hasattr(sg_result, "__await__"):
+            _SUBGRAPH_CACHE.advance_generation()
+            sg_result = None
+        if sg_result is not None and hasattr(sg_result, "__await__"):
             await sg_result
         if _SEMANTIC_CACHE is not None:
             if node_ids and hasattr(_SEMANTIC_CACHE, "invalidate_by_nodes"):
                 result = _SEMANTIC_CACHE.invalidate_by_nodes(node_ids)
             else:
-                result = _SEMANTIC_CACHE.invalidate_tenant(tenant_id)
-            if hasattr(result, "__await__"):
+                _SEMANTIC_CACHE.advance_generation()
+                result = None
+            if result is not None and hasattr(result, "__await__"):
                 await result
         logger.info(
             "Cache invalidation complete: tenant=%s, node_ids=%d",

@@ -34,13 +34,12 @@ class TestGlobalCacheInvalidationNoThunderingHerd:
         mock_subgraph_cache.advance_generation.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_scoped_tenant_still_calls_invalidate_tenant(self) -> None:
+    async def test_scoped_tenant_advances_generation_instead_of_drop(self) -> None:
         mock_subgraph_cache = MagicMock()
-        mock_subgraph_cache.invalidate_tenant = MagicMock()
-        mock_subgraph_cache.advance_generation = MagicMock()
+        mock_subgraph_cache.advance_generation = MagicMock(return_value=2)
 
         mock_semantic_cache = MagicMock()
-        mock_semantic_cache.invalidate_tenant = MagicMock()
+        mock_semantic_cache.advance_generation = MagicMock(return_value=2)
 
         with (
             patch(
@@ -55,6 +54,7 @@ class TestGlobalCacheInvalidationNoThunderingHerd:
             from orchestrator.app.graph_builder import invalidate_caches_after_ingest
             await invalidate_caches_after_ingest(tenant_id="team-alpha")
 
-        mock_subgraph_cache.invalidate_tenant.assert_called_once_with("team-alpha")
-        mock_semantic_cache.invalidate_tenant.assert_called_once_with("team-alpha")
-        mock_subgraph_cache.advance_generation.assert_not_called()
+        mock_subgraph_cache.advance_generation.assert_called_once()
+        mock_subgraph_cache.invalidate_tenant.assert_not_called()
+        mock_semantic_cache.advance_generation.assert_called_once()
+        mock_semantic_cache.invalidate_tenant.assert_not_called()

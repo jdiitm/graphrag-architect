@@ -7,7 +7,7 @@ import os
 import sys
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from orchestrator.app.redis_client import (
     create_async_redis,
@@ -158,6 +158,18 @@ class SubgraphCache:
         self._hits += 1
         self._cache.move_to_end(key)
         return self._cache[key]
+
+    def get_or_stale(
+        self, key: str,
+    ) -> Optional[Tuple[List[Dict[str, Any]], bool]]:
+        if key not in self._cache:
+            self._misses += 1
+            return None
+        self._hits += 1
+        self._cache.move_to_end(key)
+        entry_gen = self._generations.get(key, 0)
+        is_stale = entry_gen < self._generation
+        return self._cache[key], is_stale
 
     def put(
         self,
@@ -312,6 +324,11 @@ class RedisSubgraphCache:
 
     def get_sync(self, key: str) -> Optional[List[Dict[str, Any]]]:
         return self._l1.get(key)
+
+    def get_or_stale(
+        self, key: str,
+    ) -> Optional[Tuple[List[Dict[str, Any]], bool]]:
+        return self._l1.get_or_stale(key)
 
     async def get(self, key: str) -> Optional[List[Dict[str, Any]]]:
         l1_result = self._l1.get(key)
