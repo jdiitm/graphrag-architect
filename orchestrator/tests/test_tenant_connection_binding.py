@@ -14,6 +14,7 @@ from orchestrator.app.tenant_isolation import (
     TenantRouter,
     OrphanedPoolDetector,
     validate_tenant_binding,
+    TenantEnforcingDriver,
 )
 
 
@@ -241,3 +242,69 @@ class TestValidateTenantBindingAtRequestStart:
     def test_non_wrapper_raises_type_error(self) -> None:
         with pytest.raises(TypeError, match="TenantConnectionWrapper"):
             validate_tenant_binding(MagicMock(), "acme")
+
+
+class TestWrapperEnforcesQueryParamsInLogicalMode:
+
+    def test_logical_wrapper_rejects_query_without_tenant_id(self) -> None:
+        wrapper = TenantConnectionWrapper(
+            driver=MagicMock(),
+            bound_tenant_id="acme",
+            bound_database="neo4j",
+            isolation_mode=IsolationMode.LOGICAL,
+        )
+        with pytest.raises(TenantIsolationViolation, match="tenant_id"):
+            wrapper.validate_query(
+                query="MATCH (n:Service) RETURN n",
+                params={"other": "value"},
+            )
+
+    def test_logical_wrapper_accepts_query_with_tenant_id(self) -> None:
+        wrapper = TenantConnectionWrapper(
+            driver=MagicMock(),
+            bound_tenant_id="acme",
+            bound_database="neo4j",
+            isolation_mode=IsolationMode.LOGICAL,
+        )
+        wrapper.validate_query(
+            query="MATCH (n:Service) WHERE n.tenant_id = $tenant_id RETURN n",
+            params={"tenant_id": "acme"},
+        )
+
+    def test_physical_wrapper_allows_any_query(self) -> None:
+        wrapper = TenantConnectionWrapper(
+            driver=MagicMock(),
+            bound_tenant_id="acme",
+            bound_database="neo4j_acme",
+            isolation_mode=IsolationMode.PHYSICAL,
+        )
+        wrapper.validate_query(
+            query="MATCH (n:Service) RETURN n",
+            params={},
+        )
+
+    def test_default_isolation_mode_is_physical(self) -> None:
+        wrapper = TenantConnectionWrapper(
+            driver=MagicMock(),
+            bound_tenant_id="acme",
+            bound_database="neo4j_acme",
+        )
+        wrapper.validate_query(
+            query="MATCH (n:Service) RETURN n",
+            params={},
+        )
+
+    def test_router_passes_isolation_mode_to_wrapper(self) -> None:
+        registry = TenantRegistry()
+        registry.register(TenantConfig(
+            tenant_id="acme",
+            isolation_mode=IsolationMode.LOGICAL,
+            database_name="neo4j",
+        ))
+        router = TenantRouter(registry)
+        wrapper = router.get_connection("acme", MagicMock())
+        with pytest.raises(TenantIsolationViolation, match="tenant_id"):
+            wrapper.validate_query(
+                query="MATCH (n) RETURN n",
+                params={},
+            )

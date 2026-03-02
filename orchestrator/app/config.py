@@ -372,8 +372,15 @@ class VectorSyncConfig:
 
     @classmethod
     def from_env(cls) -> VectorSyncConfig:
+        explicit = os.environ.get("VECTOR_SYNC_BACKEND", "")
+        if explicit:
+            backend = explicit
+        elif os.environ.get("REDIS_URL", ""):
+            backend = "redis"
+        else:
+            backend = "memory"
         return cls(
-            backend=os.environ.get("VECTOR_SYNC_BACKEND", "memory"),
+            backend=backend,
             kafka_topic=os.environ.get(
                 "VECTOR_SYNC_KAFKA_TOPIC", "graph.mutations",
             ),
@@ -415,7 +422,7 @@ class ProductionConfigValidator:
         mode = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
         redis_url = os.environ.get("REDIS_URL", "")
         neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
-        vector_sync_backend = os.environ.get("VECTOR_SYNC_BACKEND", "memory")
+        vector_sync_backend = VectorSyncConfig.from_env().backend
 
         ast_dlq_backend = "redis" if redis_url else "memory"
 

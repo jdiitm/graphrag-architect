@@ -163,7 +163,7 @@ class TestGDSPartitioner:
         assert result.node_to_community["a"] != result.node_to_community["c"]
 
     @pytest.mark.asyncio
-    async def test_gds_partitioner_cypher_uses_gds_louvain(self) -> None:
+    async def test_gds_partitioner_cypher_uses_gds_leiden(self) -> None:
         captured_queries: list = []
 
         mock_session = AsyncMock()
@@ -192,8 +192,8 @@ class TestGDSPartitioner:
         )
 
         assert len(captured_queries) >= 1
-        assert "gds.louvain" in captured_queries[0].lower(), (
-            f"GDS partitioner must use gds.louvain. Got: {captured_queries[0]}"
+        assert "gds.leiden" in captured_queries[0].lower(), (
+            f"GDS partitioner must use gds.leiden per FR-18. Got: {captured_queries[0]}"
         )
 
     def test_gds_partitioner_falls_back_to_python_on_small_graphs(self) -> None:

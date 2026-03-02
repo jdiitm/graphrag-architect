@@ -165,6 +165,7 @@ class TenantRouter:
             driver=driver,
             bound_tenant_id=tenant_id,
             bound_database=config.database_name,
+            isolation_mode=config.isolation_mode,
         )
 
 
@@ -174,10 +175,12 @@ class TenantConnectionWrapper:
         driver: Any,
         bound_tenant_id: str,
         bound_database: str,
+        isolation_mode: IsolationMode = IsolationMode.PHYSICAL,
     ) -> None:
         self._driver = driver
         self._bound_tenant_id = bound_tenant_id
         self._bound_database = bound_database
+        self._enforcer = TenantEnforcingDriver(isolation_mode=isolation_mode)
 
     @property
     def bound_tenant_id(self) -> str:
@@ -206,6 +209,13 @@ class TenantConnectionWrapper:
                 f"but query targets database {database!r}; "
                 f"cross-database access blocked"
             )
+
+    def validate_query(
+        self,
+        query: str,
+        params: Dict[str, Any],
+    ) -> None:
+        self._enforcer.validate_query_params(query, params)
 
 
 def validate_tenant_binding(
@@ -263,6 +273,47 @@ def validate_vector_isolation(
             "Use PHYSICAL isolation with per-tenant Qdrant collections "
             "for SOC2/FedRAMP compliance."
         )
+
+
+_SCHEMA_QUERY_PREFIXES = (
+    "CREATE CONSTRAINT",
+    "DROP CONSTRAINT",
+    "CREATE INDEX",
+    "DROP INDEX",
+    "CALL dbms.",
+    "CALL db.",
+    "SHOW ",
+)
+
+
+class TenantEnforcingDriver:
+    def __init__(
+        self,
+        isolation_mode: IsolationMode = IsolationMode.PHYSICAL,
+    ) -> None:
+        self._isolation_mode = isolation_mode
+
+    def validate_query_params(
+        self,
+        query: str,
+        params: Dict[str, Any],
+    ) -> None:
+        if self._isolation_mode != IsolationMode.LOGICAL:
+            return
+
+        normalized = query.strip().upper()
+        for prefix in _SCHEMA_QUERY_PREFIXES:
+            if normalized.startswith(prefix.upper()):
+                return
+
+        tenant_id = params.get("tenant_id")
+        if not tenant_id:
+            raise TenantIsolationViolation(
+                "Query in LOGICAL isolation mode is missing a non-empty "
+                "'tenant_id' parameter. All data queries must include "
+                "tenant_id to prevent cross-tenant data leakage. "
+                f"Query: {query[:80]!r}"
+            )
 
 
 class OrphanedPoolDetector:
