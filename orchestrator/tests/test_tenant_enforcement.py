@@ -4,7 +4,6 @@ import pytest
 
 from orchestrator.app.tenant_isolation import (
     IsolationMode,
-    TenantConnectionWrapper,
     TenantEnforcingDriver,
     TenantIsolationViolation,
 )

@@ -422,7 +422,7 @@ class ProductionConfigValidator:
         mode = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
         redis_url = os.environ.get("REDIS_URL", "")
         neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
-        vector_sync_backend = os.environ.get("VECTOR_SYNC_BACKEND", "memory")
+        vector_sync_backend = VectorSyncConfig.from_env().backend
 
         ast_dlq_backend = "redis" if redis_url else "memory"
 

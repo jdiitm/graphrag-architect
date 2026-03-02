@@ -165,6 +165,7 @@ class TenantRouter:
             driver=driver,
             bound_tenant_id=tenant_id,
             bound_database=config.database_name,
+            isolation_mode=config.isolation_mode,
         )
 
 
@@ -174,10 +175,12 @@ class TenantConnectionWrapper:
         driver: Any,
         bound_tenant_id: str,
         bound_database: str,
+        isolation_mode: IsolationMode = IsolationMode.PHYSICAL,
     ) -> None:
         self._driver = driver
         self._bound_tenant_id = bound_tenant_id
         self._bound_database = bound_database
+        self._enforcer = TenantEnforcingDriver(isolation_mode=isolation_mode)
 
     @property
     def bound_tenant_id(self) -> str:
@@ -206,6 +209,13 @@ class TenantConnectionWrapper:
                 f"but query targets database {database!r}; "
                 f"cross-database access blocked"
             )
+
+    def validate_query(
+        self,
+        query: str,
+        params: Dict[str, Any],
+    ) -> None:
+        self._enforcer.validate_query_params(query, params)
 
 
 def validate_tenant_binding(

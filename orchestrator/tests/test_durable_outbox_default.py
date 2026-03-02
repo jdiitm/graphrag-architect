@@ -1,31 +1,43 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from orchestrator.app.config import ProductionConfigValidator, VectorSyncConfig
 from orchestrator.app.vector_sync_outbox import (
     CoalescingOutbox,
-    RedisOutboxStore,
     VectorSyncEvent,
-    VectorSyncOutbox,
 )
 
 
 class TestVectorSyncConfigDurableDefault:
 
     def test_defaults_to_durable_when_redis_url_set(self) -> None:
-        with patch.dict(os.environ, {"REDIS_URL": "redis://localhost:6379"}, clear=False):
+        with patch.dict(os.environ, {"REDIS_URL": "redis://localhost:6379"}, clear=True):
             cfg = VectorSyncConfig.from_env()
-            assert cfg.backend != "memory"
+            assert cfg.backend == "redis"
 
     def test_defaults_to_memory_when_no_redis(self) -> None:
         env = {k: v for k, v in os.environ.items() if k != "REDIS_URL"}
         with patch.dict(os.environ, env, clear=True):
             cfg = VectorSyncConfig.from_env()
             assert cfg.backend == "memory"
+
+
+class TestValidatorUsesAutoDetectedBackend:
+
+    def test_validator_resolves_redis_when_redis_url_set(self) -> None:
+        env = {"REDIS_URL": "redis://localhost:6379"}
+        with patch.dict(os.environ, env, clear=True):
+            validator = ProductionConfigValidator.from_env()
+            assert validator.vector_sync_backend == "redis"
+
+    def test_validator_resolves_memory_when_no_redis(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            validator = ProductionConfigValidator.from_env()
+            assert validator.vector_sync_backend == "memory"
 
 
 class TestProductionRejectsMemoryOutbox:
@@ -60,19 +72,18 @@ class TestDurableSpilloverWiring:
             build_coalescing_outbox,
         )
         mock_redis = MagicMock()
-        outbox = build_coalescing_outbox(redis_conn=mock_redis)
-        assert outbox._spillover_fn is not None
-
-        events = [
-            VectorSyncEvent(
-                event_id="e1",
-                collection="test",
+        outbox = build_coalescing_outbox(
+            redis_conn=mock_redis, max_entries=2,
+        )
+        for i in range(4):
+            outbox.enqueue(VectorSyncEvent(
+                event_id=f"e{i}",
+                collection=f"col{i}",
                 operation="upsert",
                 pruned_ids=[],
                 vectors=[],
-            )
-        ]
-        outbox._spillover_fn(events)
+            ))
+        assert outbox.pending_count == 2
 
     def test_coalescing_outbox_falls_back_to_memory_without_redis(
         self,
@@ -80,8 +91,18 @@ class TestDurableSpilloverWiring:
         from orchestrator.app.graph_builder import (
             build_coalescing_outbox,
         )
-        outbox = build_coalescing_outbox(redis_conn=None)
-        assert outbox._spillover_fn is not None
+        outbox = build_coalescing_outbox(
+            redis_conn=None, max_entries=2,
+        )
+        for i in range(4):
+            outbox.enqueue(VectorSyncEvent(
+                event_id=f"e{i}",
+                collection=f"col{i}",
+                operation="upsert",
+                pruned_ids=[],
+                vectors=[],
+            ))
+        assert outbox.pending_count == 2
 
     def test_event_survives_coalescing_eviction_with_durable_store(
         self,
