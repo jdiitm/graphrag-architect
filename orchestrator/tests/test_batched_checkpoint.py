@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -191,11 +192,96 @@ class TestBatchedCheckpointSaver:
         assert saver.pending_count == 2
         saver._closed = True
 
+    @pytest.mark.asyncio
+    async def test_timer_flushes_buffer_via_event(self) -> None:
+        from orchestrator.app.batched_checkpoint import (
+            BatchedCheckpointSaver,
+        )
+        flushed = asyncio.Event()
+        original_flush = None
+
+        async def _signaling_flush() -> None:
+            await original_flush()
+            flushed.set()
+
+        inner = AsyncMock()
+        saver = BatchedCheckpointSaver(
+            inner_saver=inner,
+            batch_max_size=1000,
+            flush_interval_ms=10,
+        )
+        original_flush = saver.flush
+        saver.flush = _signaling_flush
+
+        config = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        await saver.aput(config, {"id": "cp-1"}, {"step": 1})
+        assert saver.pending_count == 1
+
+        await saver.start_timer()
+
+        await asyncio.wait_for(flushed.wait(), timeout=2.0)
+
+        assert saver.pending_count == 0
+        assert inner.aput.await_count == 1
+        await saver.close()
+
+    @pytest.mark.asyncio
+    async def test_timer_logs_on_flush_failure(self) -> None:
+        from orchestrator.app.batched_checkpoint import (
+            BatchedCheckpointSaver,
+        )
+        flush_attempted = asyncio.Event()
+
+        async def _failing_flush() -> None:
+            flush_attempted.set()
+            raise ConnectionError("db gone")
+
+        inner = AsyncMock()
+        saver = BatchedCheckpointSaver(
+            inner_saver=inner,
+            batch_max_size=1000,
+            flush_interval_ms=10,
+        )
+        saver.flush = _failing_flush
+
+        config = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
+        await saver.aput(config, {"id": "cp-1"}, {"step": 1})
+
+        with patch(
+            "orchestrator.app.batched_checkpoint.logger"
+        ) as mock_logger:
+            await saver.start_timer()
+            await asyncio.wait_for(flush_attempted.wait(), timeout=2.0)
+            await asyncio.sleep(0.01)
+            await saver.close()
+            mock_logger.exception.assert_called()
+            log_msg = mock_logger.exception.call_args[0][0]
+            assert "flush failed" in log_msg.lower()
+
+    @pytest.mark.asyncio
+    async def test_start_timer_idempotent(self) -> None:
+        from orchestrator.app.batched_checkpoint import (
+            BatchedCheckpointSaver,
+        )
+        inner = AsyncMock()
+        saver = BatchedCheckpointSaver(
+            inner_saver=inner,
+            batch_max_size=100,
+            flush_interval_ms=60000,
+        )
+        await saver.start_timer()
+        first_task = saver._timer_task
+        await saver.start_timer()
+        assert saver._timer_task is first_task
+        await saver.close()
+
 
 class TestCheckpointStoreIntegration:
 
     @pytest.mark.asyncio
-    async def test_init_checkpointer_wraps_in_batched_saver(self) -> None:
+    async def test_init_checkpointer_memory_backend_uses_plain_saver(
+        self,
+    ) -> None:
         from orchestrator.app.checkpoint_store import (
             _state,
             close_checkpointer,
@@ -211,3 +297,25 @@ class TestCheckpointStoreIntegration:
             from langgraph.checkpoint.memory import MemorySaver
             assert isinstance(cp, MemorySaver)
             await close_checkpointer()
+
+    @pytest.mark.asyncio
+    async def test_close_checkpointer_exception_safe(self) -> None:
+        from orchestrator.app.checkpoint_store import (
+            _state,
+            close_checkpointer,
+        )
+        mock_cp = AsyncMock()
+        mock_cp.close = AsyncMock(
+            side_effect=ConnectionError("flush failed")
+        )
+        mock_conn = AsyncMock()
+
+        _state["checkpointer"] = mock_cp
+        _state["connection"] = mock_conn
+
+        with pytest.raises(ConnectionError):
+            await close_checkpointer()
+
+        mock_conn.close.assert_awaited_once()
+        assert _state["connection"] is None
+        assert _state["checkpointer"] is None

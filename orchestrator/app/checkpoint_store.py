@@ -78,13 +78,15 @@ async def init_checkpointer() -> None:
 
 async def close_checkpointer() -> None:
     cp = _state.get("checkpointer")
-    if cp is not None and hasattr(cp, "close"):
-        await cp.close()
-    conn = _state.get("connection")
-    if conn is not None:
-        await conn.close()
-        _state["connection"] = None
-    _state["checkpointer"] = None
+    try:
+        if cp is not None and hasattr(cp, "close"):
+            await cp.close()
+    finally:
+        conn = _state.get("connection")
+        if conn is not None:
+            await conn.close()
+            _state["connection"] = None
+        _state["checkpointer"] = None
 
 
 def get_checkpointer() -> Any:

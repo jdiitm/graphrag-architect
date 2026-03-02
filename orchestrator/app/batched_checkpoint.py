@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import deque
 from typing import Any, Deque, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_BATCH_MAX_SIZE = 50
 _DEFAULT_FLUSH_INTERVAL_MS = 500
@@ -43,6 +46,7 @@ class BatchedCheckpointSaver:
                 await self._flush_locked()
 
     async def aget_tuple(self, config: Dict[str, Any]) -> Any:
+        """Reads bypass the write buffer — unflushed writes are not visible."""
         return await self._inner.aget_tuple(config)
 
     async def _flush_locked(self) -> None:
@@ -59,7 +63,8 @@ class BatchedCheckpointSaver:
         if failed:
             failed.extend(self._buffer)
             self._buffer = failed
-            raise err  # type: ignore[misc]
+            assert err is not None
+            raise err
 
     async def flush(self) -> None:
         async with self._lock:
@@ -78,7 +83,10 @@ class BatchedCheckpointSaver:
                 try:
                     await self.flush()
                 except Exception:
-                    pass
+                    logger.exception(
+                        "Periodic flush failed (%d items still buffered)",
+                        self.pending_count,
+                    )
 
     async def close(self) -> None:
         self._closed = True
