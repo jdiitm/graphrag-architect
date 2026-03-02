@@ -27,6 +27,8 @@ from orchestrator.app.config import (
     ProductionConfigValidator,
     RateLimitConfig,
 )
+from orchestrator.app.query_templates import TemplateCatalog
+from orchestrator.app.tenant_security import TenantScopeVerifier
 from orchestrator.app.executor import shutdown_pool, shutdown_thread_pool
 from orchestrator.app.graph_builder import ingestion_graph, run_streaming_pipeline
 from orchestrator.app.ingest_models import (
@@ -111,6 +113,8 @@ async def _kafka_ingest_callback(raw_files: List[Dict[str, str]]) -> Dict[str, A
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     ProductionConfigValidator.from_env().validate_production_invariants()
+    deployment_mode = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
+    TenantScopeVerifier(TemplateCatalog()).enforce_startup(deployment_mode)
     auth = _validate_startup_security()
     configure_telemetry()
     configure_metrics()
