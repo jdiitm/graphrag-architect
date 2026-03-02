@@ -129,3 +129,6 @@ ignore = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+markers = [
+    "e2e: end-to-end tests requiring Docker (Testcontainers with Neo4j + Kafka)",
+]
