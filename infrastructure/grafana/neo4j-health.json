@@ -1,0 +1,50 @@
+{
+  "uid": "graphrag-neo4j-health",
+  "title": "Neo4j Health",
+  "tags": ["graphrag", "neo4j", "database"],
+  "editable": true,
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Connection Pool Active",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "neo4j_connection_pool_active",
+          "legendFormat": "{{pool_name}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Transaction Duration (p50/p99)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(neo4j_transaction_duration_seconds_bucket[5m])) by (le, operation))",
+          "legendFormat": "p50 {{operation}}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(neo4j_transaction_duration_seconds_bucket[5m])) by (le, operation))",
+          "legendFormat": "p99 {{operation}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Graph Size",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(graph_nodes_total)",
+          "legendFormat": "nodes"
+        },
+        {
+          "expr": "sum(graph_relationships_total)",
+          "legendFormat": "relationships"
+        }
+      ]
+    }
+  ]
+}

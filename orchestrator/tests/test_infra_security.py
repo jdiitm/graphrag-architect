@@ -655,12 +655,12 @@ class TestKafkaListenerSecurityProtocolMap:
             "Protocol map must include CONTROLLER:PLAINTEXT "
             f"but got: {protocol_map}"
         )
-        assert "PLAINTEXT:PLAINTEXT" in protocol_map, (
-            "Protocol map must include PLAINTEXT:PLAINTEXT "
-            f"but got: {protocol_map}"
+        assert "SASL_SSL:SASL_SSL" in protocol_map, (
+            "Protocol map must include SASL_SSL:SASL_SSL for "
+            f"production broker security but got: {protocol_map}"
         )
 
-    def test_listener_security_protocol_map_matches_docker_compose(
+    def test_listener_security_protocol_map_k8s_uses_sasl_ssl(
         self, kafka_statefulset: dict, compose_config: dict
     ) -> None:
         k8s_env = self._get_kafka_env(kafka_statefulset)
@@ -671,6 +671,9 @@ class TestKafkaListenerSecurityProtocolMap:
                 break
         assert k8s_value is not None, (
             "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP not in K8s manifest"
+        )
+        assert "SASL_SSL:SASL_SSL" in k8s_value, (
+            f"K8s production must use SASL_SSL but got: {k8s_value}"
         )
 
         compose_kafka_env = compose_config["services"]["kafka"].get(
@@ -687,9 +690,9 @@ class TestKafkaListenerSecurityProtocolMap:
             "docker-compose.yml must define "
             "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP for kafka"
         )
-        assert k8s_value == compose_value, (
-            f"K8s protocol map ({k8s_value}) must match "
-            f"docker-compose ({compose_value})"
+        assert "CONTROLLER:PLAINTEXT" in compose_value, (
+            "docker-compose must define CONTROLLER protocol "
+            f"but got: {compose_value}"
         )
 
 

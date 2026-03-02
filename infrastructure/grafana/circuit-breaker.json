@@ -1,0 +1,53 @@
+{
+  "uid": "graphrag-circuit-breaker",
+  "title": "Circuit Breaker",
+  "tags": ["graphrag", "circuit-breaker", "resilience"],
+  "editable": true,
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Circuit Breaker State",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "circuit_breaker_state",
+          "legendFormat": "{{dependency}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "State Transitions",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "changes(circuit_breaker_state[5m])",
+          "legendFormat": "{{dependency}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "LLM Error Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(llm_request_errors_total[5m])) / sum(rate(llm_request_duration_seconds_count[5m]))",
+          "legendFormat": "error rate"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "LLM Request Duration",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(llm_request_duration_seconds_bucket[5m])) by (le, provider))",
+          "legendFormat": "p99 {{provider}}"
+        }
+      ]
+    }
+  ]
+}

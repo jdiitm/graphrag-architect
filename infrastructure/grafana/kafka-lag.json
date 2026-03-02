@@ -1,0 +1,42 @@
+{
+  "uid": "graphrag-kafka-lag",
+  "title": "Kafka Lag",
+  "tags": ["graphrag", "kafka", "messaging"],
+  "editable": true,
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Consumer Group Lag",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "kafka_consumer_lag_messages",
+          "legendFormat": "{{topic}}-{{partition}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Broker Throughput",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(documents_ingested_total[5m]))",
+          "legendFormat": "throughput"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Partition Assignment",
+      "type": "table",
+      "targets": [
+        {
+          "expr": "kafka_consumer_lag_messages",
+          "legendFormat": "{{consumer_group}}"
+        }
+      ]
+    }
+  ]
+}

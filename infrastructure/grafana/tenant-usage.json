@@ -1,0 +1,53 @@
+{
+  "uid": "graphrag-tenant-usage",
+  "title": "Tenant Usage",
+  "tags": ["graphrag", "tenant", "usage"],
+  "editable": true,
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Per-Tenant Query Count",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(queries_executed_total[5m])) by (tenant_id)",
+          "legendFormat": "{{tenant_id}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Per-Tenant Ingestion Volume",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(documents_ingested_total[5m])) by (tenant_id)",
+          "legendFormat": "{{tenant_id}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Per-Tenant Request Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total[5m])) by (tenant_id)",
+          "legendFormat": "{{tenant_id}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Per-Tenant LLM Token Usage",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(llm_request_tokens_total[5m])) by (tenant_id, direction)",
+          "legendFormat": "{{tenant_id}} {{direction}}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "uid": "graphrag-ingestion-pipeline",
+  "title": "Ingestion Pipeline",
+  "tags": ["graphrag", "ingestion", "pipeline"],
+  "editable": true,
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Ingestion Request Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{endpoint='/ingest'}[5m]))",
+          "legendFormat": "requests/s"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Ingestion Duration (p50/p99)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(http_request_duration_seconds_bucket{endpoint='/ingest'}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{endpoint='/ingest'}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Ingestion Error Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{endpoint='/ingest',status=~'5..'}[5m])) / sum(rate(http_requests_total{endpoint='/ingest'}[5m]))",
+          "legendFormat": "error rate"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Documents Ingested",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(rate(documents_ingested_total[5m]))",
+          "legendFormat": "docs/s"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Entities Extracted",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "sum(rate(entities_extracted_total[5m]))",
+          "legendFormat": "entities/s"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "DLQ Messages",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(dlq_messages_total[5m]))",
+          "legendFormat": "dlq/s"
+        }
+      ]
+    }
+  ]
+}
