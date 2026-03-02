@@ -15,7 +15,7 @@ from opentelemetry.trace import StatusCode
 from orchestrator.app.ast_dlq import ASTDeadLetterQueue, create_ast_dlq
 from orchestrator.app.ast_extraction import GoASTExtractor, PythonASTExtractor
 from orchestrator.app.checkpointing import ExtractionCheckpoint, FileStatus
-from orchestrator.app.config import ExtractionConfig
+from orchestrator.app.config import ConfigurationError, ExtractionConfig
 from orchestrator.app.container import AppContainer
 from orchestrator.app.extraction_models import (
     CallsEdge,
@@ -85,7 +85,7 @@ def warn_if_local_ast_in_production() -> None:
     if not ast_mode:
         ast_mode = "go" if deployment == "production" else "local"
     if deployment == "production" and ast_mode == "local":
-        logging.getLogger(__name__).warning(
+        raise ConfigurationError(
             "AST extraction is running in local ProcessPoolExecutor mode "
             "in a production deployment. This causes CPU starvation in "
             "the ASGI event loop. Set AST_EXTRACTION_MODE=go to offload "
