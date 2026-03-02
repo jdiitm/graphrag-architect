@@ -455,13 +455,16 @@ class TestMetricsRecording:
             "validation_retries": 0,
             "commit_status": "",
         }
+        mock_metrics = MagicMock()
         with patch(
-            "orchestrator.app.graph_builder.INGESTION_DURATION"
-        ) as mock_metric:
+            "orchestrator.app.graph_builder.get_metrics_port",
+            return_value=mock_metrics,
+        ):
             await load_workspace_files(state)
-            mock_metric.record.assert_called_once()
-            elapsed_ms = mock_metric.record.call_args[0][0]
-            assert elapsed_ms >= 0
+            mock_metrics.record_duration.assert_called()
+            call_args = mock_metrics.record_duration.call_args
+            assert call_args[0][0] == "ingestion.duration_ms"
+            assert call_args[0][1] >= 0
 
     @pytest.mark.asyncio
     async def test_parse_services_records_llm_extraction_duration(self, telemetry):
@@ -475,22 +478,25 @@ class TestMetricsRecording:
             "validation_retries": 0,
             "commit_status": "",
         }
+        mock_metrics = MagicMock()
         with patch(
             "orchestrator.app.graph_builder.ServiceExtractor"
         ) as mock_cls, patch.dict(
             "os.environ", {"GOOGLE_API_KEY": "test-key"}
         ), patch(
-            "orchestrator.app.graph_builder.LLM_EXTRACTION_DURATION"
-        ) as mock_metric:
+            "orchestrator.app.graph_builder.get_metrics_port",
+            return_value=mock_metrics,
+        ):
             mock_extractor = MagicMock()
             mock_extractor.extract_all = AsyncMock(
                 return_value=MagicMock(services=[], calls=[])
             )
             mock_cls.return_value = mock_extractor
             await enrich_with_llm(state)
-            mock_metric.record.assert_called_once()
-            elapsed_ms = mock_metric.record.call_args[0][0]
-            assert elapsed_ms >= 0
+            mock_metrics.record_duration.assert_called_once()
+            call_args = mock_metrics.record_duration.call_args
+            assert call_args[0][0] == "llm.extraction_duration_ms"
+            assert call_args[0][1] >= 0
 
     @pytest.mark.asyncio
     async def test_commit_neo4j_records_neo4j_transaction_duration(self, telemetry):
@@ -512,6 +518,7 @@ class TestMetricsRecording:
         mock_session.execute_write = AsyncMock()
         mock_driver.session.return_value = mock_session
 
+        mock_metrics = MagicMock()
         with patch.dict(
             "os.environ",
             {"NEO4J_PASSWORD": "test", "GOOGLE_API_KEY": "test-key"},
@@ -519,12 +526,14 @@ class TestMetricsRecording:
             "orchestrator.app.graph_builder.get_driver",
             return_value=mock_driver,
         ), patch(
-            "orchestrator.app.graph_builder.NEO4J_TRANSACTION_DURATION"
-        ) as mock_metric:
+            "orchestrator.app.graph_builder.get_metrics_port",
+            return_value=mock_metrics,
+        ):
             await commit_to_neo4j(state)
-            mock_metric.record.assert_called_once()
-            elapsed_ms = mock_metric.record.call_args[0][0]
-            assert elapsed_ms >= 0
+            mock_metrics.record_duration.assert_called_once()
+            call_args = mock_metrics.record_duration.call_args
+            assert call_args[0][0] == "neo4j.transaction_duration_ms"
+            assert call_args[0][1] >= 0
 
     def test_classify_records_query_duration(self, telemetry):
         from orchestrator.app.query_engine import classify_query_node
@@ -541,13 +550,16 @@ class TestMetricsRecording:
             "answer": "",
             "sources": [],
         }
+        mock_metrics = MagicMock()
         with patch(
-            "orchestrator.app.query_engine.QUERY_DURATION"
-        ) as mock_metric:
+            "orchestrator.app.query_engine.get_metrics_port",
+            return_value=mock_metrics,
+        ):
             classify_query_node(state)
-            mock_metric.record.assert_called_once()
-            elapsed_ms = mock_metric.record.call_args[0][0]
-            assert elapsed_ms >= 0
+            mock_metrics.record_duration.assert_called_once()
+            call_args = mock_metrics.record_duration.call_args
+            assert call_args[0][0] == "query.duration_ms"
+            assert call_args[0][1] >= 0
 
     @pytest.mark.asyncio
     async def test_synthesize_records_query_duration(self, telemetry):
@@ -565,17 +577,20 @@ class TestMetricsRecording:
             "answer": "",
             "sources": [],
         }
+        mock_metrics = MagicMock()
         with patch(
             "orchestrator.app.query_engine._llm_synthesize",
             new_callable=AsyncMock,
             return_value="Auth is a service.",
         ), patch(
-            "orchestrator.app.query_engine.QUERY_DURATION"
-        ) as mock_metric:
+            "orchestrator.app.query_engine.get_metrics_port",
+            return_value=mock_metrics,
+        ):
             await synthesize_answer(state)
-            mock_metric.record.assert_called_once()
-            elapsed_ms = mock_metric.record.call_args[0][0]
-            assert elapsed_ms >= 0
+            mock_metrics.record_duration.assert_called_once()
+            call_args = mock_metrics.record_duration.call_args
+            assert call_args[0][0] == "query.duration_ms"
+            assert call_args[0][1] >= 0
 
 
 class TestSamplerConfig:

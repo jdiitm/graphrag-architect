@@ -172,12 +172,12 @@ class TestProcessPoolASTExtraction:
             "asyncio.get_running_loop",
             return_value=mock_loop,
         ), patch(
-            "orchestrator.app.graph_builder.get_tracer",
-        ) as mock_tracer:
+            "orchestrator.app.graph_builder.get_tracing_port",
+        ) as mock_get_tracing:
             mock_span = MagicMock()
             mock_span.__enter__ = MagicMock(return_value=mock_span)
             mock_span.__exit__ = MagicMock(return_value=False)
-            mock_tracer.return_value.start_as_current_span.return_value = mock_span
+            mock_get_tracing.return_value.start_span.return_value = mock_span
 
             await parse_source_ast(state)
 

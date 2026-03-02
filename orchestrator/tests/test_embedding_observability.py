@@ -30,15 +30,19 @@ class TestEmbedQueryFallbackMetric:
         mock_global = AsyncMock()
         mock_global.call = AsyncMock(side_effect=CircuitOpenError("open"))
 
+        mock_metrics = MagicMock()
         with patch(
             "orchestrator.app.query_engine._CB_EMBEDDING_GLOBAL", mock_global,
         ), patch(
-            "orchestrator.app.query_engine.EMBEDDING_FALLBACK_TOTAL",
-        ) as mock_counter:
+            "orchestrator.app.query_engine.get_metrics_port",
+            return_value=mock_metrics,
+        ):
             result = await _embed_query("test query")
 
         assert result is None
-        mock_counter.add.assert_called_once_with(1, {"reason": "circuit_open"})
+        mock_metrics.increment_counter.assert_called_once_with(
+            "embedding.fallback_total", 1, {"reason": "circuit_open"},
+        )
 
     @pytest.mark.asyncio
     async def test_increments_on_generic_exception(self):
@@ -47,15 +51,19 @@ class TestEmbedQueryFallbackMetric:
         mock_global = AsyncMock()
         mock_global.call = AsyncMock(side_effect=RuntimeError("API error"))
 
+        mock_metrics = MagicMock()
         with patch(
             "orchestrator.app.query_engine._CB_EMBEDDING_GLOBAL", mock_global,
         ), patch(
-            "orchestrator.app.query_engine.EMBEDDING_FALLBACK_TOTAL",
-        ) as mock_counter:
+            "orchestrator.app.query_engine.get_metrics_port",
+            return_value=mock_metrics,
+        ):
             result = await _embed_query("test query")
 
         assert result is None
-        mock_counter.add.assert_called_once_with(1, {"reason": "exception"})
+        mock_metrics.increment_counter.assert_called_once_with(
+            "embedding.fallback_total", 1, {"reason": "exception"},
+        )
 
     @pytest.mark.asyncio
     async def test_no_increment_on_success(self):
@@ -65,15 +73,17 @@ class TestEmbedQueryFallbackMetric:
         mock_global = AsyncMock()
         mock_global.call = AsyncMock(return_value=fake_embedding)
 
+        mock_metrics = MagicMock()
         with patch(
             "orchestrator.app.query_engine._CB_EMBEDDING_GLOBAL", mock_global,
         ), patch(
-            "orchestrator.app.query_engine.EMBEDDING_FALLBACK_TOTAL",
-        ) as mock_counter:
+            "orchestrator.app.query_engine.get_metrics_port",
+            return_value=mock_metrics,
+        ):
             result = await _embed_query("test query")
 
         assert result == fake_embedding
-        mock_counter.add.assert_not_called()
+        mock_metrics.increment_counter.assert_not_called()
 
 
 class TestStructuredLLMMessages:
