@@ -34,6 +34,7 @@ class CypherToken:
     value: str
     position: int
     brace_depth: int
+    paren_depth: int = 0
 
 
 def _scan_line_comment(cypher: str, idx: int, depth: int) -> Tuple[CypherToken, int]:
@@ -113,6 +114,7 @@ class _Lexer:
         self.length = len(cypher)
         self.idx = 0
         self.brace_depth = 0
+        self.paren_depth = 0
         self.tokens: List[CypherToken] = []
 
     def _char(self) -> str:
@@ -124,17 +126,34 @@ class _Lexer:
     def _emit(self, token: CypherToken) -> None:
         self.tokens.append(token)
 
+    def _make_token(
+        self, token_type: TokenType, value: str, position: int,
+    ) -> CypherToken:
+        return CypherToken(
+            token_type=token_type,
+            value=value,
+            position=position,
+            brace_depth=self.brace_depth,
+            paren_depth=self.paren_depth,
+        )
+
     def _try_comment(self) -> bool:
         if self._char() != "/" or self.idx + 1 >= self.length:
             return False
         nxt = self._peek()
         if nxt == "/":
             token, self.idx = _scan_line_comment(self.cypher, self.idx, self.brace_depth)
-            self._emit(token)
+            self._emit(CypherToken(
+                token.token_type, token.value, token.position,
+                token.brace_depth, self.paren_depth,
+            ))
             return True
         if nxt == "*":
             token, self.idx = _scan_block_comment(self.cypher, self.idx, self.brace_depth)
-            self._emit(token)
+            self._emit(CypherToken(
+                token.token_type, token.value, token.position,
+                token.brace_depth, self.paren_depth,
+            ))
             return True
         return False
 
@@ -142,11 +161,17 @@ class _Lexer:
         char = self._char()
         if char in ("'", '"'):
             token, self.idx = _scan_string(self.cypher, self.idx, self.brace_depth)
-            self._emit(token)
+            self._emit(CypherToken(
+                token.token_type, token.value, token.position,
+                token.brace_depth, self.paren_depth,
+            ))
             return True
         if char == "`":
             token, self.idx = _scan_backtick_id(self.cypher, self.idx, self.brace_depth)
-            self._emit(token)
+            self._emit(CypherToken(
+                token.token_type, token.value, token.position,
+                token.brace_depth, self.paren_depth,
+            ))
             return True
         return False
 
@@ -156,7 +181,10 @@ class _Lexer:
         nxt = self._peek()
         if nxt.isalpha() or nxt == "_":
             token, self.idx = _scan_parameter(self.cypher, self.idx, self.brace_depth)
-            self._emit(token)
+            self._emit(CypherToken(
+                token.token_type, token.value, token.position,
+                token.brace_depth, self.paren_depth,
+            ))
             return True
         return False
 
@@ -181,10 +209,20 @@ class _Lexer:
             while self.idx < self.length and self.cypher[self.idx] in " \t\n\r":
                 self.idx += 1
             ws_val = self.cypher[start:self.idx]
-            self._emit(CypherToken(TokenType.WHITESPACE, ws_val, start, self.brace_depth))
+            self._emit(self._make_token(TokenType.WHITESPACE, ws_val, start))
             return True
-        if char in "()[],:;":
-            self._emit(CypherToken(TokenType.PUNCTUATION, char, self.idx, self.brace_depth))
+        if char == "(":
+            self._emit(self._make_token(TokenType.PUNCTUATION, char, self.idx))
+            self.paren_depth += 1
+            self.idx += 1
+            return True
+        if char == ")":
+            self.paren_depth = max(0, self.paren_depth - 1)
+            self._emit(self._make_token(TokenType.PUNCTUATION, char, self.idx))
+            self.idx += 1
+            return True
+        if char in "[],:;":
+            self._emit(self._make_token(TokenType.PUNCTUATION, char, self.idx))
             self.idx += 1
             return True
         if char.isdigit() or (char == "." and self._peek().isdigit()):
@@ -192,7 +230,7 @@ class _Lexer:
             while self.idx < self.length and self.cypher[self.idx] in "0123456789.":
                 self.idx += 1
             num_val = self.cypher[start:self.idx]
-            self._emit(CypherToken(TokenType.NUMBER, num_val, start, self.brace_depth))
+            self._emit(self._make_token(TokenType.NUMBER, num_val, start))
             return True
         return False
 
@@ -200,19 +238,22 @@ class _Lexer:
         char = self._char()
         if char.isalpha() or char == "_":
             token, self.idx = _scan_word(self.cypher, self.idx, self.brace_depth, self.tokens)
-            self._emit(token)
+            self._emit(CypherToken(
+                token.token_type, token.value, token.position,
+                token.brace_depth, self.paren_depth,
+            ))
         elif char in "=<>!+-*/%^":
             start = self.idx
             self.idx += 1
             if self.idx < self.length and self.cypher[self.idx] in "=<>":
                 self.idx += 1
             op_val = self.cypher[start:self.idx]
-            self._emit(CypherToken(TokenType.OPERATOR, op_val, start, self.brace_depth))
+            self._emit(self._make_token(TokenType.OPERATOR, op_val, start))
         elif char == ".":
-            self._emit(CypherToken(TokenType.PUNCTUATION, char, self.idx, self.brace_depth))
+            self._emit(self._make_token(TokenType.PUNCTUATION, char, self.idx))
             self.idx += 1
         else:
-            self._emit(CypherToken(TokenType.IDENTIFIER, char, self.idx, self.brace_depth))
+            self._emit(self._make_token(TokenType.IDENTIFIER, char, self.idx))
             self.idx += 1
 
     def run(self) -> List[CypherToken]:

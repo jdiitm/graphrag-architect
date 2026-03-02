@@ -126,8 +126,8 @@ class TestVectorRetrieveAppliesACL:
         called_cypher = mock_tx.run.call_args[0][0]
         called_kwargs = mock_tx.run.call_args[1]
         assert "WHERE" in called_cypher
-        assert "acl_team" in called_kwargs
-        assert called_kwargs["acl_team"] == "platform"
+        assert "acl_labels" in called_kwargs
+        assert "Team_platform" in called_kwargs["acl_labels"]
 
     @pytest.mark.asyncio
     @patch.dict("os.environ", {"AUTH_TOKEN_SECRET": _TEST_SECRET})
@@ -158,7 +158,7 @@ class TestVectorRetrieveAppliesACL:
         await tx_func(mock_tx)
 
         called_kwargs = mock_tx.run.call_args[1]
-        assert "acl_team" not in called_kwargs
+        assert "acl_labels" not in called_kwargs
 
 
 class TestCypherRetrieveAppliesACL:
@@ -203,7 +203,7 @@ class TestCypherRetrieveAppliesACL:
         ):
             await cypher_retrieve(state)
 
-        assert captured_acl["acl_team"] == "data"
+        assert "Team_data" in captured_acl["acl_labels"]
         assert captured_acl["is_admin"] is False
 
 
@@ -259,8 +259,8 @@ class TestSingleHopRetrieveAppliesACL:
         hop_cypher_call = captured_cyphers[1]
         hop_cypher = hop_cypher_call[0][0]
         hop_kwargs = hop_cypher_call[1]
-        assert "acl_team" in hop_kwargs
-        assert hop_kwargs["acl_team"] == "platform"
+        assert "acl_labels" in hop_kwargs
+        assert "Team_platform" in hop_kwargs["acl_labels"]
 
 
 class TestHybridRetrieveAppliesACL:

@@ -175,7 +175,12 @@ class TestCypherTenantGuard:
         assert len(violations) == 0
 
     def test_all_existing_cypher_constants_are_scoped(self) -> None:
-        guard = CypherTenantGuard(allowlist=SCHEMA_DDL_ALLOWLIST)
+        _RBAC_LABEL_FRAGMENTS = frozenset({
+            " WITH n, row"
+            " CALL apoc.create.addLabels(n, row.rbac_labels) YIELD node",
+        })
+        extended_allowlist = SCHEMA_DDL_ALLOWLIST | _RBAC_LABEL_FRAGMENTS
+        guard = CypherTenantGuard(allowlist=extended_allowlist)
         app_dir = pathlib.Path(__file__).parent.parent / "app"
         all_cypher = guard.extract_cypher_constants_from_directory(app_dir)
         violations = guard.scan_queries(all_cypher)

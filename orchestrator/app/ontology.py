@@ -119,11 +119,17 @@ def generate_unwind_cypher(
         if prop not in keys
     ]
     set_clause = ", ".join(set_parts)
-    return (
+    base = (
         f"UNWIND $batch AS row "
         f"MERGE (n:{label} {{{merge_clause}}}) "
         f"SET {set_clause}"
     )
+    if node_def.acl_fields:
+        base += (
+            " WITH n, row"
+            " CALL apoc.create.addLabels(n, row.rbac_labels) YIELD node"
+        )
+    return base
 
 
 def generate_edge_merge_cypher(

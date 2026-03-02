@@ -3,12 +3,18 @@ import json
 import re
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 
 _SAFE_ENTITY_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,252}$")
 _CYPHER_INJECTION_CHARS = re.compile(r"['\"{};\\`\x00]")
 _MAX_EDGE_REF_LENGTH = 512
+
+_LABEL_UNSAFE = re.compile(r"[^a-zA-Z0-9_]")
+
+
+def _sanitize_label_suffix(value: str) -> str:
+    return _LABEL_UNSAFE.sub("_", value)
 
 
 def validate_entity_identifier(value: str) -> str:
@@ -35,9 +41,24 @@ def validate_edge_reference(value: str) -> str:
 
 
 def compute_content_hash(entity: BaseModel) -> str:
-    data = entity.model_dump(exclude={"content_hash"})
+    data = entity.model_dump(exclude={"content_hash", "rbac_labels"})
     json_str = json.dumps(data, sort_keys=True)
     return hashlib.sha256(json_str.encode()).hexdigest()
+
+
+def _build_rbac_labels(
+    team_owner: Optional[str],
+    namespace_acl: List[str],
+    read_roles: List[str],
+) -> List[str]:
+    labels: List[str] = []
+    if team_owner:
+        labels.append(f"Team_{_sanitize_label_suffix(team_owner)}")
+    for ns in namespace_acl:
+        labels.append(f"Ns_{_sanitize_label_suffix(ns)}")
+    for role in read_roles:
+        labels.append(f"Role_{_sanitize_label_suffix(role)}")
+    return labels
 
 
 class ServiceNode(BaseModel):
@@ -53,6 +74,13 @@ class ServiceNode(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     content_hash: str = ""
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def rbac_labels(self) -> List[str]:
+        return _build_rbac_labels(
+            self.team_owner, self.namespace_acl, self.read_roles,
+        )
+
     @field_validator("id", "name")
     @classmethod
     def _validate_safe_identifier(cls, v: str) -> str:
@@ -67,6 +95,13 @@ class DatabaseNode(BaseModel):
     namespace_acl: List[str] = Field(default_factory=list)
     read_roles: List[str] = Field(default_factory=list)
     content_hash: str = ""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def rbac_labels(self) -> List[str]:
+        return _build_rbac_labels(
+            self.team_owner, self.namespace_acl, self.read_roles,
+        )
 
     @field_validator("id")
     @classmethod
@@ -84,6 +119,13 @@ class KafkaTopicNode(BaseModel):
     read_roles: List[str] = Field(default_factory=list)
     content_hash: str = ""
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def rbac_labels(self) -> List[str]:
+        return _build_rbac_labels(
+            self.team_owner, self.namespace_acl, self.read_roles,
+        )
+
     @field_validator("name")
     @classmethod
     def _validate_safe_identifier(cls, v: str) -> str:
@@ -99,6 +141,13 @@ class K8sDeploymentNode(BaseModel):
     namespace_acl: List[str] = Field(default_factory=list)
     read_roles: List[str] = Field(default_factory=list)
     content_hash: str = ""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def rbac_labels(self) -> List[str]:
+        return _build_rbac_labels(
+            self.team_owner, self.namespace_acl, self.read_roles,
+        )
 
     @field_validator("id")
     @classmethod

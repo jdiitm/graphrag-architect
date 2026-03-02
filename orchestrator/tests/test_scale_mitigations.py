@@ -253,14 +253,13 @@ class TestTraversalACLBypass:
             driver=mock_driver,
             source_id="svc-1",
             tenant_id="tenant-1",
-            acl_params={"is_admin": False, "acl_team": "eng",
-                        "acl_namespaces": ["ns1"]},
+            acl_params={"is_admin": False, "acl_labels": ["Team_eng", "Ns_ns1"]},
             skip_acl=True,
         )
 
         assert len(captured_queries) >= 1
         for query in captured_queries:
-            assert "namespace_acl" not in query, (
+            assert "$acl_labels" not in query, (
                 f"ACL predicate found in query when skip_acl=True: {query}"
             )
 
@@ -298,14 +297,13 @@ class TestTraversalACLBypass:
             driver=mock_driver,
             source_id="svc-1",
             tenant_id="tenant-1",
-            acl_params={"is_admin": False, "acl_team": "eng",
-                        "acl_namespaces": ["ns1"]},
+            acl_params={"is_admin": False, "acl_labels": ["Team_eng", "Ns_ns1"]},
             skip_acl=False,
         )
 
         neighbor_queries = [q for q in captured_queries if "target" in q]
         assert len(neighbor_queries) >= 1
         for query in neighbor_queries:
-            assert "namespace_acl" in query, (
+            assert "$acl_labels" in query, (
                 f"ACL predicate missing when skip_acl=False: {query}"
             )

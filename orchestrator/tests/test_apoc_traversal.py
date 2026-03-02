@@ -12,7 +12,7 @@ from orchestrator.app.agentic_traversal import (
 )
 
 
-_DEFAULT_ACL: dict = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+_DEFAULT_ACL: dict = {"is_admin": True, "acl_labels": []}
 
 
 def _mock_tx_two_queries(
@@ -62,7 +62,7 @@ class TestApocQueryTenantIsolation:
     async def test_node_query_enforces_acl(self) -> None:
         from orchestrator.app.agentic_traversal import apoc_path_expansion
 
-        acl = {"is_admin": False, "acl_team": "platform", "acl_namespaces": ["prod"]}
+        acl = {"is_admin": False, "acl_labels": ["Team_platform", "Ns_prod"]}
         tx = _mock_tx_two_queries([], [])
         await apoc_path_expansion(
             tx,
@@ -73,8 +73,7 @@ class TestApocQueryTenantIsolation:
 
         node_query = tx.run.call_args_list[0][0][0]
         assert "$is_admin" in node_query
-        assert "$acl_team" in node_query
-        assert "$acl_namespaces" in node_query
+        assert "$acl_labels" in node_query
 
     @pytest.mark.asyncio
     async def test_edge_query_filters_tombstoned(self) -> None:

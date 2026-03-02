@@ -75,8 +75,7 @@ class TenantScopeVerifier:
 
 
 _ACL_MARKERS: FrozenSet[str] = frozenset({
-    "$is_admin", "$acl_team", "$acl_namespaces",
-    "team_owner", "namespace_acl",
+    "$is_admin", "$acl_labels", "labels(",
 })
 
 
@@ -112,8 +111,8 @@ class TenantSecurityProvider:
 
 def _acl_where_fragment() -> str:
     return (
-        "AND ($is_admin OR target.team_owner = $acl_team "
-        "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
+        "AND ($is_admin "
+        "OR ANY(lbl IN labels(target) WHERE lbl IN $acl_labels)) "
     )
 
 

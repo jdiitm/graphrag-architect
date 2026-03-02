@@ -36,8 +36,8 @@ class TestBatchedNeighborPerSourceLimit:
     def test_query_still_has_acl(self) -> None:
         query = build_traversal_batched_neighbor()
         assert "$is_admin" in query
-        assert "team_owner" in query
-        assert "namespace_acl" in query
+        assert "$acl_labels" in query
+        assert "labels(" in query
 
     def test_query_still_has_tenant_filter(self) -> None:
         query = build_traversal_batched_neighbor()

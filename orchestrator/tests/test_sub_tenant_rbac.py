@@ -54,32 +54,34 @@ class TestNodeModelsHaveReadRoles:
 
 class TestRoleFilterInCypherPermissionFilter:
 
-    def test_viewer_role_adds_read_roles_filter(self) -> None:
+    def test_viewer_role_adds_label_filter(self) -> None:
         principal = SecurityPrincipal(
             team="platform", namespace="default", role="viewer",
         )
         pf = CypherPermissionFilter(principal)
         clause, params = pf.node_filter("n")
-        assert "$acl_role IN n.read_roles" in clause
-        assert params["acl_role"] == "viewer"
+        assert "labels(n)" in clause
+        assert "$acl_labels" in clause
+        assert "Role_viewer" in params["acl_labels"]
 
-    def test_admin_role_skips_read_roles_filter(self) -> None:
+    def test_admin_role_skips_label_filter(self) -> None:
         principal = SecurityPrincipal(
             team="platform", namespace="default", role="admin",
         )
         pf = CypherPermissionFilter(principal)
         clause, params = pf.node_filter("n")
         assert clause == ""
-        assert "acl_role" not in params
+        assert "acl_labels" not in params
 
-    def test_dev_role_adds_read_roles_filter(self) -> None:
+    def test_dev_role_adds_label_filter(self) -> None:
         principal = SecurityPrincipal(
             team="backend", namespace="staging", role="dev",
         )
         pf = CypherPermissionFilter(principal)
         clause, params = pf.node_filter("n")
-        assert "$acl_role IN n.read_roles" in clause
-        assert params["acl_role"] == "dev"
+        assert "labels(n)" in clause
+        assert "$acl_labels" in clause
+        assert "Role_dev" in params["acl_labels"]
 
     def test_anonymous_principal_no_role_filter(self) -> None:
         principal = SecurityPrincipal(
@@ -87,7 +89,7 @@ class TestRoleFilterInCypherPermissionFilter:
         )
         pf = CypherPermissionFilter(principal, default_deny_untagged=False)
         clause, params = pf.node_filter("n")
-        assert "acl_role" not in params
+        assert all(not lbl.startswith("Role_") for lbl in params["acl_labels"])
 
 
 class TestOntologyIncludesReadRoles:

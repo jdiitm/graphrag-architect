@@ -35,8 +35,7 @@ class TestBuildAclSingleHopQuery:
             assert f"-[r:{rel_type}]->" in cypher
             assert "$tenant_id" in cypher
             assert "$is_admin" in cypher
-            assert "$acl_team" in cypher
-            assert "$acl_namespaces" in cypher
+            assert "$acl_labels" in cypher
             assert "$limit" in cypher
 
     def test_disallowed_relationship_type_raises(self):
@@ -63,8 +62,7 @@ class TestBuildAclMultiHopQuery:
     def test_acl_applied_to_all_path_nodes(self):
         cypher = build_acl_multi_hop_query(3)
         assert "ALL(n IN nodes(path)" in cypher
-        assert "$acl_team" in cypher
-        assert "$acl_namespaces" in cypher
+        assert "$acl_labels" in cypher
 
     def test_tombstone_filter_on_relationships(self):
         cypher = build_acl_multi_hop_query(3)
@@ -81,8 +79,9 @@ class TestBuildAclParams:
         )
         assert params["tenant_id"] == "t1"
         assert params["is_admin"] is False
-        assert params["acl_team"] == "platform"
-        assert params["acl_namespaces"] == ["prod", "staging"]
+        assert "Team_platform" in params["acl_labels"]
+        assert "Ns_prod" in params["acl_labels"]
+        assert "Ns_staging" in params["acl_labels"]
 
     def test_admin_flag_propagated(self):
         params = build_acl_params(
@@ -109,8 +108,7 @@ class TestAllTemplatesHaveTenantId:
             assert template is not None, f"ACL template {name} must exist"
             assert "$tenant_id" in template.cypher
             assert "$is_admin" in template.cypher
-            assert "$acl_team" in template.cypher
-            assert "$acl_namespaces" in template.cypher
+            assert "$acl_labels" in template.cypher
 
 
 class TestQueryEngineUsesParameterizedACL:

@@ -71,10 +71,10 @@ class TestCypherPermissionFilter:
         )
         filt = CypherPermissionFilter(principal)
         clause, params = filt.node_filter("n")
-        assert "$acl_team" in clause
-        assert "$acl_namespace" in clause
-        assert params["acl_team"] == "platform"
-        assert params["acl_namespace"] == "production"
+        assert "$acl_labels" in clause
+        assert "labels(n)" in clause
+        assert "Team_platform" in params["acl_labels"]
+        assert "Ns_production" in params["acl_labels"]
 
     def test_namespace_filter_restricts_nodes(self):
         principal = SecurityPrincipal(
@@ -82,15 +82,15 @@ class TestCypherPermissionFilter:
         )
         filt = CypherPermissionFilter(principal)
         clause, params = filt.node_filter("n")
-        assert params["acl_namespace"] == "staging"
-        assert params["acl_team"] == "data-team"
+        assert "Ns_staging" in params["acl_labels"]
+        assert "Team_data_team" in params["acl_labels"]
 
     def test_anonymous_gets_public_only(self):
         principal = SecurityPrincipal(team="*", namespace="*", role="anonymous")
         filt = CypherPermissionFilter(principal)
         clause, params = filt.node_filter("n")
         assert clause != ""
-        assert params["acl_team"] == "public"
+        assert params["acl_labels"] == ["Team_public"]
 
     def test_wildcard_namespace_only_team_filtered(self):
         principal = SecurityPrincipal(
@@ -98,10 +98,9 @@ class TestCypherPermissionFilter:
         )
         filt = CypherPermissionFilter(principal)
         clause, params = filt.node_filter("n")
-        assert "$acl_team" in clause
-        assert "$acl_namespace" not in clause
-        assert params["acl_team"] == "platform"
-        assert "acl_namespace" not in params
+        assert "$acl_labels" in clause
+        assert "Team_platform" in params["acl_labels"]
+        assert not any(l.startswith("Ns_") for l in params["acl_labels"])
 
     def test_wildcard_team_only_namespace_filtered(self):
         principal = SecurityPrincipal(
@@ -109,10 +108,9 @@ class TestCypherPermissionFilter:
         )
         filt = CypherPermissionFilter(principal)
         clause, params = filt.node_filter("n")
-        assert "$acl_namespace" in clause
-        assert "$acl_team" not in clause
-        assert params["acl_namespace"] == "staging"
-        assert "acl_team" not in params
+        assert "$acl_labels" in clause
+        assert "Ns_staging" in params["acl_labels"]
+        assert not any(l.startswith("Team_") for l in params["acl_labels"])
 
     def test_edge_filter_restricts_traversal(self):
         principal = SecurityPrincipal(
@@ -121,10 +119,9 @@ class TestCypherPermissionFilter:
         filt = CypherPermissionFilter(principal)
         clause, params = filt.edge_filter("m")
         assert clause != ""
-        assert "$acl_team" in clause
-        assert "$acl_namespace" in clause
-        assert params["acl_team"] == "platform"
-        assert params["acl_namespace"] == "production"
+        assert "$acl_labels" in clause
+        assert "Team_platform" in params["acl_labels"]
+        assert "Ns_production" in params["acl_labels"]
 
     def test_edge_filter_admin_no_restriction(self):
         principal = SecurityPrincipal(team="platform", namespace="*", role="admin")
@@ -141,10 +138,9 @@ class TestCypherPermissionFilter:
         original = "MATCH (n:Service) RETURN n"
         filtered, params = filt.inject_into_cypher(original)
         assert "WHERE" in filtered
-        assert "$acl_team" in filtered
-        assert "$acl_namespace" in filtered
-        assert params["acl_team"] == "platform"
-        assert params["acl_namespace"] == "production"
+        assert "$acl_labels" in filtered
+        assert "Team_platform" in params["acl_labels"]
+        assert "Ns_production" in params["acl_labels"]
 
     def test_inject_preserves_existing_where(self):
         principal = SecurityPrincipal(
@@ -164,10 +160,9 @@ class TestCypherPermissionFilter:
         original = "MATCH (n:Service)"
         filtered, params = filt.inject_into_cypher(original)
         assert filtered.startswith("MATCH (n:Service) WHERE")
-        assert "$acl_team" in filtered
-        assert "$acl_namespace" in filtered
-        assert params["acl_team"] == "platform"
-        assert params["acl_namespace"] == "production"
+        assert "$acl_labels" in filtered
+        assert "Team_platform" in params["acl_labels"]
+        assert "Ns_production" in params["acl_labels"]
 
     def test_inject_parenthesizes_existing_where_conditions(self):
         principal = SecurityPrincipal(
@@ -177,7 +172,7 @@ class TestCypherPermissionFilter:
         original = "MATCH (n:Service) WHERE n.active = true OR n.name = 'auth' RETURN n"
         filtered, params = filt.inject_into_cypher(original)
         assert "(n.active = true OR n.name = 'auth')" in filtered
-        assert params["acl_team"] == "platform"
+        assert "Team_platform" in params["acl_labels"]
 
     def test_inject_into_cypher_custom_alias(self):
         principal = SecurityPrincipal(
@@ -186,10 +181,9 @@ class TestCypherPermissionFilter:
         filt = CypherPermissionFilter(principal)
         original = "MATCH (s:Service) RETURN s"
         filtered, params = filt.inject_into_cypher(original, alias="s")
-        assert "s.team_owner" in filtered
-        assert "s.namespace_acl" in filtered
-        assert "n.team_owner" not in filtered
-        assert params["acl_team"] == "platform"
+        assert "labels(s)" in filtered
+        assert "labels(n)" not in filtered
+        assert "Team_platform" in params["acl_labels"]
 
     def test_inject_admin_returns_original(self):
         principal = SecurityPrincipal(team="ops", namespace="*", role="admin")
@@ -210,13 +204,13 @@ class TestCypherPermissionFilter:
             "RETURN n, m"
         )
         filtered, params = filt.inject_into_cypher(original)
-        assert params["acl_team"] == "platform"
+        assert "Team_platform" in params["acl_labels"]
         assert "m.type = 'PostgreSQL'" in filtered, (
             "Subquery WHERE condition must be preserved"
         )
-        outer_acl = filtered.find("n.team_owner")
+        outer_acl = filtered.find("$acl_labels")
         assert outer_acl >= 0, "ACL must be injected on the outer MATCH"
-        inner_acl = filtered.find("n.team_owner", filtered.find("CALL"))
+        inner_acl = filtered.find("$acl_labels", filtered.find("CALL"))
         subquery_end = filtered.find("}")
         assert inner_acl >= 0 and inner_acl < subquery_end, (
             "AST-level ACL must also inject inside CALL subquery scope"
@@ -232,7 +226,7 @@ class TestCypherPermissionFilter:
             "RETURN CASE WHEN n.language = 'Go' THEN 'backend' ELSE 'other' END"
         )
         filtered, params = filt.inject_into_cypher(original)
-        assert params["acl_team"] == "platform"
+        assert "Team_platform" in params["acl_labels"]
         assert "CASE WHEN" in filtered, "CASE expression must be preserved intact"
         where_pos = filtered.find("WHERE")
         case_pos = filtered.find("CASE")
@@ -249,7 +243,7 @@ class TestCypherPermissionFilter:
             "MATCH (n:Service) WHERE n.name = 'WHERE_SERVICE' RETURN n"
         )
         filtered, params = filt.inject_into_cypher(original)
-        assert params["acl_team"] == "platform"
+        assert "Team_platform" in params["acl_labels"]
         assert "'WHERE_SERVICE'" in filtered, (
             "String literal must be preserved"
         )
@@ -263,11 +257,11 @@ class TestCypherPermissionFilter:
             "MATCH (n:Service) WHERE n.description CONTAINS 'RETURN value' RETURN n"
         )
         filtered, params = filt.inject_into_cypher(original)
-        assert params["acl_team"] == "platform"
+        assert "Team_platform" in params["acl_labels"]
         assert "'RETURN value'" in filtered, (
             "String literal containing RETURN must be preserved"
         )
-        acl_clause_pos = filtered.find("n.team_owner")
+        acl_clause_pos = filtered.find("$acl_labels")
         final_return_pos = filtered.rfind("RETURN n")
         assert acl_clause_pos < final_return_pos
 
@@ -282,7 +276,7 @@ class TestCypherPermissionFilter:
             "RETURN n, m"
         )
         filtered, params = filt.inject_into_cypher(original)
-        assert params["acl_team"] == "platform"
+        assert "Team_platform" in params["acl_labels"]
         assert "n.language = 'Go'" in filtered
 
     def test_inject_nested_braces_depth_tracking(self):
@@ -297,7 +291,7 @@ class TestCypherPermissionFilter:
             "RETURN n, cnt"
         )
         filtered, params = filt.inject_into_cypher(original)
-        assert params["acl_team"] == "ops"
+        assert "Team_ops" in params["acl_labels"]
         assert "t.active = true" in filtered
         assert "n.language = 'Python'" in filtered
 
@@ -494,8 +488,8 @@ class TestCypherACLInjectionDefeatTests:
         filt = self._make_filter()
         original = "MATCH (n:Service) RETURN n; DROP CONSTRAINT unique_service_name"
         filtered, params = filt.inject_into_cypher(original)
-        assert params.get("acl_team") == "platform"
-        assert "n.team_owner" in filtered
+        assert "Team_platform" in params["acl_labels"]
+        assert "$acl_labels" in filtered
 
     def test_string_literal_delete_where_return_preserved(self):
         filt = self._make_filter()
@@ -503,9 +497,9 @@ class TestCypherACLInjectionDefeatTests:
             'MATCH (n:Service) WHERE n.desc = "DELETE all WHERE RETURN" RETURN n'
         )
         filtered, params = filt.inject_into_cypher(original)
-        assert params["acl_team"] == "platform"
+        assert "Team_platform" in params["acl_labels"]
         assert '"DELETE all WHERE RETURN"' in filtered
-        acl_pos = filtered.find("n.team_owner")
+        acl_pos = filtered.find("$acl_labels")
         assert acl_pos >= 0
 
     def test_nested_subquery_with_own_where(self):
@@ -514,7 +508,7 @@ class TestCypherACLInjectionDefeatTests:
             "CALL { MATCH (n:Service) WHERE n.name = 'x' RETURN n } RETURN n"
         )
         filtered, params = filt.inject_into_cypher(original)
-        assert params["acl_team"] == "platform"
+        assert "Team_platform" in params["acl_labels"]
         assert "n.name = 'x'" in filtered
 
     def test_union_query_acl_on_both_branches(self):
@@ -525,8 +519,8 @@ class TestCypherACLInjectionDefeatTests:
             "MATCH (n:Database) RETURN n"
         )
         filtered, params = filt.inject_into_cypher(original)
-        assert params["acl_team"] == "platform"
-        acl_count = filtered.count("n.team_owner")
+        assert "Team_platform" in params["acl_labels"]
+        acl_count = filtered.count("$acl_labels")
         assert acl_count >= 2, (
             f"ACL must appear in both UNION branches, found {acl_count} times"
         )
@@ -543,11 +537,11 @@ class TestCypherACLInjectionDefeatTests:
             "RETURN a, b"
         )
         filtered, params = filt.inject_into_cypher(original)
-        assert params["acl_team"] == "platform"
-        acl_count = filtered.count("team_owner")
+        assert "Team_platform" in params["acl_labels"]
+        acl_count = filtered.count("$acl_labels")
         assert acl_count >= 3, (
             f"ACL must be injected at all three MATCH scopes, "
-            f"found {acl_count} team_owner references"
+            f"found {acl_count} $acl_labels references"
         )
 
 
@@ -634,7 +628,7 @@ class TestCallIsolationWiredIntoACL:
         )
         pf = CypherPermissionFilter(principal)
         cypher_with_call = (
-            "MATCH (n:Service) WHERE n.team_owner = 'team-a' "
+            "MATCH (n:Service) WHERE n.name = 'svc-a' "
             "CALL { MATCH (m:Service) RETURN m } RETURN n"
         )
         result, params = pf.inject_into_cypher(cypher_with_call)
@@ -642,6 +636,6 @@ class TestCallIsolationWiredIntoACL:
         subquery_start = result.find("CALL")
         subquery_end = result.find("}", subquery_start)
         subquery_body = result[subquery_start:subquery_end]
-        assert "n.team_owner" in subquery_body, (
+        assert "$acl_labels" in subquery_body, (
             "AST-level injection must cover MATCH clauses inside CALL subqueries"
         )

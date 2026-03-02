@@ -143,14 +143,15 @@ class CypherParser:
         return clauses
 
     def _collect_until_clause_keyword(
-        self, scope_depth: int = 0,
+        self, scope_depth: int = 0, paren_scope: int = 0,
     ) -> List[CypherToken]:
         collected: List[CypherToken] = []
         while self._pos < len(self._tokens):
             tok = self._tokens[self._pos]
             if (tok.token_type == TokenType.KEYWORD
                     and tok.value.upper() in _CLAUSE_KEYWORDS
-                    and tok.brace_depth == scope_depth):
+                    and tok.brace_depth == scope_depth
+                    and tok.paren_depth == paren_scope):
                 break
             if (tok.token_type == TokenType.PUNCTUATION
                     and tok.value == "}"

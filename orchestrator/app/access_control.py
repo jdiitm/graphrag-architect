@@ -1,12 +1,30 @@
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import jwt
 
 from orchestrator.app.cypher_ast import inject_acl_all_scopes, validate_acl_coverage
+
+_LABEL_UNSAFE = re.compile(r"[^a-zA-Z0-9_]")
+
+
+def _sanitize_label_suffix(value: str) -> str:
+    return _LABEL_UNSAFE.sub("_", value)
+
+
+def compute_acl_labels(principal: SecurityPrincipal) -> List[str]:
+    labels: List[str] = []
+    if principal.team and principal.team != "*":
+        labels.append(f"Team_{_sanitize_label_suffix(principal.team)}")
+    if principal.namespace and principal.namespace != "*":
+        labels.append(f"Ns_{_sanitize_label_suffix(principal.namespace)}")
+    if principal.role and principal.role not in ("*", "anonymous", "admin"):
+        labels.append(f"Role_{_sanitize_label_suffix(principal.role)}")
+    return labels
 
 DEFAULT_TOKEN_TTL_SECONDS = 3600
 JWT_ALGORITHM = "HS256"
@@ -97,46 +115,31 @@ class CypherPermissionFilter:
     def verify_coverage(self) -> bool:
         return self._verify_coverage
 
-    def _acl_clause(
-        self, alias: str, field: str, param: str, use_in: bool = False,
-    ) -> str:
-        op = f"${param} IN {alias}.{field}" if use_in else f"{alias}.{field} = ${param}"
+    def _label_acl_clause(self, alias: str) -> str:
+        match_expr = f"ANY(lbl IN labels({alias}) WHERE lbl IN $acl_labels)"
         if self._deny_untagged:
-            return f"({op})"
-        return f"({op} OR {alias}.{field} IS NULL)"
+            return match_expr
+        return (
+            f"({match_expr} OR NONE(lbl IN labels({alias}) "
+            f"WHERE lbl STARTS WITH 'Team_' "
+            f"OR lbl STARTS WITH 'Ns_' "
+            f"OR lbl STARTS WITH 'Role_'))"
+        )
 
-    def node_filter(self, alias: str) -> Tuple[str, Dict[str, str]]:
+    def node_filter(self, alias: str) -> Tuple[str, Dict[str, Any]]:
         if self._principal.is_admin:
             return "", {}
 
-        clauses = []
-        params: Dict[str, str] = {}
+        acl_labels = compute_acl_labels(self._principal)
+        if not acl_labels:
+            acl_labels = ["Team_public"]
 
-        if self._principal.team != "*":
-            clauses.append(self._acl_clause(alias, "team_owner", "acl_team"))
-            params["acl_team"] = self._principal.team
-
-        if self._principal.namespace != "*":
-            clauses.append(
-                self._acl_clause(alias, "namespace_acl", "acl_namespace", use_in=True),
-            )
-            params["acl_namespace"] = self._principal.namespace
-
-        if self._principal.role not in ("*", "anonymous", "admin"):
-            clauses.append(
-                self._acl_clause(alias, "read_roles", "acl_role", use_in=True),
-            )
-            params["acl_role"] = self._principal.role
-
-        if not clauses:
-            clauses.append(self._acl_clause(alias, "team_owner", "acl_team"))
-            params["acl_team"] = "public"
-
-        return " AND ".join(clauses), params
+        clause = self._label_acl_clause(alias)
+        return clause, {"acl_labels": acl_labels}
 
     def edge_filter(
         self, target_alias: str
-    ) -> Tuple[str, Dict[str, str]]:
+    ) -> Tuple[str, Dict[str, Any]]:
         if self._principal.is_admin:
             return "", {}
 
@@ -145,7 +148,7 @@ class CypherPermissionFilter:
 
     def inject_into_cypher(
         self, cypher: str, alias: str = "n"
-    ) -> Tuple[str, Dict[str, str]]:
+    ) -> Tuple[str, Dict[str, Any]]:
         if self._principal.is_admin:
             return cypher, {}
 
@@ -155,8 +158,7 @@ class CypherPermissionFilter:
 
         injected_cypher = inject_acl_all_scopes(cypher, node_clause)
         if self._verify_coverage:
-            acl_marker = node_clause.split("=", maxsplit=1)[0].strip().split(".")[-1]
-            if not validate_acl_coverage(injected_cypher, acl_marker):
+            if not validate_acl_coverage(injected_cypher, "acl_labels"):
                 raise ACLCoverageError(
                     "ACL injection did not cover all MATCH scopes in the query"
                 )

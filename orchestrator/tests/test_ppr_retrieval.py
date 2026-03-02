@@ -107,6 +107,9 @@ class TestSingleHopPPRIntegration:
         )
 
         with patch(
+            "orchestrator.app.query_engine._apply_acl",
+            side_effect=lambda cypher, state, alias="n": (cypher, {}),
+        ), patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
         ), patch(
@@ -155,6 +158,9 @@ class TestSingleHopPPRIntegration:
         state = _make_state(base_query_state, query="what does svc-a call?")
 
         with patch(
+            "orchestrator.app.query_engine._apply_acl",
+            side_effect=lambda cypher, state, alias="n": (cypher, {}),
+        ), patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
         ), patch(

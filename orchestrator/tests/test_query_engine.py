@@ -138,6 +138,9 @@ class TestSingleHopRetrieve:
         )
 
         with patch(
+            "orchestrator.app.query_engine._apply_acl",
+            side_effect=lambda cypher, state, alias="n": (cypher, {}),
+        ), patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
         ), patch(
@@ -171,6 +174,9 @@ class TestSingleHopRetrieve:
         )
 
         with patch(
+            "orchestrator.app.query_engine._apply_acl",
+            side_effect=lambda cypher, state, alias="n": (cypher, {}),
+        ), patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
         ), patch(
@@ -479,6 +485,10 @@ class TestNeo4jReadOnlyAccessPattern:
         patches = [
             patch("orchestrator.app.query_engine._get_neo4j_driver", return_value=mock_driver),
             patch("orchestrator.app.query_engine._get_neo4j_write_driver", return_value=mock_driver),
+            patch(
+                "orchestrator.app.query_engine._apply_acl",
+                side_effect=lambda cypher, state, alias="n": (cypher, {}),
+            ),
         ]
         for target, return_val in extra_patches:
             if "resolve_driver_for_tenant" in target:
@@ -851,6 +861,9 @@ class TestHopEdgeLimit:
         state = _make_state(base_query_state, query="what does svc-a call?")
 
         with patch(
+            "orchestrator.app.query_engine._apply_acl",
+            side_effect=lambda cypher, state, alias="n": (cypher, {}),
+        ), patch(
             "orchestrator.app.query_engine._get_neo4j_driver",
             return_value=mock_driver,
         ), patch(

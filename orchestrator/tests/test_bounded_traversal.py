@@ -19,7 +19,7 @@ _SAMPLE_RESULTS = [
     {"target_id": "svc-c", "target_name": "user-service", "target_label": "Service"},
 ]
 
-_DEFAULT_ACL: dict = {"is_admin": True, "acl_team": "", "acl_namespaces": []}
+_DEFAULT_ACL: dict = {"is_admin": True, "acl_labels": []}
 
 
 def _mock_bounded_session(return_value=None):
@@ -61,7 +61,7 @@ class TestBoundedPathExpansion:
         session = _mock_bounded_session(return_value=[])
         driver = _mock_driver(session)
 
-        acl = {"is_admin": False, "acl_team": "platform", "acl_namespaces": ["ns-prod"]}
+        acl = {"is_admin": False, "acl_labels": ["Team_platform", "Ns_ns_prod"]}
         await bounded_path_expansion(
             driver=driver,
             start_id="root",
@@ -80,8 +80,7 @@ class TestBoundedPathExpansion:
 
         call_kwargs = mock_tx.run.call_args[1]
         assert call_kwargs["is_admin"] is False
-        assert call_kwargs["acl_team"] == "platform"
-        assert call_kwargs["acl_namespaces"] == ["ns-prod"]
+        assert call_kwargs["acl_labels"] == ["Team_platform", "Ns_ns_prod"]
 
     @pytest.mark.asyncio
     async def test_bounded_expansion_tombstone_filtering(self) -> None:
@@ -203,8 +202,8 @@ class TestBoundedPathExpansion:
 
         cypher_query = mock_tx.run.call_args[0][0]
         assert "all(n IN nodes(path)" in cypher_query
-        assert "n.team_owner" in cypher_query
-        assert "n.namespace_acl" in cypher_query
+        assert "labels(n)" in cypher_query
+        assert "$acl_labels" in cypher_query
 
 
 class TestRunTraversalBounded:
