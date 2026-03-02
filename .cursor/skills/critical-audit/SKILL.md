@@ -65,17 +65,18 @@ Read the entire specification stack. These define what the system SHOULD be.
 
 ```
 CLAUDE.md
-docs/prd/01_VISION_AND_SCOPE.md
-docs/prd/02_SYSTEM_REQUIREMENTS.md
-docs/architecture/01_SYSTEM_DESIGN.md
-docs/architecture/02_DATA_DICTIONARY.md
+docs/SPEC.md (Sections 1-3: Executive Summary, Strategic Context, Scope)
+docs/SPEC.md (Section 4: System Architecture)
+docs/SPEC.md (Section 5: Data Model — node types, edge types, constraints)
+docs/SPEC.md (Sections 8-9: Functional Requirements FR-1 through FR-18, NFRs and SLOs)
+docs/SPEC.md (Section 10: Security Architecture)
 ```
 
 Extract and internalize:
-- Every FR (functional requirement) and its acceptance criteria
+- Every FR (functional requirement FR-1 through FR-18) and its acceptance criteria
 - Every stated architectural invariant (from CLAUDE.md)
 - The intended data flow (Kafka → Go worker → Python orchestrator → Neo4j)
-- The graph schema (node types, edge types, required properties)
+- The graph schema (node types, edge types, required properties, composite NODE KEY constraints)
 - Security model (RBAC, tenant isolation, read-only query paths)
 - Stated deployment topology (K8s, Docker, namespaces)
 
@@ -430,12 +431,12 @@ For every public function/method in source code, verify at least one test exerci
 
 **E3. Architectural drift:**
 
-Compare factual claims in architecture documents against actual code:
-- Does every component described in `01_SYSTEM_DESIGN.md` exist in code?
-- Does every file in the repo appear in the documented project structure?
-- Does the DAG topology in `graph_builder.py` match the documented DAG?
+Compare factual claims in documentation against actual code:
+- Does every component described in `docs/SPEC.md` Section 4 exist in code?
+- Does every file in the repo appear in the documented project structure (SPEC Appendix A)?
+- Does the DAG topology in `graph_builder.py` match the documented DAG (SPEC Section 6.3)?
 - Do the `IngestionState` fields match what the docs claim?
-- Do node/edge types in `extraction_models.py` match `02_DATA_DICTIONARY.md`?
+- Do node/edge types in `extraction_models.py` match `docs/SPEC.md` Section 5?
 - Are all documented properties present in the Pydantic models?
 
 **E4. Observability completeness:**

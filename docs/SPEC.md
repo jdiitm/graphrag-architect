@@ -176,6 +176,8 @@ The platform's defensibility rests on three interlocking advantages:
 
 ### 4.1 Architectural Planes
 
+> **Implementation status:** The diagram below shows the target architecture. The current system has 2 deployable services (Python Orchestrator + Go Workers) with direct client access. Control Plane (API Gateway, Auth Service, Config Service, Schema Registry) and Observability Plane (Grafana, Loki) are planned — see Section 20 Roadmap.
+
 The architecture is organized into four planes, each with distinct responsibilities and trust boundaries.
 
 ```mermaid
@@ -247,10 +249,10 @@ graph TB
 
 **Current State (2 Deployable Services):**
 
-1. **Python Orchestrator** (`orchestrator/`): FastAPI application containing both the LangGraph ingestion DAG and query DAG, LLM extraction, Neo4j client, access control, tenant isolation, and observability. 62 Python modules, 125 test files, 1,632 tests.
+1. **Python Orchestrator** (`orchestrator/`): FastAPI application containing both the LangGraph ingestion DAG and query DAG, LLM extraction, Neo4j client, access control, tenant isolation, and observability. 84 Python modules, 260 test files, 3,299 tests.
 2. **Go Ingestion Workers** (`workers/ingestion/`): Kafka consumer with dispatcher, forwarding processor, DLQ handler, AST processor, blob forwarding, rate limiter, deduplication, outbox, healthz, and metrics server.
 
-**Target State (6 Logical Services):**
+**Target State (6 Logical Services) [Planned]:**
 
 | Service | Language | Responsibility | Scaling Axis |
 |---|---|---|---|
@@ -419,21 +421,32 @@ graph LR
 
 ### 5.5 Constraints and Indexes (Complete DDL)
 
-From `orchestrator/app/schema_init.cypher`:
+From `orchestrator/app/schema_init.cypher`. The schema uses a DROP+CREATE migration pattern: legacy simple-unique constraints are dropped and replaced with composite NODE KEY constraints that enforce `(tenant_id, id)` uniqueness — making tenant isolation a database-level invariant rather than purely application-enforced.
 
 ```cypher
--- Uniqueness constraints (primary keys)
-CREATE CONSTRAINT service_id IF NOT EXISTS FOR (s:Service) REQUIRE s.id IS UNIQUE;
-CREATE CONSTRAINT database_id IF NOT EXISTS FOR (d:Database) REQUIRE d.id IS UNIQUE;
-CREATE CONSTRAINT topic_name IF NOT EXISTS FOR (t:KafkaTopic) REQUIRE t.name IS UNIQUE;
-CREATE CONSTRAINT k8s_deploy_id IF NOT EXISTS FOR (k:K8sDeployment) REQUIRE k.id IS UNIQUE;
-CREATE CONSTRAINT k8s_pod_id IF NOT EXISTS FOR (p:K8sPod) REQUIRE p.id IS UNIQUE;
+-- Drop legacy simple-unique constraints (migration from earlier schema)
+DROP CONSTRAINT service_id IF EXISTS;
+DROP CONSTRAINT database_id IF EXISTS;
+DROP CONSTRAINT topic_name IF EXISTS;
+DROP CONSTRAINT k8s_deploy_id IF EXISTS;
+DROP CONSTRAINT k8s_pod_id IF EXISTS;
+DROP CONSTRAINT service_tenant IF EXISTS;
+DROP CONSTRAINT database_tenant IF EXISTS;
+DROP CONSTRAINT topic_tenant IF EXISTS;
+DROP CONSTRAINT deployment_tenant IF EXISTS;
 
--- Tenant isolation constraints (NOT NULL)
-CREATE CONSTRAINT service_tenant FOR (s:Service) REQUIRE s.tenant_id IS NOT NULL;
-CREATE CONSTRAINT database_tenant FOR (d:Database) REQUIRE d.tenant_id IS NOT NULL;
-CREATE CONSTRAINT topic_tenant FOR (t:KafkaTopic) REQUIRE t.tenant_id IS NOT NULL;
-CREATE CONSTRAINT deployment_tenant FOR (k:K8sDeployment) REQUIRE k.tenant_id IS NOT NULL;
+-- Composite NODE KEY constraints (tenant_id + primary key)
+CREATE CONSTRAINT service_tenant_id IF NOT EXISTS FOR (s:Service) REQUIRE (s.tenant_id, s.id) IS NODE KEY;
+CREATE CONSTRAINT database_tenant_id IF NOT EXISTS FOR (d:Database) REQUIRE (d.tenant_id, d.id) IS NODE KEY;
+CREATE CONSTRAINT topic_tenant_name IF NOT EXISTS FOR (t:KafkaTopic) REQUIRE (t.tenant_id, t.name) IS NODE KEY;
+CREATE CONSTRAINT k8s_deploy_tenant_id IF NOT EXISTS FOR (k:K8sDeployment) REQUIRE (k.tenant_id, k.id) IS NODE KEY;
+CREATE CONSTRAINT k8s_pod_tenant_id IF NOT EXISTS FOR (p:K8sPod) REQUIRE (p.tenant_id, p.id) IS NODE KEY;
+
+-- Tenant isolation indexes (query acceleration for tenant-scoped reads)
+CREATE INDEX service_tenant_idx IF NOT EXISTS FOR (s:Service) ON (s.tenant_id);
+CREATE INDEX database_tenant_idx IF NOT EXISTS FOR (d:Database) ON (d.tenant_id);
+CREATE INDEX topic_tenant_idx IF NOT EXISTS FOR (t:KafkaTopic) ON (t.tenant_id);
+CREATE INDEX deployment_tenant_idx IF NOT EXISTS FOR (k:K8sDeployment) ON (k.tenant_id);
 
 -- Secondary indexes (query acceleration)
 CREATE INDEX service_lang_idx IF NOT EXISTS FOR (s:Service) ON (s.language);
@@ -442,10 +455,17 @@ CREATE INDEX service_framework_idx IF NOT EXISTS FOR (s:Service) ON (s.framework
 -- Fulltext index (text search path)
 CREATE FULLTEXT INDEX service_name_index IF NOT EXISTS FOR (n:Service) ON EACH [n.name];
 
--- Vector index (target state)
-CREATE VECTOR INDEX service_embedding IF NOT EXISTS
-  FOR (s:Service) ON (s.embedding)
-  OPTIONS {indexConfig: {`vector.dimensions`: 768, `vector.similarity_function`: 'cosine'}};
+-- PageRank composite indexes (lazy traversal optimization)
+CREATE INDEX service_pagerank_idx IF NOT EXISTS FOR (s:Service) ON (s.tenant_id, s.pagerank);
+CREATE INDEX database_pagerank_idx IF NOT EXISTS FOR (d:Database) ON (d.tenant_id, d.pagerank);
+CREATE INDEX topic_pagerank_idx IF NOT EXISTS FOR (t:KafkaTopic) ON (t.tenant_id, t.pagerank);
+CREATE INDEX deployment_pagerank_idx IF NOT EXISTS FOR (k:K8sDeployment) ON (k.tenant_id, k.pagerank);
+
+-- Relationship ingestion_id indexes (tombstone-based edge cleanup)
+CREATE INDEX rel_ingestion_id_idx IF NOT EXISTS FOR ()-[r:CALLS]-() ON (r.ingestion_id);
+CREATE INDEX rel_produces_ingestion_id_idx IF NOT EXISTS FOR ()-[r:PRODUCES]-() ON (r.ingestion_id);
+CREATE INDEX rel_consumes_ingestion_id_idx IF NOT EXISTS FOR ()-[r:CONSUMES]-() ON (r.ingestion_id);
+CREATE INDEX rel_deployed_in_ingestion_id_idx IF NOT EXISTS FOR ()-[r:DEPLOYED_IN]-() ON (r.ingestion_id);
 ```
 
 ### 5.6 Schema Governance
@@ -735,9 +755,11 @@ RETURN c.protocol, count(*) AS edge_count, collect([a.name, b.name]) AS pairs
 ORDER BY edge_count DESC
 ```
 
-### UC-6: Database Dependency Mapping
+### UC-6: Database Dependency Mapping [Planned]
 
 **Trigger:** "Which services depend on the `users-db` PostgreSQL instance, and what events do they produce?"
+
+> **Note:** This use case requires a `WRITES_TO` relationship type not yet in the current schema (Section 5.3). The current schema defines `CALLS`, `PRODUCES`, `CONSUMES`, `DEPLOYED_IN`.
 
 ```cypher
 MATCH (db:Database {id: $db_id, tenant_id: $tid})<-[:WRITES_TO]-(s:Service {tenant_id: $tid})
@@ -1388,14 +1410,26 @@ Key format: `s3://{bucket}/{tenant_id}/{repository_hash}/{file_path_hash}`
 
 ### 13.2 API Endpoints
 
+> **Note:** Current implementation uses unprefixed paths (e.g., `/health`). The `/v1/` prefix is a target-state convention for when API versioning is introduced.
+
+**Implemented (`orchestrator/app/main.py`):**
+
 | Endpoint | Method | Auth | Description |
 |---|---|---|---|
-| `/v1/health` | GET | None | Health check with component status |
+| `/health` | GET | None | Health check |
+| `/metrics` | GET | None | Prometheus metrics |
+| `/ingest` | POST | Required | Submit documents for ingestion (sync or async) |
+| `/ingest/{job_id}` | GET | Required | Check ingestion job status |
+| `/query` | POST | Required | Execute a natural-language query (sync or async) |
+| `/query/{job_id}` | GET | Required | Check query job status |
+| `/query/{query_id}/evaluation` | GET | Required | Retrieve RAG evaluation result |
+
+**Planned (not yet implemented):**
+
+| Endpoint | Method | Auth | Description |
+|---|---|---|---|
 | `/v1/health/ready` | GET | None | Readiness probe (Neo4j + Kafka) |
 | `/v1/health/live` | GET | None | Liveness probe |
-| `/v1/ingest` | POST | Required | Submit documents for ingestion |
-| `/v1/ingest/{job_id}` | GET | Required | Check ingestion job status |
-| `/v1/query` | POST | Required | Execute a natural-language query |
 | `/v1/graph/entities` | GET | Required | List graph entities (paginated, filtered) |
 | `/v1/graph/entities/{id}` | GET | Required | Get entity and its relationships |
 | `/v1/graph/entities/{id}/neighbors` | GET | Required | Get N-hop neighbors |
@@ -1404,8 +1438,8 @@ Key format: `s3://{bucket}/{tenant_id}/{repository_hash}/{file_path_hash}`
 | `/v1/graph/cypher` | POST | Admin | Execute raw Cypher (read-only, audit-logged) |
 | `/v1/tenants/{tenant_id}` | GET | Admin | Tenant metadata |
 | `/v1/tenants/{tenant_id}/repositories` | GET | Required | Ingested repositories |
-| `/v1/tenants/{tenant_id}/data-export` | GET | Admin | GDPR data export |
-| `/v1/tenants/{tenant_id}` | DELETE | Admin | GDPR erasure |
+| `/v1/tenants/{tenant_id}/data-export` | GET | Admin | GDPR data export (Art. 15) |
+| `/v1/tenants/{tenant_id}` | DELETE | Admin | GDPR erasure (Art. 17) |
 | `/v1/admin/schema/versions` | GET | Admin | Applied schema versions |
 | `/v1/admin/schema/migrate` | POST | Admin | Apply a schema migration |
 | `/v1/webhooks` | POST | Required | Register webhook callbacks |
@@ -1421,13 +1455,13 @@ Key format: `s3://{bucket}/{tenant_id}/{repository_hash}/{file_path_hash}`
 
 **Allowed within a major version:** New optional params, new response fields, new endpoints, new enum values, increased numeric limits. **Prohibited:** Removing/renaming fields, changing types, changing semantics, adding required params.
 
-### 13.4 SDK Strategy
+### 13.4 SDK Strategy [Planned]
 
 Auto-generated from OpenAPI 3.1 spec via `openapi-generator-cli`. Three SDKs: Python (`graphrag-python`, PyPI), Go (`graphrag-go`, Go Module Proxy), TypeScript (`graphrag-ts`, NPM).
 
 Design: Thin clients (transport, auth, retries, serialization), type-safe, async-first, configurable exponential backoff on 429/503, `traceparent` injection.
 
-### 13.5 Plugin Architecture
+### 13.5 Plugin Architecture [Planned]
 
 Three extension axes:
 
@@ -1663,7 +1697,7 @@ Token bucket per tenant at API Gateway. Burst: 2x per-minute limit for 10-second
 
 ### 16.1 Local Development
 
-**Target: `make dev` for full environment:**
+**Target [Planned]: `make dev` for full environment** (no Makefile exists yet; see README quickstart for current setup):
 
 ```makefile
 dev: dev-infra dev-python dev-go
@@ -1681,53 +1715,52 @@ dev-go:
 test: test-lint test-python test-go
 ```
 
-**Dev Containers / Codespaces:** `.devcontainer/devcontainer.json` with Python 3.12, Go 1.24, Docker-in-Docker, forwarded ports (8000, 7474, 7687, 9092).
+**Dev Containers / Codespaces [Planned]:** `.devcontainer/devcontainer.json` with Python 3.12, Go 1.24, Docker-in-Docker, forwarded ports (8000, 7474, 7687, 9092).
 
 ### 16.2 CI/CD Pipeline (6 Gates)
+
+> **Implementation status:** Gates 1-2 and Gate 5 (Docker build) are implemented in `.github/workflows/ci.yml`. Gates 3-4 and Gate 6 are planned.
 
 ```mermaid
 flowchart TD
     Push["Push / PR"] --> G1
-    subgraph G1 ["Gate 1: Static Analysis"]
+    subgraph G1 ["Gate 1: Static Analysis [Implemented]"]
         Pylint["Pylint 10/10"]
-        Mypy["mypy --strict"]
-        Ruff["ruff check"]
         GolangciLint["golangci-lint"]
-        Semgrep["Semgrep"]
     end
     G1 --> G2
-    subgraph G2 ["Gate 2: Unit Tests"]
-        Py["pytest 1632 tests<br/>--cov-fail-under=80"]
-        Go["go test -race -cover<br/>(70% coverage)"]
+    subgraph G2 ["Gate 2: Unit Tests [Implemented]"]
+        Py["pytest 3299 tests"]
+        Go["go test -race -cover"]
     end
-    G2 --> G3
-    subgraph G3 ["Gate 3: Security Scanning"]
+    G2 --> G5["Gate 5: Build & Publish [Implemented]<br/>(Docker build)"]
+    G5 -.-> G3
+    subgraph G3 ["Gate 3: Security Scanning [Planned]"]
         Trivy["Trivy containers"]
         Snyk["Snyk deps"]
         Gitleaks["gitleaks secrets"]
         SBOM["syft SBOM"]
     end
-    G3 --> G4
-    subgraph G4 ["Gate 4: Integration Tests"]
+    G3 -.-> G4
+    subgraph G4 ["Gate 4: Integration Tests [Planned]"]
         Contract["Pact contract tests"]
         E2E["E2E (Testcontainers)"]
     end
-    G4 --> G5["Gate 5: Build & Publish<br/>(multi-arch Docker)"]
-    G5 --> G6
-    subgraph G6 ["Gate 6: Deployment"]
+    G4 -.-> G6
+    subgraph G6 ["Gate 6: Deployment [Planned]"]
         Staging["Staging + Smoke"]
         Canary["Canary 10%"]
         Full["Full Rollout"]
     end
 ```
 
-All gates blocking. No deployment without all gates green.
+**Current CI (`.github/workflows/ci.yml`):** 5 jobs — `python-lint` (Pylint), `python-test` (pytest), `go-lint` (golangci-lint), `go-test` (go test -race), `docker-build` (orchestrator + ingestion-worker images). All gates blocking. Planned gates (mypy --strict, ruff, Semgrep, Pact, Testcontainers, canary deploy) are not yet in CI.
 
 ### 16.3 Test Strategy
 
 | Layer | Count | Coverage Target | Infrastructure |
 |---|---|---|---|
-| Unit Tests | 1,632 Python, 177 Go | Python 80%, Go 70%, 100% on security-critical paths | In-process mocks |
+| Unit Tests | 3,299 Python, 193 Go | Python 80%, Go 70%, 100% on security-critical paths | In-process mocks |
 | Contract Tests | ~15 | Go worker ↔ Python orchestrator HTTP API | Pact |
 | Integration Tests | ~30 | Component interactions with real Neo4j + Kafka | Testcontainers |
 | E2E Tests | ~10 | Full pipeline (Kafka → Go → Python → Neo4j → query) | Testcontainers |
@@ -1736,11 +1769,11 @@ All gates blocking. No deployment without all gates green.
 
 ### 16.4 Static Analysis
 
-**Python:** Pylint (10/10 required), mypy (`--strict`), ruff, Semgrep (custom Cypher injection rules).
+**Python [Implemented]:** Pylint (10/10 required). **[Planned]:** mypy (`--strict`), ruff, Semgrep (custom Cypher injection rules).
 
-**Go:** golangci-lint (errcheck, govet, staticcheck, gocritic, gofmt, goimports, misspell, prealloc, bodyclose, contextcheck, nilerr), `go test -race`.
+**Go [Implemented]:** golangci-lint (errcheck, gosimple, govet, gosec, gocritic, per `.golangci.yml`), `go test -race`.
 
-**Infrastructure:** kubeval (K8s manifests), conftest (OPA policies), hadolint (Dockerfiles).
+**Infrastructure [Planned]:** kubeval (K8s manifests), conftest (OPA policies), hadolint (Dockerfiles).
 
 ### 16.5 Release Governance
 
@@ -1896,99 +1929,99 @@ graph TB
 
 #### Security (17 items)
 
-| ID | Item | Priority | Status |
-|---|---|---|---|
-| SEC-01 | Replace regex ACL injection with parameterized Cypher templates | P0 | Not Started |
-| SEC-02 | Fail-closed token verification | P0 | Not Started |
-| SEC-03 | Fix manifest parser ACL extraction (team_owner, namespace_acl) | P0 | Not Started |
-| SEC-04 | Fix Kafka StatefulSet KAFKA_ADVERTISED_LISTENERS | P0 | Not Started |
-| SEC-05 | Add NetworkPolicy for neo4j-schema-init Job | P0 | Not Started |
-| SEC-06 | Per-tenant rate limiting (token bucket) | P1 | Not Started |
-| SEC-07 | Prompt injection defense for LLM extraction | P1 | Not Started |
-| SEC-08 | Secret scanning in extraction pipeline | P1 | Not Started |
-| SEC-09 | TLS 1.3 / mTLS for internal communication | P1 | Not Started |
-| SEC-10 | SBOM generation (CycloneDX) + Trivy scanning | P2 | Not Started |
-| SEC-11 | Key rotation for AUTH_TOKEN_SECRET | P2 | Not Started |
-| SEC-12 | Request signing (Go worker → orchestrator) | P2 | Not Started |
-| SEC-13 | Tenant isolation at graph level (tenant_id on all nodes) | P1 | Not Started |
-| SEC-14 | WAF deployment | P2 | Not Started |
-| SEC-15 | Audit logging for security operations | P1 | Not Started |
-| SEC-16 | Secret scanning in CI (gitleaks) | P2 | Not Started |
-| SEC-17 | Input validation size limits on /ingest | P1 | Not Started |
+| ID | Item | Priority | Status | Evidence |
+|---|---|---|---|---|
+| SEC-01 | Replace regex ACL injection with parameterized Cypher templates | P0 | **Implemented** | `query_templates.py` uses parameterized `$tenant_id`, `$team`, `$namespaces`, `$is_admin` |
+| SEC-02 | Fail-closed token verification | P0 | **Implemented** | `access_control.py` raises `AuthConfigurationError` when secret is unconfigured |
+| SEC-03 | Fix manifest parser ACL extraction (team_owner, namespace_acl) | P0 | **Implemented** | `manifest_parser.py` extracts `_extract_team_owner()`, `_extract_namespace_acl()` |
+| SEC-04 | Fix Kafka StatefulSet KAFKA_ADVERTISED_LISTENERS | P0 | **Implemented** | `kafka-statefulset.yaml` has `KAFKA_ADVERTISED_LISTENERS` configured |
+| SEC-05 | Add NetworkPolicy for neo4j-schema-init Job | P0 | **Implemented** | `network-policies.yaml` includes `neo4j-schema-init` policies |
+| SEC-06 | Per-tenant rate limiting (token bucket) | P1 | **Implemented** | `token_bucket.py` has `RedisTokenBucket`, `AdaptiveTokenBucket`; `main.py` has `_enforce_rate_limit()` |
+| SEC-07 | Prompt injection defense for LLM extraction | P1 | **Implemented** | `prompt_sanitizer.py` has injection pattern detection and sanitization |
+| SEC-08 | Secret scanning in extraction pipeline | P1 | Not Started | |
+| SEC-09 | TLS 1.3 / mTLS for internal communication | P1 | Not Started | |
+| SEC-10 | SBOM generation (CycloneDX) + Trivy scanning | P2 | Not Started | |
+| SEC-11 | Key rotation for AUTH_TOKEN_SECRET | P2 | Not Started | |
+| SEC-12 | Request signing (Go worker → orchestrator) | P2 | Not Started | |
+| SEC-13 | Tenant isolation at graph level (tenant_id on all nodes) | P1 | **Implemented** | `tenant_isolation.py`, `tenant_security.py`, composite NODE KEY constraints in `schema_init.cypher` |
+| SEC-14 | WAF deployment | P2 | Not Started | |
+| SEC-15 | Audit logging for security operations | P1 | **Implemented** | `audit_log.py` provides structured audit logging |
+| SEC-16 | Secret scanning in CI (gitleaks) | P2 | Not Started | |
+| SEC-17 | Input validation size limits on /ingest | P1 | **Implemented** | `main.py` enforces `MAX_INGEST_PAYLOAD_BYTES` |
 
 #### Scalability (10 items)
 
-| ID | Item | Priority | Status |
-|---|---|---|---|
-| SCA-01 | Vector embedding pipeline (generate + store in HNSW/Qdrant) | P1 | Not Started |
-| SCA-02 | Redis query caching with complexity-based TTL | P1 | Not Started |
-| SCA-03 | Neo4j connection pool tuning (per-service) | P1 | Not Started |
-| SCA-04 | Query complexity estimation (EXPLAIN) + rejection | P1 | Not Started |
-| SCA-05 | Streaming workspace loading (don't collect all chunks) | P0 | Not Started |
-| SCA-06 | Go consumer non-blocking ack pattern | P0 | Not Started |
-| SCA-07 | Kafka Schema Registry (Avro) | P2 | Not Started |
-| SCA-08 | Graph schema versioning (migration scripts + SchemaVersion node) | P1 | Not Started |
-| SCA-09 | Load testing suite (k6) | P1 | Not Started |
-| SCA-10 | Capacity planning documentation | P2 | Not Started |
+| ID | Item | Priority | Status | Evidence |
+|---|---|---|---|---|
+| SCA-01 | Vector embedding pipeline (generate + store in HNSW/Qdrant) | P1 | **Implemented** | `vector_store.py` (InMemory + Qdrant backends), `graph_embeddings.py` (Node2Vec), `vector_sync_outbox.py` |
+| SCA-02 | Redis query caching with complexity-based TTL | P1 | **Implemented** | `semantic_cache.py` (L1/L2 + Redis), `subgraph_cache.py` (Cypher result cache) |
+| SCA-03 | Neo4j connection pool tuning (per-service) | P1 | **Implemented** | `neo4j_pool.py` has `ReplicaAwarePool`, `TenantConnectionTracker` |
+| SCA-04 | Query complexity estimation (EXPLAIN) + rejection | P1 | **Implemented** | `cypher_validator.py` has `estimate_query_cost()` |
+| SCA-05 | Streaming workspace loading (don't collect all chunks) | P0 | **Implemented** | `workspace_loader.py` + `StreamingIngestionPipeline` in `graph_builder.py` |
+| SCA-06 | Go consumer non-blocking ack pattern | P0 | **Implemented** | `consumer.go` uses channel-based async acks with configurable `maxInflight` backpressure |
+| SCA-07 | Kafka Schema Registry (Avro) | P2 | Not Started | |
+| SCA-08 | Graph schema versioning (migration scripts + SchemaVersion node) | P1 | **Implemented** | `schema_evolution.py` has `SchemaVersion`, `MigrationRunner`, Neo4j + Redis stores |
+| SCA-09 | Load testing suite (k6) | P1 | Not Started | |
+| SCA-10 | Capacity planning documentation | P2 | Not Started | |
 
 #### Reliability (8 items)
 
-| ID | Item | Priority | Status |
-|---|---|---|---|
-| REL-01 | SLOs with error budgets (Prometheus recording rules) | P1 | Not Started |
-| REL-02 | Consumer-side idempotency keys (dedup by message ID) | P1 | Not Started |
-| REL-03 | Grafana dashboards (8 dashboards) | P1 | Not Started |
-| REL-04 | Incident response runbooks (per-component) | P1 | Not Started |
-| REL-05 | Automated canary deployments | P2 | Not Started |
-| REL-06 | Chaos engineering tests (Litmus/Chaos Mesh) | P2 | Not Started |
-| REL-07 | LLM provider failover (Gemini → Claude) | P1 | Not Started |
-| REL-08 | Cross-region replication plan | P3 | Not Started |
+| ID | Item | Priority | Status | Evidence |
+|---|---|---|---|---|
+| REL-01 | SLOs with error budgets (Prometheus recording rules) | P1 | Not Started | |
+| REL-02 | Consumer-side idempotency keys (dedup by message ID) | P1 | **Implemented** | `workers/ingestion/internal/dedup/` — LRU, Redis, and Noop stores with content-hash dedup |
+| REL-03 | Grafana dashboards (8 dashboards) | P1 | Not Started | |
+| REL-04 | Incident response runbooks (per-component) | P1 | Not Started | |
+| REL-05 | Automated canary deployments | P2 | Not Started | |
+| REL-06 | Chaos engineering tests (Litmus/Chaos Mesh) | P2 | Not Started | |
+| REL-07 | LLM provider failover (Gemini → Claude) | P1 | **Implemented** | `llm_provider.py` has `FallbackChain`, `ProviderWithCircuitBreaker`, `GeminiProvider`, `ClaudeProvider` |
+| REL-08 | Cross-region replication plan | P3 | Not Started | |
 
 #### Testing (6 items)
 
-| ID | Item | Priority | Status |
-|---|---|---|---|
-| TST-01 | E2E tests with real Kafka + Neo4j (Testcontainers) | P1 | Not Started |
-| TST-02 | Pact contract tests (Go ↔ Python) | P1 | Not Started |
-| TST-03 | Performance benchmark suite | P2 | Not Started |
-| TST-04 | `go test -race` in CI | P0 | Not Started |
-| TST-05 | mypy strict mode in CI | P1 | Not Started |
-| TST-06 | Replace timing-dependent Go tests with sync primitives | P1 | Not Started |
+| ID | Item | Priority | Status | Evidence |
+|---|---|---|---|---|
+| TST-01 | E2E tests with real Kafka + Neo4j (Testcontainers) | P1 | Not Started | |
+| TST-02 | Pact contract tests (Go ↔ Python) | P1 | Not Started | |
+| TST-03 | Performance benchmark suite | P2 | Not Started | |
+| TST-04 | `go test -race` in CI | P0 | **Implemented** | `.github/workflows/ci.yml` `go-test` job uses `-race` flag |
+| TST-05 | mypy strict mode in CI | P1 | Not Started | |
+| TST-06 | Replace timing-dependent Go tests with sync primitives | P1 | **Implemented** | Go tests use `sync.WaitGroup`, channels, and deterministic patterns |
 
 #### Documentation (5 items)
 
-| ID | Item | Priority | Status |
-|---|---|---|---|
-| DOC-01 | OpenAPI specification published | P1 | Not Started |
-| DOC-02 | Operational runbooks | P1 | Not Started |
-| DOC-03 | Architecture Decision Records (ADRs) | P2 | Not Started |
-| DOC-04 | Incident response playbook | P1 | Not Started |
-| DOC-05 | Schema migration procedures | P1 | Not Started |
+| ID | Item | Priority | Status | Evidence |
+|---|---|---|---|---|
+| DOC-01 | OpenAPI specification published | P1 | Not Started | |
+| DOC-02 | Operational runbooks | P1 | Not Started | |
+| DOC-03 | Architecture Decision Records (ADRs) | P2 | Not Started | |
+| DOC-04 | Incident response playbook | P1 | Not Started | |
+| DOC-05 | Schema migration procedures | P1 | Not Started | |
 
 #### Infrastructure (5 items)
 
-| ID | Item | Priority | Status |
-|---|---|---|---|
-| INF-01 | Managed Kafka (MSK/Confluent) for production | P2 | Not Started |
-| INF-02 | Secret management (Vault/AWS SM) | P1 | Not Started |
-| INF-03 | golangci-lint configuration + CI gate | P1 | Not Started |
-| INF-04 | Neo4j Enterprise production clustering | P2 | Not Started |
-| INF-05 | Helm chart | P2 | Not Started |
+| ID | Item | Priority | Status | Evidence |
+|---|---|---|---|---|
+| INF-01 | Managed Kafka (MSK/Confluent) for production | P2 | Not Started | |
+| INF-02 | Secret management (Vault/AWS SM) | P1 | Not Started | |
+| INF-03 | golangci-lint configuration + CI gate | P1 | **Implemented** | `.golangci.yml` + `go-lint` job in CI |
+| INF-04 | Neo4j Enterprise production clustering | P2 | Not Started | |
+| INF-05 | Helm chart | P2 | **Implemented** | `infrastructure/helm/graphrag/` with Chart.yaml, values.yaml, 2 templates |
 
 #### Compliance (4 items)
 
-| ID | Item | Priority | Status |
-|---|---|---|---|
-| CMP-01 | SOC2 Type II gap analysis | P2 | Not Started |
-| CMP-02 | GDPR data export + erasure endpoints | P2 | Not Started |
-| CMP-03 | Data Processing Agreement template | P3 | Not Started |
-| CMP-04 | Data residency controls | P3 | Not Started |
+| ID | Item | Priority | Status | Evidence |
+|---|---|---|---|---|
+| CMP-01 | SOC2 Type II gap analysis | P2 | Not Started | |
+| CMP-02 | GDPR data export + erasure endpoints | P2 | Not Started | |
+| CMP-03 | Data Processing Agreement template | P3 | Not Started | |
+| CMP-04 | Data residency controls | P3 | Not Started | |
 
 ### 19.2 Maturity Stages
 
 | Stage | Timeline | Characteristics | Key Metrics |
 |---|---|---|---|
-| **Prototype** | Current | Feature-complete Phase 1. Audit findings open. Single-tenant. | Pylint 10/10, 1,632 Python tests, 177 Go tests |
+| **Prototype** | Current | Feature-complete Phase 1. Audit findings open. Single-tenant. | Pylint 10/10, 3,299 Python tests, 193 Go tests |
 | **Beta** | Month 1-4 | Audit resolved. Vector embeddings. Basic observability. Internal users. | SLOs defined, 0 CRITICAL/HIGH findings |
 | **Production** | Month 4-6 | Multi-tenant (logical). Load tested 10x. SLOs measured 30+ days. | 99.9% availability, < 3s query p99 |
 | **Enterprise** | Month 6-9 | Physical isolation. SOC2 controls. Secret management. | SOC2 Type I initiated, < 0.01% DLQ |
@@ -2201,68 +2234,144 @@ Consolidated and deduplicated from all prior documents (45 original questions �
 
 ```
 cmd/
-  main.go                        Entry point + signal handling
-  kafka.go                       KafkaJobSource + LogDLQSink
-  dlq_sink.go                    DLQ sink implementation
+  main.go                           Entry point, signal handling, env config, production validation
+  kafka.go                          KafkaJobSource, KafkaProducerClient, LogDLQSink
+  dlq_sink.go                       KafkaDLQSink implementation
 internal/
-  blobstore/blobstore.go         Blob storage abstraction
-  blobstore/memory.go            In-memory blob store (testing)
-  consumer/consumer.go           JobSource interface + Consumer loop
-  dedup/dedup.go                 Content-hash deduplication
-  dispatcher/dispatcher.go       Worker pool + retry logic
-  dlq/handler.go                 DLQ handler goroutine
-  dlq/file_sink.go               File-based DLQ fallback
-  domain/job.go                  Job, Result value types
-  healthz/checker.go             Liveness/readiness probes
-  metrics/metrics.go             Prometheus metrics
-  metrics/observer.go            PipelineObserver interface
-  outbox/outbox.go               Transactional outbox pattern
-  parser/parser.go               Go/Python file AST parsing
-  processor/processor.go         DocumentProcessor interface
-  processor/forwarding.go        HTTP POST to orchestrator
-  processor/kafka_forwarding.go  Kafka topic forwarding
-  processor/blob_forwarding.go   Blob store + event forwarding
-  processor/ast_processor.go     Go AST parsing processor
-  processor/staging.go           Stage-and-emit processor
-  ratelimit/ratelimit.go         Token-bucket rate limiter
-  telemetry/telemetry.go         OTEL TracerProvider + spans
+  blobstore/blobstore.go            BlobStore interface (Put, Get, Exists)
+  blobstore/memory.go               InMemoryBlobStore (testing)
+  blobstore/s3.go                   S3BlobStore (production)
+  blobstore/aws_client.go           ObjectStorageClient interface + AWS S3 adapter
+  blobstore/factory.go              NewBlobStoreFromEnv factory
+  consumer/consumer.go              JobSource interface, Consumer loop with backpressure
+  dedup/dedup.go                    Store interface, LRUStore, NoopStore
+  dedup/redis.go                    RedisStore (Redis-backed dedup)
+  dedup/go_redis.go                 RedisClient interface (go-redis adapter)
+  dedup/factory.go                  NewStoreFromEnv factory
+  dispatcher/dispatcher.go          Worker pool, retry with jitter, DLQ routing
+  dlq/handler.go                    DLQ handler goroutine with primary + fallback sinks
+  dlq/file_sink.go                  FileSink (JSONL file-based DLQ fallback)
+  domain/job.go                     Job, Result value types
+  healthz/checker.go                HTTP health checker with activity threshold
+  metrics/metrics.go                Prometheus counters and histograms
+  metrics/observer.go               PipelineObserver interface, NoopObserver
+  outbox/outbox.go                  FileOutbox, Reaper, EventEmitter
+  parser/parser.go                  ParseGoFile, ParsePythonFile (Go AST + Python regex)
+  processor/processor.go            DocumentProcessor interface
+  processor/forwarding.go           HTTP POST to orchestrator (retry on 429/503)
+  processor/kafka_forwarding.go     Kafka topic forwarding (raw content)
+  processor/blob_forwarding.go      Blob offload (large content to S3, reference to Kafka)
+  processor/ast_forwarding.go       AST extraction + forwarding to ast-parsed topic
+  processor/ast_processor.go        Go AST extraction via go/parser
+  ratelimit/ratelimit.go            Token-bucket rate limiter
+  telemetry/telemetry.go            OTEL TracerProvider, span helpers, trace context propagation
 ```
 
-**Python Orchestrator (`orchestrator/app/`):**
+**Python Orchestrator (`orchestrator/app/`) — 82 modules + 2 non-Python files:**
 
 ```
-access_control.py        SecurityPrincipal, CypherPermissionFilter
-agentic_traversal.py     Incremental 1-hop LLM-guided traversal (FR-15)
-ast_extraction.py        Go/Python AST parsing
-circuit_breaker.py       Three-state async circuit breaker
-config.py                ExtractionConfig, Neo4jConfig (frozen dataclasses)
-context_manager.py       Token budget management (FR-11)
-cypher_sandbox.py        Cypher query sandboxing
-cypher_validator.py      Read-only Cypher validation
-entity_resolver.py       Fuzzy cross-repo name deduplication
-extraction_models.py     Pydantic models: 4 nodes, 4 edges
-graph_builder.py         LangGraph ingestion DAG (7 nodes)
-graph_embeddings.py      Node2Vec structural embeddings (FR-17)
-ingest_models.py         IngestRequest/Response models
+# Core API and orchestration
+main.py                  FastAPI endpoints (/health, /metrics, /ingest, /query)
+config.py                20+ frozen dataclasses (ExtractionConfig, Neo4jConfig, RedisConfig, etc.)
+container.py             DI container (AppContainer)
+executor.py              Process/thread pool for CPU-heavy work
+request_context.py       Request context propagation
+
+# Ingestion pipeline (LangGraph DAG)
+graph_builder.py         LangGraph ingestion DAG (7 nodes), StreamingIngestionPipeline
+workspace_loader.py      Filesystem scanner with chunked streaming
 llm_extraction.py        ServiceExtractor (Gemini structured output)
-main.py                  FastAPI endpoints
-manifest_parser.py       K8s + Kafka YAML parsing
-neo4j_client.py          Cypher MERGE operations
-neo4j_pool.py            Connection pooling
-node_sink.py             IncrementalNodeSink with namespace partitioning
-observability.py         OTEL tracing + Prometheus metrics
-query_classifier.py      Query complexity classifier
-query_engine.py          LangGraph query DAG (7 nodes)
-query_models.py          QueryRequest/Response/State models
-query_templates.py       Parameterized Cypher template catalog (FR-10)
-rag_evaluator.py         Faithfulness/groundedness evaluation (FR-12)
-reranker.py              Cross-encoder/BM25 reranking (FR-11)
-schema_init.cypher       Neo4j constraints and indexes
-schema_validation.py     Topology validation + correction loop
-semantic_partitioner.py  Leiden community detection (FR-18)
-tenant_isolation.py      TenantAwareDriverPool (FR-9)
-vector_store.py          VectorStore protocol + backends (FR-13)
-workspace_loader.py      Filesystem workspace scanner
+llm_provider.py          LLM providers (Gemini, Claude) with circuit breaker + FallbackChain
+manifest_parser.py       K8s + Kafka YAML parsing with ACL extraction
+ast_extraction.py        Go/Python AST parsing (tree-sitter + stdlib ast)
+ast_grpc_client.py       gRPC client for remote AST extraction
+ast_result_consumer.py   gRPC AST result → extraction model converter
+ast_dlq.py               Dead-letter queue for failed AST jobs (Redis Lua scripts)
+extraction_models.py     Pydantic models: 4 node types, 4 edge types
+extraction_worker.py     Extraction worker pool
+entity_resolver.py       Fuzzy cross-repo name deduplication
+schema_validation.py     Pydantic topology validation + correction loop
+checkpointing.py         Per-file extraction checkpoint (FileStatus)
+checkpoint_store.py      LangGraph checkpointer (memory or Postgres)
+completion_tracker.py    Ingestion completion tracking
+ingestion_resume.py      Resumable ingestion support
+node_sink.py             IncrementalNodeSink, DurableNodeSink with namespace partitioning
+blob_fetcher.py          Blob fetching for ingestion
+
+# Ingestion stages (modular pipeline)
+stages/__init__.py       IngestionStage protocol
+stages/ast_stage.py      AST extraction stage
+stages/extraction_stage.py  LLM extraction stage
+stages/graph_write_stage.py Graph write stage
+stages/vector_sync_stage.py Vector sync stage
+
+# Query pipeline (LangGraph DAG)
+query_engine.py          LangGraph query DAG (classify → route → retrieve → synthesize → evaluate)
+query_classifier.py      Keyword-based query complexity classifier
+query_router.py          Query routing logic
+query_retriever.py       Query retrieval glue
+query_synthesizer.py     Answer synthesis
+query_templates.py       Parameterized Cypher template catalog with ACL enforcement
+query_models.py          QueryRequest/Response/State models, Redis job store
+rag_evaluator.py         Faithfulness/groundedness evaluation (embedding + LLM judge)
+topological_evaluator.py Topology-aware evaluation
+
+# Graph operations
+neo4j_client.py          GraphRepository: Cypher MERGE, tombstoning, hot target detection
+neo4j_pool.py            ReplicaAwarePool, TenantConnectionTracker
+ontology.py              Graph ontology and Cypher generation
+schema_init.cypher       Neo4j constraints and indexes (composite NODE KEY)
+schema_evolution.py      SchemaVersion, MigrationRunner (Neo4j + Redis stores)
+schema_version.py        SchemaVersionTracker
+graph_embeddings.py      Node2Vec structural embeddings, fusion hints
+lazy_traversal.py        GDS PageRank-based traversal filtering
+
+# Retrieval and reranking
+agentic_traversal.py     Bounded Cypher, batched BFS, adaptive, APOC strategies
+batched_hop.py           Batched BFS for graph traversal
+context_manager.py       Token budget management, context truncation
+reranker.py              BM25 reranker
+density_reranker.py      Density-based reranking
+vector_store.py          VectorStore protocol (InMemory + Qdrant backends)
+vector_sync_outbox.py    Outbox for async vector sync to Qdrant (Redis Lua scripts)
+vector_sync_consumer.py  Vector sync consumer
+embedding_batcher.py     Embedding batch processing
+tombstone_filter.py      Filters tombstoned edges from results
+tombstone_reaper.py      Async tombstone cleanup
+
+# Caching
+semantic_cache.py        Semantic query cache (L1/L2, Redis), adaptive thresholds
+subgraph_cache.py        Cypher result cache with normalization, tenant invalidation
+
+# Security and access control
+access_control.py        SecurityPrincipal, CypherPermissionFilter, JWT auth
+tenant_isolation.py      TenantAwareDriverPool, TenantRegistry
+tenant_security.py       Tenant-scoped ACL, traversal security
+tenant_query_guard.py    Per-tenant query guards
+cypher_ast.py            ACL injection, limit injection via Cypher AST
+cypher_sandbox.py        Sandboxed Cypher execution with whitelist
+cypher_validator.py      Read-only validation, procedure whitelist, cost estimation
+cypher_tokenizer.py      Cypher tokenization
+prompt_sanitizer.py      Input sanitization, injection detection
+guardrails.py            Query guardrails
+call_isolation.py        Call isolation boundaries
+gdpr.py                  GDPR-related logic (data export, erasure)
+audit_log.py             Structured audit logging
+
+# Infrastructure clients
+kafka_consumer.py        AsyncKafkaConsumer for ingest
+redis_client.py          Async Redis client factory
+distributed_lock.py      Redis-backed distributed lock/semaphore with heartbeats
+token_bucket.py          Rate limiting (Redis and adaptive token bucket)
+token_counter.py         Token counting (tiktoken)
+circuit_breaker.py       Three-state circuit breaker (InMemory + Redis state stores)
+
+# Observability
+observability.py         OpenTelemetry TracerProvider + Prometheus metrics
+prompt_registry.py       Query prompt templates
+plane_router.py          Control/data plane routing
+mutation_publisher.py    Graph mutation event publishing
+semantic_partitioner.py  Leiden community detection partitioning
 ```
 
 ### B. Configuration Reference

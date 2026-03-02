@@ -71,9 +71,9 @@ These rules are absolute. Violating any of them is a **showstopper** — stop, u
 
 1. Parse the audit report from the triggering prompt — identify the **highest-priority finding** from the Requirement Gaps table (CRITICAL/Stub gaps first, then HIGH findings).
 2. Read these files for context:
-   - `docs/SPEC.md`
-   - `docs/prd/02_SYSTEM_REQUIREMENTS.md`
-   - `docs/architecture/01_SYSTEM_DESIGN.md`
+   - `docs/SPEC.md` (Sections 8-9: Functional Requirements and NFRs)
+   - `docs/SPEC.md` (Section 4: System Architecture)
+   - `CLAUDE.md` (coding invariants)
 3. Explore the codebase to confirm what exists vs. what is stubbed.
 4. Formulate a concrete plan: new files, modified files, test plan, Cypher/query templates if applicable.
 5. Create a branch:
@@ -168,7 +168,7 @@ gh pr create \
   --title "feat: <feature-name>" \
   --body "$(cat <<'EOF'
 ## Summary
-Implementation of FR-N from docs/prd/02_SYSTEM_REQUIREMENTS.md.
+Implementation of FR-N from docs/SPEC.md Section 8.
 
 ### Changes
 - [bullet list of new/modified files]

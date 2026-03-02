@@ -79,8 +79,8 @@ git pull origin <branch-name>
 
 Read these files fresh (do NOT rely on any prior conversation context):
 
-- `docs/prd/02_SYSTEM_REQUIREMENTS.md` -- to verify the PR implements the claimed requirement
-- `docs/architecture/01_SYSTEM_DESIGN.md` -- to verify architectural alignment
+- `docs/SPEC.md` (Sections 8-9) -- to verify the PR implements the claimed FR requirement
+- `docs/SPEC.md` (Section 4) -- to verify architectural alignment
 - `CLAUDE.md` -- to verify coding invariants
 - Every file touched by the PR diff (read full file, not just the diff hunks — you are now on the branch, so you see the new versions)
 
@@ -147,10 +147,9 @@ Any match must be investigated. If it is a genuine integrity violation, flag it 
 You are on the feature branch. These gates verify the **PR's code**, not main. This is the independent verification that prevents rubber-stamping — you are running the tests yourself, not trusting TDD's claims.
 
 ```bash
-cd /home/j/side/graphrag-architect
 source .venv/bin/activate && pylint orchestrator/
 python -m pytest orchestrator/tests/ -v
-cd /home/j/side/graphrag-architect/workers/ingestion && go test ./... -v -count=1 -timeout 30s
+cd workers/ingestion && go test ./... -v -count=1 -timeout 30s
 ```
 
 ## Step 6: Resolve Addressed Comments (Re-Review Only)
