@@ -30,6 +30,16 @@ class MutationTransport(Protocol):
     ) -> None: ...
 
 
+class InMemoryMutationTransport:
+    def __init__(self) -> None:
+        self.published: List[Dict[str, Any]] = []
+
+    async def publish(
+        self, topic: str, events: List[Dict[str, Any]],
+    ) -> None:
+        self.published.extend(events)
+
+
 class KafkaMutationPublisher:
     def __init__(
         self,
