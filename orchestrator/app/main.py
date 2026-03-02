@@ -10,6 +10,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from pydantic import BaseModel
 from starlette.responses import Response
 
 from orchestrator.app.access_control import (
@@ -40,7 +41,7 @@ from orchestrator.app.ingest_models import (
     create_ingest_job_store,
 )
 from orchestrator.app.kafka_consumer import AsyncKafkaConsumer
-from orchestrator.app.neo4j_pool import close_driver, init_driver
+from orchestrator.app.neo4j_pool import close_driver, get_driver, init_driver
 from orchestrator.app.observability import configure_metrics, configure_telemetry
 from orchestrator.app.query_engine import get_eval_store, query_graph
 from orchestrator.app.query_models import (
@@ -220,12 +221,86 @@ async def _decode_documents_async(
     return await asyncio.to_thread(_decode_documents, request)
 
 
-@app.get("/health")
+class HealthCheckResponse(BaseModel):
+    status: str
+    checks: Dict[str, str] = {}
+
+
+@app.get(
+    "/health",
+    tags=["health"],
+    summary="Legacy health check",
+    description="Basic health check endpoint. Returns 200 if the process is running.",
+)
 def health() -> Dict[str, str]:
     return {"status": "healthy"}
 
 
-@app.get("/metrics")
+@app.get(
+    "/v1/health/live",
+    tags=["health"],
+    summary="Liveness probe",
+    description="Kubernetes liveness probe. Returns 200 if the process is alive.",
+    response_model=HealthCheckResponse,
+)
+def health_live() -> Dict[str, str]:
+    return {"status": "alive"}
+
+
+@app.get(
+    "/v1/health/ready",
+    tags=["health"],
+    summary="Readiness probe",
+    description=(
+        "Kubernetes readiness probe. Checks Neo4j connectivity "
+        "and Kafka consumer status. Returns 503 when any dependency is degraded."
+    ),
+    response_model=HealthCheckResponse,
+    responses={503: {"description": "One or more dependencies are unavailable"}},
+)
+async def health_ready() -> JSONResponse:
+    checks: Dict[str, str] = {}
+    all_healthy = True
+
+    checks["neo4j"] = await _check_neo4j()
+    if checks["neo4j"] != "ok":
+        all_healthy = False
+
+    checks["kafka"] = _check_kafka()
+    if checks["kafka"] == "unavailable":
+        all_healthy = False
+
+    status = "ready" if all_healthy else "degraded"
+    status_code = 200 if all_healthy else 503
+    body = HealthCheckResponse(status=status, checks=checks)
+    return JSONResponse(content=body.model_dump(), status_code=status_code)
+
+
+async def _check_neo4j() -> str:
+    try:
+        driver = get_driver()
+        async with driver.session() as session:
+            await session.run("RETURN 1")
+        return "ok"
+    except Exception:
+        return "unavailable"
+
+
+def _check_kafka() -> str:
+    if not _kafka_consumer_enabled():
+        return "disabled"
+    consumer = _STATE.get("kafka_consumer")
+    if consumer is not None:
+        return "ok"
+    return "unavailable"
+
+
+@app.get(
+    "/metrics",
+    tags=["observability"],
+    summary="Prometheus metrics",
+    description="Returns Prometheus-format metrics for scraping.",
+)
 def prometheus_metrics() -> Response:
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
@@ -247,7 +322,15 @@ def _verify_ingest_auth(authorization: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
-@app.post("/ingest")
+@app.post(
+    "/ingest",
+    tags=["ingestion"],
+    summary="Submit documents for ingestion",
+    description=(
+        "Submit base64-encoded documents for entity extraction and "
+        "knowledge graph ingestion. Supports sync and async modes."
+    ),
+)
 async def ingest(
     request: IngestRequest,
     authorization: Optional[str] = Header(default=None),
@@ -389,7 +472,13 @@ async def _run_ingest_job(
         await sem.release(token)
 
 
-@app.get("/ingest/{job_id}", response_model=IngestJobResponse)
+@app.get(
+    "/ingest/{job_id}",
+    response_model=IngestJobResponse,
+    tags=["ingestion"],
+    summary="Check ingestion job status",
+    description="Retrieve the current status and result of an async ingestion job.",
+)
 async def get_ingest_job(job_id: str) -> JSONResponse:
     job = await _INGEST_JOB_STORE.get(job_id)
     if job is None:
@@ -467,7 +556,16 @@ async def _enforce_rate_limit(tenant_id: str) -> None:
         )
 
 
-@app.post("/query", response_model=QueryResponse)
+@app.post(
+    "/query",
+    response_model=QueryResponse,
+    tags=["query"],
+    summary="Execute a graph query",
+    description=(
+        "Submit a natural-language query against the knowledge graph. "
+        "Supports sync and async modes with automatic complexity routing."
+    ),
+)
 async def query(
     request: QueryRequest,
     authorization: Optional[str] = Header(default=None),
@@ -516,7 +614,13 @@ async def _run_query_job(job_id: str, initial_state: Dict[str, Any]) -> None:
         await _JOB_STORE.fail(job_id, str(exc))
 
 
-@app.get("/query/{job_id}", response_model=QueryJobResponse)
+@app.get(
+    "/query/{job_id}",
+    response_model=QueryJobResponse,
+    tags=["query"],
+    summary="Check query job status",
+    description="Retrieve the current status and result of an async query job.",
+)
 async def get_query_job(job_id: str) -> JSONResponse:
     job = await _JOB_STORE.get(job_id)
     if job is None:
@@ -527,7 +631,12 @@ async def get_query_job(job_id: str) -> JSONResponse:
 _EVAL_STORE = get_eval_store()
 
 
-@app.get("/query/{query_id}/evaluation")
+@app.get(
+    "/query/{query_id}/evaluation",
+    tags=["query"],
+    summary="Get query evaluation",
+    description="Retrieve the RAG evaluation result for a completed query.",
+)
 async def get_evaluation(query_id: str) -> JSONResponse:
     result = _EVAL_STORE.get(query_id)
     if result is None:
