@@ -415,20 +415,24 @@ class GDSProjectionManager:
         return False
 
     async def _estimate_tenant_graph_size(self, tenant_id: str) -> int:
-        try:
+        async def _run_estimation() -> int:
             async with self._driver.session() as session:
                 result = await session.run(
                     _ESTIMATE_COUNT_CYPHER, tenant_id=tenant_id,
                 )
                 record = await result.single()
                 return int(record["cnt"]) if record else 0
-        except Exception:
-            logger.warning(
-                "Failed to estimate graph size for tenant=%s, allowing projection",
-                tenant_id,
-                exc_info=True,
+
+        try:
+            return await asyncio.wait_for(
+                _run_estimation(),
+                timeout=self._guard.estimation_query_timeout,
             )
-            return 0
+        except Exception as exc:
+            raise GraphTooLargeError(
+                f"Estimation query failed for tenant {tenant_id!r}, "
+                f"failing closed to prevent unbounded projection"
+            ) from exc
 
     async def ensure_projection(self, tenant_id: str) -> bool:
         stale = await self._check_and_reset_mutations(tenant_id)

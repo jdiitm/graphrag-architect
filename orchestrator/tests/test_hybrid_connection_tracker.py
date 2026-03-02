@@ -95,11 +95,11 @@ class TestHybridConnectionTracker:
             pool_size=100,
             max_tenant_fraction=0.2,
             redis_conn=mock_redis,
-            sync_interval=0.05,
+            sync_interval=0.01,
         )
         await tracker.acquire("tenant-1")
         await tracker.start_sync()
-        await asyncio.sleep(0.15)
+        await tracker._sync_completed.wait()
         await tracker.stop_sync()
         mock_redis.set.assert_called()
 
@@ -112,11 +112,11 @@ class TestHybridConnectionTracker:
             pool_size=100,
             max_tenant_fraction=0.2,
             redis_conn=mock_redis,
-            sync_interval=0.05,
+            sync_interval=0.01,
         )
         await tracker.acquire("tenant-1")
         await tracker.start_sync()
-        await asyncio.sleep(0.15)
+        await tracker._sync_completed.wait()
         await tracker.stop_sync()
         count = await tracker.active_count("tenant-1")
         assert count == 1

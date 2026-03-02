@@ -117,7 +117,7 @@ class TestGDSProjectionGuard:
         mgr._project_graph = slow_project
 
         task1 = asyncio.create_task(mgr.ensure_projection("t1"))
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0)
 
         task2_started = asyncio.Event()
 
@@ -126,7 +126,7 @@ class TestGDSProjectionGuard:
             return await mgr.ensure_projection("t2")
 
         task2 = asyncio.create_task(monitored_ensure())
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0)
 
         assert call_count == 1
 
@@ -134,6 +134,45 @@ class TestGDSProjectionGuard:
         await task1
         await task2
         assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_estimation_failure_fails_closed(
+        self, mock_driver: MagicMock, mock_redis: AsyncMock,
+    ) -> None:
+        guard_cfg = ProjectionGuardConfig(max_projection_nodes=500)
+        mgr = GDSProjectionManager(
+            driver=mock_driver,
+            redis_conn=mock_redis,
+            guard_config=guard_cfg,
+        )
+        session = mock_driver.session.return_value.__aenter__.return_value
+        session.run = AsyncMock(side_effect=RuntimeError("connection lost"))
+
+        with pytest.raises(GraphTooLargeError, match="failing closed"):
+            await mgr.ensure_projection("tenant-broken")
+
+    @pytest.mark.asyncio
+    async def test_estimation_timeout_fails_closed(
+        self, mock_driver: MagicMock, mock_redis: AsyncMock,
+    ) -> None:
+        guard_cfg = ProjectionGuardConfig(
+            max_projection_nodes=500,
+            estimation_query_timeout=0.05,
+        )
+        mgr = GDSProjectionManager(
+            driver=mock_driver,
+            redis_conn=mock_redis,
+            guard_config=guard_cfg,
+        )
+
+        async def hanging_run(*_args: object, **_kwargs: object) -> None:
+            await asyncio.sleep(999)
+
+        session = mock_driver.session.return_value.__aenter__.return_value
+        session.run = hanging_run
+
+        with pytest.raises(GraphTooLargeError, match="failing closed"):
+            await mgr.ensure_projection("tenant-slow")
 
     @pytest.mark.asyncio
     async def test_guard_disabled_when_no_config(

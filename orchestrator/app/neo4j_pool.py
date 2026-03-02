@@ -286,6 +286,7 @@ class HybridConnectionTracker:
         self._redis_conn = redis_conn
         self._sync_interval = sync_interval
         self._sync_task: Optional[asyncio.Task[None]] = None
+        self._sync_completed = asyncio.Event()
 
     @property
     def max_per_tenant(self) -> int:
@@ -319,10 +320,12 @@ class HybridConnectionTracker:
             try:
                 await self._report_to_redis()
             except Exception:
-                logging.getLogger(__name__).debug(
+                logging.getLogger(__name__).warning(
                     "Redis sync failed, continuing with local-only tracking",
                     exc_info=True,
                 )
+            finally:
+                self._sync_completed.set()
 
     async def _report_to_redis(self) -> None:
         if self._redis_conn is None:
