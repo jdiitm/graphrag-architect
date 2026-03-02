@@ -1,13 +1,77 @@
 from __future__ import annotations
 
-from typing import Any, Dict, FrozenSet
+import logging
+import re
+from typing import Any, Dict, FrozenSet, List
 
 from orchestrator.app.cypher_ast import validate_acl_coverage
-from orchestrator.app.query_templates import ALLOWED_RELATIONSHIP_TYPES
+from orchestrator.app.query_templates import ALLOWED_RELATIONSHIP_TYPES, TemplateCatalog
+
+_logger = logging.getLogger(__name__)
+
+_TENANT_SCOPE_PATTERN = re.compile(
+    r"\$tenant_id|\$tid|tenant_id\s*[:=]|tenant_id\b",
+)
 
 
 class SecurityViolationError(Exception):
     pass
+
+
+class TenantTemplateViolationError(Exception):
+    def __init__(self, unscoped_names: List[str]) -> None:
+        self.unscoped_names = unscoped_names
+        joined = ", ".join(sorted(unscoped_names))
+        super().__init__(
+            f"Query templates missing tenant_id scope: [{joined}]. "
+            f"Every Cypher template must include a tenant_id parameter to "
+            f"prevent cross-tenant data leakage."
+        )
+
+
+class TenantScopeVerifier:
+    def __init__(
+        self,
+        catalog: TemplateCatalog,
+        exempt_templates: FrozenSet[str] = frozenset(),
+    ) -> None:
+        self._catalog = catalog
+        self._exempt_templates = exempt_templates
+
+    @property
+    def exempt_templates(self) -> FrozenSet[str]:
+        return self._exempt_templates
+
+    def find_unscoped_templates(self) -> List[str]:
+        violations: List[str] = []
+        for name, template in self._catalog.all_templates().items():
+            if name in self._exempt_templates:
+                continue
+            if not self.has_tenant_scope(template.cypher):
+                violations.append(name)
+        return sorted(violations)
+
+    def verify_all_templates(self) -> None:
+        violations = self.find_unscoped_templates()
+        if violations:
+            raise TenantTemplateViolationError(violations)
+
+    def enforce_startup(self, deployment_mode: str) -> None:
+        violations = self.find_unscoped_templates()
+        if not violations:
+            return
+        if deployment_mode == "production":
+            raise TenantTemplateViolationError(violations)
+        joined = ", ".join(violations)
+        _logger.warning(
+            "Tenant scope verification warning: templates [%s] are missing "
+            "tenant_id scope. This would be fatal in production mode.",
+            joined,
+        )
+
+    @staticmethod
+    def has_tenant_scope(cypher: str) -> bool:
+        return bool(_TENANT_SCOPE_PATTERN.search(cypher))
 
 
 _ACL_MARKERS: FrozenSet[str] = frozenset({
