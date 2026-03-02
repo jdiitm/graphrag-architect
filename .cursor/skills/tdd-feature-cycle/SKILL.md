@@ -30,6 +30,9 @@ Tell the user: "This skill must run in a new conversation to maintain isolation.
 Before doing ANY work, verify these conditions. If any fail, HALT immediately.
 
 ```bash
+# 0. Ensure correct GitHub identity (this repo is owned by jdiitm)
+gh auth switch --user jdiitm
+
 # 1. Must be on main
 git branch --show-current  # must output "main"
 

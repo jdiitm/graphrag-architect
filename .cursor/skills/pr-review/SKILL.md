@@ -44,6 +44,9 @@ If any of these are found, flag as **CRITICAL** and request changes immediately.
 ## Precondition Gate
 
 ```bash
+# Ensure correct GitHub identity (this repo is owned by jdiitm)
+gh auth switch --user jdiitm
+
 gh pr list --state open --limit 5
 ```
 

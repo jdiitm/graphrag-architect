@@ -7,11 +7,24 @@ alwaysApply: true
 
 Before executing `git push`, `gh pr create`, or any command that sends commits to a remote, you MUST pass ALL quality gates below. No exceptions.
 
+## GitHub Identity (Mandatory)
+
+This repository is owned by `jdiitm`. Before ANY `gh` command (`gh pr create`, `gh pr review`, `gh pr merge`, `gh api`, etc.), you MUST ensure the correct account is active:
+
+```bash
+gh auth switch --user jdiitm
+```
+
+Run this once at the start of every session, sub-agent, or skill invocation. Do NOT rely on the global default — other repos may have switched to a different account. If `gh auth switch` fails, STOP and tell the user.
+
 ## Required Gates
 
 Run these sequentially. ALL must exit 0 before proceeding.
 
 ```bash
+# 0. Ensure correct GitHub identity
+gh auth switch --user jdiitm
+
 # 1. Python lint (from repo root, inside venv)
 cd /Users/jd/side/graphrag-architect && source .venv/bin/activate && pylint orchestrator/
 

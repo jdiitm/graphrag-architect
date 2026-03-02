@@ -43,6 +43,9 @@ When fixing review findings, these rules are absolute:
 ## Precondition Gate
 
 ```bash
+# Ensure correct GitHub identity (this repo is owned by jdiitm)
+gh auth switch --user jdiitm
+
 gh pr list --state open --limit 5
 ```
 

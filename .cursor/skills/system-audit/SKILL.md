@@ -61,6 +61,9 @@ All FRs (FR-1 through FR-18) are defined in `docs/SPEC.md` Section 8. The audit 
 ## Precondition Gate
 
 ```bash
+# Ensure correct GitHub identity (this repo is owned by jdiitm)
+gh auth switch --user jdiitm
+
 git branch --show-current   # must be "main"
 git status --porcelain      # must be empty
 ```
