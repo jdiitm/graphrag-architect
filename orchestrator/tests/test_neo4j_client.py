@@ -23,7 +23,6 @@ from orchestrator.app.neo4j_client import (
     split_hot_targets,
 )
 
-
 SAMPLE_SERVICE = ServiceNode(
     id="order-service",
     name="order-service",

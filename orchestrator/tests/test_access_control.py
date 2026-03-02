@@ -4,9 +4,9 @@ import jwt
 import pytest
 
 from orchestrator.app.access_control import (
+    JWT_ALGORITHM,
     CypherPermissionFilter,
     InvalidTokenError,
-    JWT_ALGORITHM,
     SecurityPrincipal,
     sign_token,
 )
@@ -547,8 +547,8 @@ class TestCypherACLInjectionDefeatTests:
 
 class TestNodeMetadataOnIngestion:
     def test_service_cypher_includes_permission_fields(self):
-        from orchestrator.app.neo4j_client import _service_cypher
         from orchestrator.app.extraction_models import ServiceNode
+        from orchestrator.app.neo4j_client import _service_cypher
 
         node = ServiceNode(
             id="auth-svc",
@@ -567,8 +567,8 @@ class TestNodeMetadataOnIngestion:
         assert params["namespace_acl"] == ["production", "staging"]
 
     def test_k8s_deployment_includes_namespace_acl(self):
-        from orchestrator.app.neo4j_client import _k8s_deployment_cypher
         from orchestrator.app.extraction_models import K8sDeploymentNode
+        from orchestrator.app.neo4j_client import _k8s_deployment_cypher
 
         node = K8sDeploymentNode(
             id="auth-deploy",
@@ -583,8 +583,8 @@ class TestNodeMetadataOnIngestion:
         assert params["team_owner"] == "platform"
 
     def test_database_cypher_includes_permission_fields(self):
-        from orchestrator.app.neo4j_client import _database_cypher
         from orchestrator.app.extraction_models import DatabaseNode
+        from orchestrator.app.neo4j_client import _database_cypher
 
         node = DatabaseNode(
             id="orders-db",
@@ -600,8 +600,8 @@ class TestNodeMetadataOnIngestion:
         assert params["namespace_acl"] == ["production", "staging"]
 
     def test_kafka_topic_cypher_includes_permission_fields(self):
-        from orchestrator.app.neo4j_client import _kafka_topic_cypher
         from orchestrator.app.extraction_models import KafkaTopicNode
+        from orchestrator.app.neo4j_client import _kafka_topic_cypher
 
         node = KafkaTopicNode(
             name="user-events",

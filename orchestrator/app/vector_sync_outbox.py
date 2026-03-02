@@ -51,7 +51,7 @@ class OutboxOverflowError(RuntimeError):
 
 @runtime_checkable
 class KafkaPublisher(Protocol):
-    async def publish(self, event: "VectorSyncEvent") -> None: ...
+    async def publish(self, event: VectorSyncEvent) -> None: ...
 
 
 class VectorSyncRouter:
@@ -75,7 +75,7 @@ class VectorSyncRouter:
     def overflow_strategy(self) -> str:
         return self._overflow_strategy
 
-    async def route(self, event: "VectorSyncEvent") -> None:
+    async def route(self, event: VectorSyncEvent) -> None:
         if self._mode == "kafka" and self._kafka_publisher is not None:
             try:
                 await self._kafka_publisher.publish(event)
@@ -97,7 +97,7 @@ class VectorSyncRouter:
         cls,
         memory_outbox: Any = None,
         kafka_publisher: Any = None,
-    ) -> "VectorSyncRouter":
+    ) -> VectorSyncRouter:
         import os
         mode = os.environ.get("VECTOR_SYNC_MODE", "memory").lower()
         overflow = os.environ.get(
@@ -436,7 +436,7 @@ return 1
             "retry_count": str(event.retry_count),
             "_dedup_rkey": dedup_rkey,
         }
-        flat_args: list = []
+        flat_args: list[str] = []
         for field, value in mapping.items():
             flat_args.extend([field, value])
         await self._redis.eval(
@@ -635,7 +635,7 @@ class Neo4jOutboxStore:
     def __init__(self, driver: Any) -> None:
         self._driver = driver
 
-    async def _event_params_async(self, event: VectorSyncEvent) -> dict:
+    async def _event_params_async(self, event: VectorSyncEvent) -> dict[str, Any]:
         pruned_json, vectors_json = await _serialize_event_payload(
             event.pruned_ids, event.vectors,
         )
@@ -692,7 +692,7 @@ class Neo4jOutboxStore:
         return events
 
     @staticmethod
-    async def _read_pending(tx: Any) -> list:
+    async def _read_pending(tx: Any) -> list[Any]:
         result = await tx.run(Neo4jOutboxStore._LOAD_QUERY)
         return [record.data() async for record in result]
 
@@ -755,7 +755,7 @@ class Neo4jOutboxStore:
         limit: int,
         now: float,
         lease_expires_at: float,
-    ) -> list:
+    ) -> list[Any]:
         result = await tx.run(
             Neo4jOutboxStore._CLAIM_QUERY,
             worker_id=worker_id,
@@ -800,7 +800,7 @@ class Neo4jOutboxStore:
         return 0
 
     @staticmethod
-    async def _release_expired_tx(tx: Any, now: float) -> list:
+    async def _release_expired_tx(tx: Any, now: float) -> list[Any]:
         result = await tx.run(
             Neo4jOutboxStore._RELEASE_EXPIRED_QUERY, now=now,
         )

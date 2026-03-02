@@ -179,7 +179,7 @@ class TestCreateVectorStore:
         assert isinstance(store, InMemoryVectorStore)
 
     def test_qdrant_backend(self) -> None:
-        from orchestrator.app.vector_store import create_vector_store, QdrantVectorStore
+        from orchestrator.app.vector_store import QdrantVectorStore, create_vector_store
         store = create_vector_store(backend="qdrant", url="http://localhost:6333")
         assert isinstance(store, QdrantVectorStore)
 

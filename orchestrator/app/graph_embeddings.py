@@ -558,7 +558,8 @@ def compute_centroid(vectors: List[List[float]]) -> List[float]:
     if not vectors:
         return []
     arr = np.array(vectors, dtype=np.float64)
-    return np.mean(arr, axis=0).tolist()
+    centroid: list[float] = list(np.mean(arr, axis=0).tolist())
+    return centroid
 
 
 def _cosine_sim(a: List[float], b: List[float]) -> float:
@@ -592,9 +593,9 @@ class _ScoredResult:
 def _batch_cosine_similarities(
     ids: List[str],
     structural_embeddings: Dict[str, List[float]],
-    query_vec: "np.ndarray",
+    query_vec: np.ndarray,
     dim: int,
-) -> "np.ndarray":
+) -> np.ndarray:
     emb_matrix = []
     has_emb = []
     for rid in ids:
@@ -695,7 +696,7 @@ class EdgeTypeWeights:
     def weight_for(self, edge_type: str) -> float:
         field_name = self._FIELD_MAP.get(edge_type)
         if field_name is not None:
-            return getattr(self, field_name)
+            return float(getattr(self, field_name))
         return 1.0
 
 

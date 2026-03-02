@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from orchestrator.app.semantic_cache import SemanticQueryCache, CacheConfig
+from orchestrator.app.semantic_cache import CacheConfig, SemanticQueryCache
 
 
 class TestSemanticCacheAsL0:

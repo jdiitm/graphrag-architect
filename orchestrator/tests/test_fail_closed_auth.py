@@ -97,6 +97,7 @@ class TestResolveTenantContextFailClosed:
 
     def test_no_auth_header_with_require_tokens_raises_401(self) -> None:
         from fastapi import HTTPException
+
         from orchestrator.app.main import _resolve_tenant_context
 
         env = {

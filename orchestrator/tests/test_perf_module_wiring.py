@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from orchestrator.app.token_bucket import AdaptiveTokenBucket
 from orchestrator.app.batched_hop import BatchedHopExecutor, cap_candidates
 from orchestrator.app.prompt_registry import PromptRegistry, PromptTemplate
+from orchestrator.app.token_bucket import AdaptiveTokenBucket
 
 
 class TestAdaptiveTokenBucketUsable:

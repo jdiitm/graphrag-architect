@@ -159,6 +159,7 @@ class TestHashBasedDedup:
 
     def test_no_json_dumps_in_dedup(self) -> None:
         import inspect
+
         from orchestrator.app.batched_hop import BatchedHopExecutor as BHE
         source = inspect.getsource(BHE.execute)
         assert "json.dumps" not in source, (

@@ -7,7 +7,6 @@ import pytest
 
 from orchestrator.app.extraction_models import ServiceNode
 
-
 _ENV_VARS = {
     "NEO4J_PASSWORD": "test",
     "NEO4J_URI": "bolt://localhost:7687",
@@ -81,8 +80,9 @@ class TestCacheInvalidationOnCommit:
 
     @pytest.mark.asyncio
     async def test_failed_commit_does_not_invalidate_caches(self) -> None:
-        from orchestrator.app.graph_builder import commit_to_neo4j
         from neo4j.exceptions import Neo4jError
+
+        from orchestrator.app.graph_builder import commit_to_neo4j
 
         async def _failing_commit(self_repo, entities):
             raise Neo4jError("Connection lost")

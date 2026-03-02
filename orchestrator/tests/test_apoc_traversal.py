@@ -11,7 +11,6 @@ from orchestrator.app.agentic_traversal import (
     run_traversal,
 )
 
-
 _DEFAULT_ACL: dict = {"is_admin": True, "acl_labels": []}
 
 

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from orchestrator.app.semantic_cache import CacheConfig, SemanticQueryCache
 from orchestrator.app.subgraph_cache import SubgraphCache
-from orchestrator.app.semantic_cache import SemanticQueryCache, CacheConfig
 
 
 class TestSubgraphCacheSWR:

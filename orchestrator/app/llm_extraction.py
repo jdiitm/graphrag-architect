@@ -111,11 +111,13 @@ class ServiceExtractor:
             retry=retry_if_exception_type((ResourceExhausted, ServiceUnavailable)),
         )
         async def _invoke_with_retry(
-            messages: list,
+            messages: list[Any],
         ) -> ServiceExtractionResult:
-            return await self._provider.ainvoke_structured(
+            result = await self._provider.ainvoke_structured(
                 SYSTEM_PROMPT, messages,
             )
+            assert isinstance(result, ServiceExtractionResult)
+            return result
 
         self.chain = _invoke_with_retry
 

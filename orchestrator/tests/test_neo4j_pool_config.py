@@ -2,8 +2,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestrator.app.config import Neo4jConfig
 from orchestrator.app import neo4j_pool
+from orchestrator.app.config import Neo4jConfig
 
 
 @pytest.fixture(autouse=True)

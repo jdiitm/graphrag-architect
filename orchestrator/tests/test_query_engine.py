@@ -940,7 +940,7 @@ class TestAsyncEvaluation:
 class TestLLMJudgeSelection:
     @pytest.mark.asyncio
     async def test_uses_llm_evaluator_when_config_enabled(self, base_query_state):
-        from orchestrator.app.query_engine import _run_background_evaluation, _EVAL_STORE
+        from orchestrator.app.query_engine import _EVAL_STORE, _run_background_evaluation
 
         query_id = "test-llm-judge-1"
         state = {
@@ -979,7 +979,7 @@ class TestLLMJudgeSelection:
 
     @pytest.mark.asyncio
     async def test_falls_back_to_rag_evaluator_when_no_llm(self, base_query_state):
-        from orchestrator.app.query_engine import _run_background_evaluation, _EVAL_STORE
+        from orchestrator.app.query_engine import _EVAL_STORE, _run_background_evaluation
 
         query_id = "test-no-llm-1"
         state = {
@@ -1014,7 +1014,7 @@ class TestLLMJudgeSelection:
 
     @pytest.mark.asyncio
     async def test_falls_back_to_rag_evaluator_when_disabled(self, base_query_state):
-        from orchestrator.app.query_engine import _run_background_evaluation, _EVAL_STORE
+        from orchestrator.app.query_engine import _EVAL_STORE, _run_background_evaluation
 
         query_id = "test-disabled-1"
         state = {
@@ -1122,9 +1122,8 @@ class TestCircuitBreakerWiring:
 
     @pytest.mark.asyncio
     async def test_embedding_global_breaker_exists_at_module_level(self):
-        from orchestrator.app.query_engine import _CB_EMBEDDING_GLOBAL
-
         from orchestrator.app.circuit_breaker import GlobalProviderBreaker
+        from orchestrator.app.query_engine import _CB_EMBEDDING_GLOBAL
 
         assert isinstance(_CB_EMBEDDING_GLOBAL, GlobalProviderBreaker), (
             "_CB_EMBEDDING_GLOBAL must be a GlobalProviderBreaker"
@@ -1148,9 +1147,8 @@ class TestCircuitBreakerWiring:
 
     @pytest.mark.asyncio
     async def test_llm_global_breaker_exists_at_module_level(self):
-        from orchestrator.app.query_engine import _CB_LLM_GLOBAL
-
         from orchestrator.app.circuit_breaker import GlobalProviderBreaker
+        from orchestrator.app.query_engine import _CB_LLM_GLOBAL
 
         assert isinstance(_CB_LLM_GLOBAL, GlobalProviderBreaker), (
             "_CB_LLM_GLOBAL must be a GlobalProviderBreaker at module level"

@@ -8,8 +8,8 @@ import pytest
 from orchestrator.app.neo4j_pool import (
     TenantConnectionTracker,
     TenantQuotaExceededError,
-    init_tenant_tracker,
     get_tenant_tracker,
+    init_tenant_tracker,
 )
 
 

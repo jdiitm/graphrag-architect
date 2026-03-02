@@ -128,7 +128,7 @@ class RedisASTDLQ(ASTDeadLetterQueue):
         return [json.loads(entry) for entry in raw_entries]
 
     async def async_size(self) -> int:
-        return await self._redis.llen(self._list_key)
+        return int(await self._redis.llen(self._list_key))
 
     async def async_clear(self) -> None:
         await self._redis.delete(self._list_key)

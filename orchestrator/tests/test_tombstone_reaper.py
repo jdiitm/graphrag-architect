@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -258,7 +258,7 @@ class TestReaperCutoffCalculation:
         config = TombstoneReaperConfig(ttl_days=14)
         reaper = TombstoneReaper(client, config)
 
-        fixed_now = datetime(2025, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        fixed_now = datetime(2025, 6, 15, 12, 0, 0, tzinfo=UTC)
         expected_cutoff = (fixed_now - timedelta(days=14)).isoformat()
 
         with patch("orchestrator.app.tombstone_reaper.datetime") as mock_dt:

@@ -12,14 +12,14 @@ from orchestrator.app.extraction_models import (
     ProducesEdge,
     ServiceNode,
 )
+from orchestrator.app.neo4j_client import build_unwind_queries
 from orchestrator.app.ontology import (
     NodeTypeDefinition,
     build_default_ontology,
+    generate_edge_unwind_cypher,
     generate_merge_cypher,
     generate_unwind_cypher,
-    generate_edge_unwind_cypher,
 )
-from orchestrator.app.neo4j_client import build_unwind_queries
 
 
 class TestOntologyMergeKeysInUnwind:

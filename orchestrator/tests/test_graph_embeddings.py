@@ -4,10 +4,10 @@ from orchestrator.app.graph_embeddings import (
     GraphTopology,
     Node2VecConfig,
     Node2VecEmbedder,
-    generate_walks,
     _biased_random_walk,
     _compute_transition_probs,
     _hash_embedding,
+    generate_walks,
 )
 
 

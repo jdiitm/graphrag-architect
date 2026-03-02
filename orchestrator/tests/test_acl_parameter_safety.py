@@ -7,9 +7,9 @@ import pytest
 from orchestrator.app.tenant_security import (
     TenantSecurityProvider,
     _acl_where_fragment,
-    build_traversal_one_hop,
-    build_traversal_neighbor_discovery,
     build_traversal_batched_neighbor,
+    build_traversal_neighbor_discovery,
+    build_traversal_one_hop,
 )
 
 

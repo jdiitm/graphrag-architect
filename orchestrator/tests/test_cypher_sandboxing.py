@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from orchestrator.app.cypher_sandbox import SandboxedQueryExecutor, CypherSandboxConfig
+from orchestrator.app.cypher_sandbox import CypherSandboxConfig, SandboxedQueryExecutor
 from orchestrator.app.cypher_tokenizer import TokenType, tokenize_cypher
 
 

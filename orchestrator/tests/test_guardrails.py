@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from orchestrator.app.ontology import Ontology, NodeTypeDefinition, EdgeTypeDefinition
 from orchestrator.app.guardrails import (
-    CypherSchemaValidator,
     CypherComplexityGuard,
-    ResponseCoherenceChecker,
+    CypherSchemaValidator,
     GuardrailChain,
     GuardrailMode,
     GuardrailViolation,
+    ResponseCoherenceChecker,
 )
+from orchestrator.app.ontology import EdgeTypeDefinition, NodeTypeDefinition, Ontology
 
 
 def _test_ontology() -> Ontology:

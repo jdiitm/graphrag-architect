@@ -7,14 +7,14 @@ import pytest
 
 from orchestrator.app.tenant_isolation import (
     IsolationMode,
+    OrphanedPoolDetector,
     TenantConfig,
     TenantConnectionWrapper,
+    TenantEnforcingDriver,
     TenantIsolationViolation,
     TenantRegistry,
     TenantRouter,
-    OrphanedPoolDetector,
     validate_tenant_binding,
-    TenantEnforcingDriver,
 )
 
 

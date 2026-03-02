@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Protocol
 _IDENTITY_FIELDS = ("source", "rel", "target", "id", "name")
 
 
-def _dedup_key(record: Dict[str, Any]) -> tuple:
+def _dedup_key(record: Dict[str, Any]) -> tuple[Any, ...]:
     return tuple(record.get(f) for f in _IDENTITY_FIELDS)
 
 
@@ -72,7 +72,7 @@ class BatchedHopExecutor:
         tasks = [self._runner.run_hop(batch) for batch in batches]
         batch_results = await asyncio.gather(*tasks)
 
-        seen: set[tuple] = set()
+        seen: set[tuple[Any, ...]] = set()
         deduped: List[Dict[str, Any]] = []
         for batch_result in batch_results:
             for record in batch_result:

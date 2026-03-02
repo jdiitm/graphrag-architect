@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import re
-from typing import FrozenSet
+from typing import Any, FrozenSet, Optional
 
 from orchestrator.app.cypher_tokenizer import (
     TokenType,
@@ -31,14 +33,14 @@ class CypherValidationError(ValueError):
     pass
 
 
-def _next_non_whitespace(tokens: list, start: int) -> tuple:
+def _next_non_whitespace(tokens: list[Any], start: int) -> tuple[Optional[Any], str]:
     for ahead in tokens[start:]:
         if ahead.token_type != TokenType.WHITESPACE:
             return ahead.token_type, ahead.value.upper()
     return None, ""
 
 
-def _check_detach_delete(tokens: list, idx: int, raw: str) -> None:
+def _check_detach_delete(tokens: list[Any], idx: int, raw: str) -> None:
     tok_type, tok_val = _next_non_whitespace(tokens, idx + 1)
     if tok_type == TokenType.KEYWORD and tok_val == "DELETE":
         raise CypherValidationError(
@@ -46,7 +48,7 @@ def _check_detach_delete(tokens: list, idx: int, raw: str) -> None:
         )
 
 
-def _check_load_csv(tokens: list, idx: int, raw: str) -> None:
+def _check_load_csv(tokens: list[Any], idx: int, raw: str) -> None:
     tok_type, tok_val = _next_non_whitespace(tokens, idx + 1)
     if tok_type == TokenType.KEYWORD and tok_val == "CSV":
         raise CypherValidationError(
@@ -81,7 +83,7 @@ def validate_cypher_readonly(cypher: str) -> str:
     return stripped
 
 
-def _validate_call_token(tokens: list, call_idx: int, raw: str) -> None:
+def _validate_call_token(tokens: list[Any], call_idx: int, raw: str) -> None:
     j = call_idx + 1
     while j < len(tokens) and tokens[j].token_type == TokenType.WHITESPACE:
         j += 1
@@ -113,7 +115,7 @@ def _validate_call_token(tokens: list, call_idx: int, raw: str) -> None:
             )
 
 
-def _check_multi_statement(tokens: list, raw: str) -> None:
+def _check_multi_statement(tokens: list[Any], raw: str) -> None:
     for i, token in enumerate(tokens):
         if token.token_type != TokenType.PUNCTUATION or token.value != ";":
             continue
@@ -125,7 +127,7 @@ def _check_multi_statement(tokens: list, raw: str) -> None:
             )
 
 
-def _check_cartesian_product(tokens: list, raw: str) -> None:
+def _check_cartesian_product(tokens: list[Any], raw: str) -> None:
     match_indices = [
         i for i, t in enumerate(tokens)
         if t.token_type == TokenType.KEYWORD

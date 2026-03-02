@@ -11,7 +11,6 @@ from orchestrator.app.prompt_registry import (
     PromptTemplate,
 )
 
-
 SAMPLE_PROMPT_YAML = """
 name: extraction
 version: v2

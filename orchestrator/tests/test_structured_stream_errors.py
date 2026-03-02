@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.app.query_engine import (
-    _raw_llm_synthesize_stream,
     _llm_synthesize,
+    _raw_llm_synthesize_stream,
 )
 
 

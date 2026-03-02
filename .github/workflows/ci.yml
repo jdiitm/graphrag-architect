@@ -37,6 +37,36 @@ jobs:
       - name: Run tests
         run: python -m pytest orchestrator/tests/ -v --tb=short
 
+  python-mypy:
+    name: Python Type Check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: orchestrator/requirements.txt
+      - name: Install dependencies
+        run: pip install -r orchestrator/requirements.txt
+      - name: mypy --strict
+        run: mypy --strict orchestrator/app/
+
+  python-ruff:
+    name: Python Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: orchestrator/requirements.txt
+      - name: Install ruff
+        run: pip install ruff
+      - name: ruff check
+        run: ruff check orchestrator/
+
   go-lint:
     name: Go Lint
     runs-on: ubuntu-latest

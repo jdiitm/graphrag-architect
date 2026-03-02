@@ -14,7 +14,6 @@ from orchestrator.app.distributed_lock import (
     create_ingestion_semaphore,
 )
 
-
 _REDIS_URL = "redis://localhost:6379"
 
 

@@ -9,7 +9,6 @@ import pytest
 
 from orchestrator.app.config import KafkaConsumerConfig
 
-
 _ENV_VARS = {
     "NEO4J_PASSWORD": "test",
     "NEO4J_URI": "bolt://localhost:7687",
@@ -144,6 +143,7 @@ class TestIngestEndpointDeprecation:
     @pytest.mark.asyncio
     async def test_ingest_endpoint_includes_deprecation_header(self) -> None:
         from httpx import ASGITransport, AsyncClient
+
         from orchestrator.app.main import app
 
         fake_result = {

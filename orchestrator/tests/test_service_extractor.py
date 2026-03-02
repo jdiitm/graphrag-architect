@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Dict
+from typing import Dict, List
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,7 +11,6 @@ from orchestrator.app.extraction_models import (
     ServiceNode,
 )
 from orchestrator.app.llm_extraction import ServiceExtractor
-
 
 GO_GIN_POSTGRES_SNIPPET = """\
 package main

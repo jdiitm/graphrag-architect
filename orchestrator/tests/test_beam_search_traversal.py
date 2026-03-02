@@ -7,8 +7,8 @@ import pytest
 from orchestrator.app.agentic_traversal import (
     TraversalAgent,
     TraversalConfig,
-    TraversalStrategy,
     TraversalStep,
+    TraversalStrategy,
     _batched_bfs,
     compute_node_score,
 )

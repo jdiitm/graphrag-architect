@@ -1,8 +1,7 @@
 from pathlib import Path
 
-import yaml
 import pytest
-
+import yaml
 
 ALERTING_YAML_PATH = (
     Path(__file__).resolve().parents[2]

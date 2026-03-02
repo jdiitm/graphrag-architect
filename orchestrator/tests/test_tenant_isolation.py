@@ -207,6 +207,7 @@ class TestTenantAuditLogger:
     def test_audit_logger_emits_structured_log(self) -> None:
         import json
         import logging
+
         from orchestrator.app.tenant_isolation import StructuredTenantAuditLogger
 
         handler = logging.handlers.MemoryHandler(capacity=100)
@@ -229,6 +230,7 @@ class TestTenantAuditLogger:
     def test_audit_logger_includes_all_fields(self) -> None:
         import json
         import logging
+
         from orchestrator.app.tenant_isolation import StructuredTenantAuditLogger
 
         captured: list[str] = []

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, Optional, Protocol, cast, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ _PORT_STATE: Dict[str, Any] = {
 
 
 def get_tracing_port() -> TracingPort:
-    return _PORT_STATE["tracing"]
+    return cast("TracingPort", _PORT_STATE["tracing"])
 
 
 def set_tracing_port(port: TracingPort) -> None:
@@ -121,7 +121,7 @@ def set_tracing_port(port: TracingPort) -> None:
 
 
 def get_metrics_port() -> MetricsPort:
-    return _PORT_STATE["metrics"]
+    return cast("MetricsPort", _PORT_STATE["metrics"])
 
 
 def set_metrics_port(port: MetricsPort) -> None:

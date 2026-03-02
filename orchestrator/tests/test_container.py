@@ -6,7 +6,6 @@ import pytest
 
 from orchestrator.app.container import AppContainer
 
-
 _CONTAINER_ENV = {
     "DEPLOYMENT_MODE": "dev",
     "NEO4J_PASSWORD": "test",
@@ -42,4 +41,4 @@ class TestAppContainerFromEnv:
         with patch.dict("os.environ", _CONTAINER_ENV):
             container = AppContainer.from_env()
         with pytest.raises(FrozenInstanceError):
-            setattr(container, "circuit_breaker", None)
+            container.circuit_breaker = None

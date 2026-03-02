@@ -4,8 +4,8 @@ import pytest
 
 from orchestrator.app.extraction_models import (
     DatabaseNode,
-    KafkaTopicNode,
     K8sDeploymentNode,
+    KafkaTopicNode,
     ServiceNode,
     compute_content_hash,
 )

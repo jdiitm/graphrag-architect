@@ -6,7 +6,7 @@ import random
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Protocol, TypeVar, runtime_checkable
+from typing import Any, Awaitable, Callable, Protocol, TypeVar, cast, runtime_checkable
 
 try:
     import redis.asyncio as aioredis
@@ -92,7 +92,11 @@ class RedisStateStore:
         return f"{self._prefix}{name}"
 
     async def load(self, name: str) -> CircuitSnapshot:
-        data = await self._redis.hgetall(self._key(name))
+        raw = await cast(
+            "Awaitable[dict[Any, Any]]",
+            self._redis.hgetall(self._key(name)),
+        )
+        data: dict[Any, Any] = dict(raw)
         if not data:
             return CircuitSnapshot()
         return CircuitSnapshot(

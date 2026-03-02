@@ -85,7 +85,7 @@ class TestDashboardRequiredFields:
 
 
 class TestDashboardPanelQueries:
-    KNOWN_METRICS = {
+    KNOWN_METRICS: frozenset[str] = frozenset({
         "ingestion.duration_ms",
         "llm.extraction_duration_ms",
         "neo4j.transaction_duration_ms",
@@ -112,7 +112,7 @@ class TestDashboardPanelQueries:
         "graph_relationships_total",
         "queries_executed_total",
         "dlq_messages_total",
-    }
+    })
 
     def _extract_panel_exprs(self, dashboard: dict) -> list[str]:
         exprs: list[str] = []

@@ -16,7 +16,6 @@ from orchestrator.app.circuit_breaker import CircuitOpenError, CircuitState
 from orchestrator.app.config import GRPCASTConfig
 from orchestrator.app.extraction_models import ServiceNode
 
-
 _ENV_VARS = {
     "NEO4J_PASSWORD": "test",
     "NEO4J_URI": "bolt://localhost:7687",

@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
 import pytest
-
+import yaml
 
 INFRA_DIR = Path(__file__).resolve().parents[2] / "infrastructure"
 CONFIGMAP_PATH = INFRA_DIR / "k8s" / "configmap.yaml"

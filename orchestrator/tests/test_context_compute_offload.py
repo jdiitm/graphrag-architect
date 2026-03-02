@@ -50,8 +50,8 @@ class TestContextComputeOffload:
 
     @pytest.mark.asyncio
     async def test_truncate_uses_shared_thread_pool(self, base_query_state):
-        from orchestrator.app.query_engine import _do_synthesize
         from orchestrator.app.executor import get_thread_pool as real_get_pool
+        from orchestrator.app.query_engine import _do_synthesize
 
         pool_call_count = [0]
 

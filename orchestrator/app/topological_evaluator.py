@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, List, Optional
 
-
 EdgeVerifier = Callable[[List[str]], Coroutine[Any, Any, int]]
 PathChecker = Callable[[str, str, int], Coroutine[Any, Any, bool]]
 

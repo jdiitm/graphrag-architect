@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, call
 import pytest
 
 from orchestrator.app.lazy_traversal import (
-    GDSPageRankStrategy,
-    LocalPageRankStrategy,
     _GDS_EDGE_THRESHOLD,
     _GDS_GRAPH_DROP,
     _GDS_PAGERANK_QUERY,
     _GDS_PROJECT_QUERY,
+    GDSPageRankStrategy,
+    LocalPageRankStrategy,
     _sanitize_cypher_string,
     build_gds_node_query,
     build_gds_rel_query,
@@ -270,8 +270,8 @@ class TestPrecomputedPageRankStrategy:
 class TestDefaultStrategyIsPrecomputed:
     def test_default_strategy_is_precomputed(self) -> None:
         from orchestrator.app.lazy_traversal import (
-            PrecomputedPageRankStrategy,
             _DEFAULT_STRATEGY,
+            PrecomputedPageRankStrategy,
         )
 
         assert isinstance(_DEFAULT_STRATEGY, PrecomputedPageRankStrategy)
@@ -280,9 +280,9 @@ class TestDefaultStrategyIsPrecomputed:
 class TestLocalPageRankSafetyCap:
     def test_raises_when_edges_exceed_safety_cap(self) -> None:
         from orchestrator.app.lazy_traversal import (
+            _LOCAL_SAFETY_CAP,
             GraphTooLargeForLocalPPR,
             LocalPageRankStrategy,
-            _LOCAL_SAFETY_CAP,
         )
 
         strategy = LocalPageRankStrategy()
@@ -295,9 +295,9 @@ class TestLocalPageRankSafetyCap:
 
     def test_raises_on_oversized_graph_with_large_max_edges(self) -> None:
         from orchestrator.app.lazy_traversal import (
+            _LOCAL_SAFETY_CAP,
             GraphTooLargeForLocalPPR,
             LocalPageRankStrategy,
-            _LOCAL_SAFETY_CAP,
         )
 
         strategy = LocalPageRankStrategy(max_edges=_LOCAL_SAFETY_CAP + 5000)

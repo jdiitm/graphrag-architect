@@ -5,9 +5,9 @@ import asyncio
 import pytest
 
 from orchestrator.app.lazy_traversal import (
+    _LOCAL_SAFETY_CAP,
     GraphTooLargeForLocalPPR,
     LocalPageRankStrategy,
-    _LOCAL_SAFETY_CAP,
     gds_pagerank_filter,
 )
 

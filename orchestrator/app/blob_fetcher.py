@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ class BlobReference:
     size_bytes: int = 0
 
     @classmethod
-    def from_kafka_message(cls, payload: dict) -> Optional[BlobReference]:
+    def from_kafka_message(cls, payload: dict[str, Any]) -> Optional[BlobReference]:
         blob_key = payload.get("blob_key")
         if not blob_key:
             return None
@@ -88,7 +88,7 @@ class BlobFetcher:
         data = await self._store.get(ref.key)
         return data.decode("utf-8")
 
-    async def fetch_if_blob(self, payload: dict) -> Optional[str]:
+    async def fetch_if_blob(self, payload: dict[str, Any]) -> Optional[str]:
         ref = BlobReference.from_kafka_message(payload)
         if ref is None:
             return None

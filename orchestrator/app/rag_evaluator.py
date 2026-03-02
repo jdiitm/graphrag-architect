@@ -17,12 +17,13 @@ logger = logging.getLogger(__name__)
 _JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
 
 
-def _extract_json(raw: str) -> Optional[dict]:
+def _extract_json(raw: str) -> Optional[dict[str, Any]]:
     match = _JSON_OBJECT_PATTERN.search(raw)
     if match is None:
         return None
     try:
-        return json.loads(match.group())
+        result: dict[str, Any] = json.loads(match.group())
+        return result
     except (json.JSONDecodeError, ValueError):
         return None
 
@@ -108,7 +109,7 @@ def _compute_faithfulness(
     sources: List[Dict[str, Any]],
     embed_fn: Optional[Callable[[str], List[float]]] = None,
     similarity_threshold: float = 0.8,
-) -> tuple:
+) -> tuple[float, list[str]]:
     if not answer or not sources:
         return 1.0, []
 
@@ -379,8 +380,8 @@ class EvaluationStore:
         valid = self.get_valid_scores()
         if not valid:
             return None
-        total = sum(v["evaluation_score"] for v in valid)
-        return total / len(valid)
+        total = sum(float(v["evaluation_score"]) for v in valid)
+        return float(total / len(valid))
 
     def _evict_expired(self) -> None:
         now = time.monotonic()
@@ -418,9 +419,9 @@ class RedisEvaluationStore:
         try:
             raw = await self._redis.get(self._rkey(query_id))
             if raw is not None:
-                value = json.loads(raw)
+                value: dict[str, Any] = json.loads(raw)
                 self._local.put(query_id, value)
-                return value
+                return dict(value)
         except Exception:
             logger.debug("Redis eval-store get failed, falling back to local miss")
         return None
@@ -434,7 +435,7 @@ class RedisEvaluationStore:
             logger.debug("Redis eval-store put failed, local still updated")
 
 
-def create_evaluation_store() -> Any:
+def create_evaluation_store() -> EvaluationStore | RedisEvaluationStore:
     from orchestrator.app.config import RedisConfig
     redis_cfg = RedisConfig.from_env()
     if redis_cfg.url:

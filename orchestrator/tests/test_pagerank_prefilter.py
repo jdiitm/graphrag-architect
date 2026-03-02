@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+from orchestrator.app.agentic_traversal import (
+    _BATCHED_NEIGHBOR_TEMPLATE,
+    _NEIGHBOR_DISCOVERY_TEMPLATE,
+    _SAMPLED_NEIGHBOR_TEMPLATE,
+)
 from orchestrator.app.tenant_security import (
     build_traversal_batched_neighbor,
     build_traversal_batched_supernode_neighbor,
     build_traversal_neighbor_discovery,
     build_traversal_sampled_neighbor,
-)
-from orchestrator.app.agentic_traversal import (
-    _SAMPLED_NEIGHBOR_TEMPLATE,
-    _NEIGHBOR_DISCOVERY_TEMPLATE,
-    _BATCHED_NEIGHBOR_TEMPLATE,
 )
 
 

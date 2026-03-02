@@ -2,7 +2,6 @@ import pytest
 
 from orchestrator.app.ast_extraction import GoASTExtractor
 
-
 GO_HTTP_SERVER = '''package main
 
 import (

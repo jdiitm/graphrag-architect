@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from orchestrator.app.cypher_sandbox import SandboxedQueryExecutor, CypherSandboxConfig
+from orchestrator.app.cypher_sandbox import CypherSandboxConfig, SandboxedQueryExecutor
 
 
 class TestWithUnwindAmplificationDefeat:

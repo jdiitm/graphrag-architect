@@ -10,7 +10,7 @@ from orchestrator.app.circuit_breaker import (
     CircuitBreakerConfig,
     CircuitOpenError,
 )
-from orchestrator.app.extraction_models import ServiceNode, CallsEdge
+from orchestrator.app.extraction_models import CallsEdge, ServiceNode
 from orchestrator.app.main import app
 from orchestrator.app.neo4j_client import GraphRepository
 from orchestrator.tests.conftest import mock_async_session

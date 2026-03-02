@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import pytest
 
+from orchestrator.app.context_manager import (
+    format_context_for_prompt,
+    parse_context_block,
+)
 from orchestrator.app.prompt_sanitizer import (
     ContentFirewall,
     HMACDelimiter,
     ScanResult,
     ThreatCategory,
-)
-from orchestrator.app.context_manager import (
-    format_context_for_prompt,
-    parse_context_block,
 )
 
 

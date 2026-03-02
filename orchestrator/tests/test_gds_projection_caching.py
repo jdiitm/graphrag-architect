@@ -16,7 +16,7 @@ class FakeRedis:
     async def get(self, key: str):
         return self._store.get(key)
 
-    async def set(self, key: str, value: str, ex: int = None):
+    async def set(self, key: str, value: str, ex: int | None = None):
         self._store[key] = value
         if ex is not None:
             self._ttls[key] = ex

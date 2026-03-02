@@ -6,9 +6,9 @@ import pytest
 from orchestrator.app.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
+    CircuitOpenError,
     CircuitSnapshot,
     CircuitState,
-    CircuitOpenError,
     InMemoryStateStore,
     RedisStateStore,
 )
@@ -194,8 +194,9 @@ class TestRedisStateStore:
 
 class TestContainerStoreSelection:
     def test_selects_inmemory_when_no_redis_url(self):
-        from orchestrator.app.container import _build_state_store
         import os
+
+        from orchestrator.app.container import _build_state_store
         os.environ.pop("REDIS_URL", None)
         store = _build_state_store()
         assert isinstance(store, InMemoryStateStore)

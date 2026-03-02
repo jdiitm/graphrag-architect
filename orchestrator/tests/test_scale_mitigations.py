@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.app.agentic_traversal import (
-    _SAMPLED_NEIGHBOR_TEMPLATE,
-    _NEIGHBOR_DISCOVERY_TEMPLATE,
     _BATCHED_NEIGHBOR_TEMPLATE,
     _BOUNDED_PATH_TEMPLATE,
+    _NEIGHBOR_DISCOVERY_TEMPLATE,
+    _SAMPLED_NEIGHBOR_TEMPLATE,
     execute_hop,
 )
 from orchestrator.app.semantic_cache import (

@@ -59,9 +59,11 @@ class GRPCASTClient:
             {"path": path, "content": content}
             for path, content in files
         ]
+        transport = self._transport
+        assert transport is not None
 
         async def _do_send() -> List[Dict[str, Any]]:
-            return await self._transport.send_batch(requests)
+            return await transport.send_batch(requests)
 
         raw_results = await self._breaker.call(_do_send)
         return [

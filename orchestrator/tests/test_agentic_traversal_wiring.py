@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.app.agentic_traversal import (
+    _NEIGHBOR_DISCOVERY_TEMPLATE,
     TraversalAgent,
     TraversalState,
     TraversalStep,
-    _NEIGHBOR_DISCOVERY_TEMPLATE,
     _batched_supernode_expansion,
     build_one_hop_cypher,
     execute_batched_hop,
@@ -17,7 +17,6 @@ from orchestrator.app.agentic_traversal import (
     run_traversal,
 )
 from orchestrator.app.context_manager import TokenBudget
-
 
 _LOW_DEGREE = [{"degree": 5}]
 
@@ -120,7 +119,7 @@ class TestRunTraversal:
     @pytest.fixture(autouse=True)
     def _low_degree_stubs(self):
         async def _all_low(driver, source_ids, tenant_id, timeout=30.0):
-            return {sid: 5 for sid in source_ids}
+            return dict.fromkeys(source_ids, 5)
 
         with patch(
             "orchestrator.app.agentic_traversal.batch_check_degrees",

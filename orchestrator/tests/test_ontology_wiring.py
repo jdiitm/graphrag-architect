@@ -17,6 +17,11 @@ from orchestrator.app.extraction_models import (
     ProducesEdge,
     ServiceNode,
 )
+from orchestrator.app.neo4j_client import (
+    GraphRepository,
+    build_cypher_dispatch,
+    build_unwind_queries,
+)
 from orchestrator.app.ontology import (
     Ontology,
     OntologyLoader,
@@ -25,12 +30,6 @@ from orchestrator.app.ontology import (
     generate_merge_cypher,
     load_ontology,
 )
-from orchestrator.app.neo4j_client import (
-    GraphRepository,
-    build_cypher_dispatch,
-    build_unwind_queries,
-)
-
 
 SAMPLE_YAML = """
 node_types:
@@ -298,14 +297,14 @@ class TestBackwardCompatNamedFunctions:
 
     def test_all_eight_named_functions_exist(self) -> None:
         from orchestrator.app.neo4j_client import (
-            _service_cypher,
-            _database_cypher,
-            _kafka_topic_cypher,
-            _k8s_deployment_cypher,
             _calls_cypher,
-            _produces_cypher,
             _consumes_cypher,
+            _database_cypher,
             _deployed_in_cypher,
+            _k8s_deployment_cypher,
+            _kafka_topic_cypher,
+            _produces_cypher,
+            _service_cypher,
         )
         assert callable(_service_cypher)
         assert callable(_database_cypher)

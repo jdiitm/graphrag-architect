@@ -403,6 +403,7 @@ class TestLoadWorkspacePreservesRawFiles:
     @pytest.mark.asyncio
     async def test_directory_path_set_streams_via_pipeline(self, tmp_path):
         from unittest.mock import AsyncMock, patch
+
         from orchestrator.app.graph_builder import load_workspace_files
 
         go_file = tmp_path / "service.go"

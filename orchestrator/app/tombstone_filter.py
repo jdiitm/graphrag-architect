@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Set
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
 
-
 TOMBSTONE_CHECK_QUERY = (
     "UNWIND $node_ids AS nid "
     "MATCH (n {id: nid})-[r]->() "

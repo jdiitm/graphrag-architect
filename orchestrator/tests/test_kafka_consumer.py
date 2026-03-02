@@ -42,7 +42,7 @@ class TestAsyncKafkaConsumer:
 
         content = "package main\nfunc main() {}"
         value = base64.b64encode(content.encode("utf-8"))
-        headers = [("file_path", "cmd/main.go".encode("utf-8"))]
+        headers = [("file_path", b"cmd/main.go")]
 
         config = KafkaConsumerConfig()
         consumer = AsyncKafkaConsumer(config, mock_ingest)

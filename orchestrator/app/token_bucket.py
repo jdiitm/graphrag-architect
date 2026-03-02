@@ -96,7 +96,7 @@ class TenantRateLimiter:
     def _evict_oldest(self) -> None:
         if len(self._buckets) < self._max_tenants:
             return
-        oldest_key = min(self._access_order, key=self._access_order.get)
+        oldest_key = min(self._access_order, key=lambda k: self._access_order[k])
         del self._buckets[oldest_key]
         del self._access_order[oldest_key]
 

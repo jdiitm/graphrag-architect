@@ -1,6 +1,4 @@
 from orchestrator.app.query_engine import (
-    MAX_CYPHER_ITERATIONS,
-    FulltextTenantRequired,
     _CB_EMBEDDING_GLOBAL,
     _SANDBOX,
     _SEMANTIC_CACHE,
@@ -8,6 +6,8 @@ from orchestrator.app.query_engine import (
     _TEMPLATE_CATALOG,
     _TEMPLATE_REGISTRY,
     _VECTOR_STORE,
+    MAX_CYPHER_ITERATIONS,
+    FulltextTenantRequired,
     _apply_acl,
     _build_acl_filter,
     _build_single_hop_cypher,
@@ -38,7 +38,6 @@ from orchestrator.app.query_engine import (
 
 __all__ = [
     "MAX_CYPHER_ITERATIONS",
-    "FulltextTenantRequired",
     "_CB_EMBEDDING_GLOBAL",
     "_SANDBOX",
     "_SEMANTIC_CACHE",
@@ -46,6 +45,7 @@ __all__ = [
     "_TEMPLATE_CATALOG",
     "_TEMPLATE_REGISTRY",
     "_VECTOR_STORE",
+    "FulltextTenantRequired",
     "_apply_acl",
     "_build_acl_filter",
     "_build_single_hop_cypher",

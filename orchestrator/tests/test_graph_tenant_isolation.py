@@ -14,7 +14,6 @@ from orchestrator.app.extraction_models import (
     ServiceNode,
 )
 
-
 _SCHEMA_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "app", "schema_init.cypher",
 )
@@ -126,10 +125,10 @@ class TestCypherQueriesIncludeTenantId:
 
     def test_single_entity_queries_set_tenant_id(self) -> None:
         from orchestrator.app.neo4j_client import (
-            _service_cypher,
             _database_cypher,
-            _kafka_topic_cypher,
             _k8s_deployment_cypher,
+            _kafka_topic_cypher,
+            _service_cypher,
         )
 
         svc = ServiceNode(

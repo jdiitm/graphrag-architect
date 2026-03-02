@@ -48,8 +48,10 @@ class TestQueryEndpointRateLimiting:
     @pytest.mark.asyncio
     async def test_query_returns_429_when_rate_limited(self):
         from unittest.mock import patch
+
         from httpx import ASGITransport, AsyncClient
-        from orchestrator.app.main import app, _TENANT_LIMITER
+
+        from orchestrator.app.main import _TENANT_LIMITER, app
 
         with patch.object(
             _TENANT_LIMITER, "try_acquire", return_value=False,
