@@ -1,0 +1,29 @@
+{
+  "dev": {
+    "base_url": "http://localhost:8000",
+    "vus": 10,
+    "duration": "1m",
+    "thresholds": {
+      "http_req_duration_p50": 500,
+      "http_req_duration_p99": 2000
+    }
+  },
+  "staging": {
+    "base_url": "https://staging-api.graphrag.internal",
+    "vus": 50,
+    "duration": "5m",
+    "thresholds": {
+      "http_req_duration_p50": 500,
+      "http_req_duration_p99": 2000
+    }
+  },
+  "prod": {
+    "base_url": "https://api.graphrag.internal",
+    "vus": 100,
+    "duration": "10m",
+    "thresholds": {
+      "http_req_duration_p50": 500,
+      "http_req_duration_p99": 2000
+    }
+  }
+}
