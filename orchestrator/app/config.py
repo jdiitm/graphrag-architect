@@ -7,6 +7,10 @@ from dataclasses import dataclass
 _KNOWN_MODES = {"dev", "production"}
 
 
+class ConfigurationError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class AuthConfig:
     token_secret: str = ""
@@ -397,3 +401,65 @@ class ASTExtractionConfig:
                 f"{sorted(_VALID_AST_EXTRACTION_MODES)}, got: {mode!r}"
             )
         return cls(mode=mode)
+
+
+@dataclass(frozen=True)
+class ProductionConfigValidator:
+    deployment_mode: str
+    ast_dlq_backend: str
+    outbox_backend: str
+    vector_sync_backend: str
+
+    @classmethod
+    def from_env(cls) -> ProductionConfigValidator:
+        mode = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
+        redis_url = os.environ.get("REDIS_URL", "")
+        neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
+        vector_sync_backend = os.environ.get("VECTOR_SYNC_BACKEND", "memory")
+
+        ast_dlq_backend = "redis" if redis_url else "memory"
+
+        if neo4j_password:
+            outbox_backend = "neo4j"
+        elif redis_url:
+            outbox_backend = "redis"
+        else:
+            outbox_backend = "memory"
+
+        return cls(
+            deployment_mode=mode,
+            ast_dlq_backend=ast_dlq_backend,
+            outbox_backend=outbox_backend,
+            vector_sync_backend=vector_sync_backend,
+        )
+
+    def validate_production_invariants(self) -> None:
+        if self.deployment_mode != "production":
+            return
+
+        violations: list[str] = []
+
+        if self.ast_dlq_backend == "memory":
+            violations.append(
+                "AST_DLQ_BACKEND resolved to 'memory'. "
+                "Set REDIS_URL to enable durable dead-letter queue."
+            )
+
+        if self.outbox_backend == "memory":
+            violations.append(
+                "OUTBOX_BACKEND resolved to 'memory'. "
+                "Set NEO4J_PASSWORD or REDIS_URL to enable durable outbox storage."
+            )
+
+        if self.vector_sync_backend == "memory":
+            violations.append(
+                "VECTOR_SYNC_BACKEND='memory' is not permitted. "
+                "Set VECTOR_SYNC_BACKEND to 'kafka' or 'redis'."
+            )
+
+        if violations:
+            raise ConfigurationError(
+                "DEPLOYMENT_MODE=production but volatile in-memory backends "
+                "detected. Pod eviction would cause irreversible data loss:\n"
+                + "\n".join(f"  - {v}" for v in violations)
+            )
