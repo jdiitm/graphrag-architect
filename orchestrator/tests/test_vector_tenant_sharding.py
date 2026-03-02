@@ -178,12 +178,6 @@ class TestQdrantShardKeyRouting:
 
 class TestVectorCollectionManager:
 
-    def test_collection_manager_exists(self) -> None:
-        from orchestrator.app.vector_collection_manager import (
-            VectorCollectionManager,
-        )
-        assert VectorCollectionManager is not None
-
     @pytest.mark.asyncio
     async def test_ensure_collection_creates_with_custom_sharding(self) -> None:
         from orchestrator.app.vector_collection_manager import (
@@ -201,6 +195,8 @@ class TestVectorCollectionManager:
         mock_client.create_collection.assert_awaited_once()
         call_kwargs = mock_client.create_collection.call_args
         assert call_kwargs.kwargs.get("collection_name") == "test_collection"
+        assert call_kwargs.kwargs.get("sharding_method") == "custom"
+        assert call_kwargs.kwargs.get("shard_number") == 1
 
     @pytest.mark.asyncio
     async def test_ensure_collection_skips_if_exists(self) -> None:
@@ -236,6 +232,58 @@ class TestVectorCollectionManager:
         assert call_kwargs.kwargs.get("collection_name") == "test_collection"
         assert call_kwargs.kwargs.get("shard_key") == "t1"
 
+    @pytest.mark.asyncio
+    async def test_ensure_shard_key_cached_idempotent(self) -> None:
+        from orchestrator.app.vector_collection_manager import (
+            VectorCollectionManager,
+        )
+        mock_client = AsyncMock()
+        manager = VectorCollectionManager(client=mock_client)
+
+        await manager.ensure_shard_key(
+            collection_name="test_collection",
+            shard_key="t1",
+        )
+        await manager.ensure_shard_key(
+            collection_name="test_collection",
+            shard_key="t1",
+        )
+
+        assert mock_client.create_shard_key.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_ensure_shard_key_reraises_non_duplicate_errors(self) -> None:
+        from orchestrator.app.vector_collection_manager import (
+            VectorCollectionManager,
+        )
+        mock_client = AsyncMock()
+        mock_client.create_shard_key = AsyncMock(
+            side_effect=ConnectionError("connection refused"),
+        )
+        manager = VectorCollectionManager(client=mock_client)
+
+        with pytest.raises(ConnectionError, match="connection refused"):
+            await manager.ensure_shard_key(
+                collection_name="test_collection",
+                shard_key="t1",
+            )
+
+    @pytest.mark.asyncio
+    async def test_ensure_shard_key_tolerates_duplicate_error(self) -> None:
+        from orchestrator.app.vector_collection_manager import (
+            VectorCollectionManager,
+        )
+        mock_client = AsyncMock()
+        mock_client.create_shard_key = AsyncMock(
+            side_effect=RuntimeError("Shard key already exists"),
+        )
+        manager = VectorCollectionManager(client=mock_client)
+
+        await manager.ensure_shard_key(
+            collection_name="test_collection",
+            shard_key="t1",
+        )
+
 
 class TestFactoryPassesShardConfig:
 
@@ -255,6 +303,37 @@ class TestFactoryPassesShardConfig:
         )
         assert isinstance(store, QdrantVectorStore)
         assert store._shard_by_tenant is False
+
+
+class TestQdrantCollectionManagerIntegration:
+
+    @pytest.mark.asyncio
+    async def test_ensure_tenant_shard_calls_manager(self) -> None:
+        store = QdrantVectorStore(
+            url="http://localhost:6333",
+            shard_by_tenant=True,
+        )
+        mock_manager = AsyncMock()
+        store._collection_manager = mock_manager
+
+        await store.ensure_tenant_shard("test_collection", "t1")
+
+        mock_manager.ensure_shard_key.assert_awaited_once_with(
+            collection_name="test_collection", shard_key="t1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_ensure_tenant_shard_noop_when_disabled(self) -> None:
+        store = QdrantVectorStore(
+            url="http://localhost:6333",
+            shard_by_tenant=False,
+        )
+        mock_manager = AsyncMock()
+        store._collection_manager = mock_manager
+
+        await store.ensure_tenant_shard("test_collection", "t1")
+
+        mock_manager.ensure_shard_key.assert_not_awaited()
 
 
 class TestBackwardCompatibility:

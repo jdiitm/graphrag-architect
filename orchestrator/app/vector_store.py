@@ -43,7 +43,10 @@ def _cosine_similarity(a: List[float], b: List[float]) -> float:
 @runtime_checkable
 class VectorStore(Protocol):
     async def upsert(
-        self, collection: str, vectors: List[VectorRecord]
+        self,
+        collection: str,
+        vectors: List[VectorRecord],
+        tenant_id: str = "",
     ) -> int:
         ...
 
@@ -64,8 +67,10 @@ class InMemoryVectorStore:
         self._store: Dict[str, Dict[str, VectorRecord]] = {}
 
     async def upsert(
-        self, collection: str, vectors: List[VectorRecord]
+        self, collection: str, vectors: List[VectorRecord],
+        tenant_id: str = "",
     ) -> int:
+        _ = tenant_id
         if collection not in self._store:
             self._store[collection] = {}
         for record in vectors:
@@ -156,6 +161,7 @@ class QdrantVectorStore:
         self._client: Optional[Any] = None
         self._search_timeout = search_timeout_seconds
         self._shard_by_tenant = shard_by_tenant
+        self._collection_manager: Optional[Any] = None
         if circuit_breaker is not None:
             self._circuit_breaker = circuit_breaker
         else:
@@ -167,6 +173,26 @@ class QdrantVectorStore:
                 config=CircuitBreakerConfig(failure_threshold=3, recovery_timeout=30.0),
                 name="qdrant",
             )
+
+    def _get_collection_manager(self) -> Any:
+        if self._collection_manager is None:
+            from orchestrator.app.vector_collection_manager import (
+                VectorCollectionManager,
+            )
+            self._collection_manager = VectorCollectionManager(
+                client=self._get_client(),
+            )
+        return self._collection_manager
+
+    async def ensure_tenant_shard(
+        self, collection: str, tenant_id: str,
+    ) -> None:
+        if not self._shard_by_tenant or not tenant_id:
+            return
+        manager = self._get_collection_manager()
+        await manager.ensure_shard_key(
+            collection_name=collection, shard_key=tenant_id,
+        )
 
     def _get_client(self) -> Any:
         if self._client is None:

@@ -296,6 +296,7 @@ def get_vector_store() -> Any:
             api_key=vs_cfg.qdrant_api_key,
             pool_size=vs_cfg.pool_size,
             deployment_mode=vs_cfg.deployment_mode,
+            shard_by_tenant=vs_cfg.shard_by_tenant,
         )
     return _VectorStoreHolder.value
 

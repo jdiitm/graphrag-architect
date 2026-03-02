@@ -6,6 +6,15 @@ from typing import Any, Optional, Set
 logger = logging.getLogger(__name__)
 
 
+class ShardKeyAlreadyExistsError(Exception):
+    pass
+
+
+def _is_duplicate_shard_key_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "already exists" in msg or "duplicate" in msg
+
+
 class VectorCollectionManager:
     def __init__(
         self,
@@ -68,11 +77,14 @@ class VectorCollectionManager:
                 shard_key,
                 collection_name,
             )
-        except Exception:
-            logger.debug(
-                "Shard key %s may already exist in %s",
-                shard_key,
-                collection_name,
-            )
+        except Exception as exc:
+            if _is_duplicate_shard_key_error(exc):
+                logger.debug(
+                    "Shard key %s already exists in %s",
+                    shard_key,
+                    collection_name,
+                )
+            else:
+                raise
 
         self._known_shard_keys.add(cache_key)
