@@ -67,7 +67,7 @@ from orchestrator.app.subgraph_cache import (
     create_subgraph_cache,
 )
 from orchestrator.app.config import VectorStoreConfig
-from orchestrator.app.vector_store import SearchResult, create_vector_store
+from orchestrator.app.vector_store import SearchResult, VectorDegradedError, create_vector_store
 from orchestrator.app.neo4j_pool import (
     get_driver,
     get_query_timeout,
@@ -356,6 +356,8 @@ def _prompt_guardrails_enabled() -> bool:
 
 
 def _injection_hard_block_enabled() -> bool:
+    if _is_query_production_mode():
+        return True
     return os.environ.get("INJECTION_HARD_BLOCK_ENABLED", "true").lower() != "false"
 
 
@@ -594,16 +596,30 @@ async def vector_retrieve(state: QueryState) -> dict:
         start = time.monotonic()
         try:
             tenant_id = state.get("tenant_id", "")
-            embedding = await _embed_query(state["query"], tenant_id=tenant_id)
-            degraded = embedding is None
-            async with _neo4j_session(tenant_id=state.get("tenant_id", "")) as driver:
-                candidates = await _fetch_candidates_with_embedding(
-                    driver, state, embedding,
+            try:
+                embedding = await _embed_query(state["query"], tenant_id=tenant_id)
+            except (CircuitOpenError, VectorDegradedError):
+                _query_logger.warning(
+                    "Vector retrieval unavailable, degrading to empty candidates",
                 )
-                result: dict = {"candidates": candidates}
-                if degraded:
-                    result["retrieval_degraded"] = True
-                return result
+                return {"candidates": [], "retrieval_degraded": True}
+            degraded = embedding is None
+            try:
+                async with _neo4j_session(
+                    tenant_id=state.get("tenant_id", ""),
+                ) as driver:
+                    candidates = await _fetch_candidates_with_embedding(
+                        driver, state, embedding,
+                    )
+            except (CircuitOpenError, VectorDegradedError):
+                _query_logger.warning(
+                    "Vector store search failed, degrading to empty candidates",
+                )
+                return {"candidates": [], "retrieval_degraded": True}
+            result: dict = {"candidates": candidates}
+            if degraded:
+                result["retrieval_degraded"] = True
+            return result
         finally:
             QUERY_DURATION.record(
                 (time.monotonic() - start) * 1000, {"node": "vector_retrieve"}

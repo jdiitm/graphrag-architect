@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
+
+
+class VectorDegradedError(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -128,6 +133,9 @@ class InMemoryVectorStore:
         ]
 
 
+_DEFAULT_SEARCH_TIMEOUT_SECONDS = 10.0
+
+
 class QdrantVectorStore:
     is_read_replica: bool = True
 
@@ -138,12 +146,14 @@ class QdrantVectorStore:
         prefer_grpc: bool = True,
         deployment_mode: str = "dev",
         circuit_breaker: Optional[Any] = None,
+        search_timeout_seconds: float = _DEFAULT_SEARCH_TIMEOUT_SECONDS,
     ) -> None:
         self._url = url
         self._api_key = api_key
         self._prefer_grpc = prefer_grpc
         self._deployment_mode = deployment_mode
         self._client: Optional[Any] = None
+        self._search_timeout = search_timeout_seconds
         if circuit_breaker is not None:
             self._circuit_breaker = circuit_breaker
         else:
@@ -196,10 +206,13 @@ class QdrantVectorStore:
     ) -> List[SearchResult]:
         async def _do_search() -> List[SearchResult]:
             client = self._get_client()
-            results = await client.search(
-                collection_name=collection,
-                query_vector=query_vector,
-                limit=limit,
+            results = await asyncio.wait_for(
+                client.search(
+                    collection_name=collection,
+                    query_vector=query_vector,
+                    limit=limit,
+                ),
+                timeout=self._search_timeout,
             )
             return [
                 SearchResult(
@@ -210,7 +223,12 @@ class QdrantVectorStore:
                 for hit in results
             ]
 
-        return await self._circuit_breaker.call(_do_search)
+        try:
+            return await self._circuit_breaker.call(_do_search)
+        except asyncio.TimeoutError as exc:
+            raise VectorDegradedError(
+                f"Qdrant search timed out after {self._search_timeout}s"
+            ) from exc
 
     async def delete(self, collection: str, ids: List[str], tenant_id: str = "") -> int:
         client = self._get_client()
@@ -261,11 +279,14 @@ class QdrantVectorStore:
                     ),
                 ],
             )
-            results = await client.search(
-                collection_name=collection,
-                query_vector=query_vector,
-                query_filter=query_filter,
-                limit=limit,
+            results = await asyncio.wait_for(
+                client.search(
+                    collection_name=collection,
+                    query_vector=query_vector,
+                    query_filter=query_filter,
+                    limit=limit,
+                ),
+                timeout=self._search_timeout,
             )
             return [
                 SearchResult(
@@ -276,7 +297,12 @@ class QdrantVectorStore:
                 for hit in results
             ]
 
-        return await self._circuit_breaker.call(_do_search)
+        try:
+            return await self._circuit_breaker.call(_do_search)
+        except asyncio.TimeoutError as exc:
+            raise VectorDegradedError(
+                f"Qdrant search timed out after {self._search_timeout}s"
+            ) from exc
 
 
 def create_vector_store(

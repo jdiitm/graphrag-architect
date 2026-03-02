@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.app.config import ASTExtractionConfig
+from orchestrator.app.config import ASTExtractionConfig, ConfigurationError
 
 
 class TestASTRemoteDefault:
@@ -58,18 +58,17 @@ class TestUseRemoteASTAlignment:
 
 class TestProductionLocalModeWarning:
 
-    def test_production_local_mode_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_production_local_mode_raises_configuration_error(self) -> None:
         with patch.dict(
             os.environ,
             {"DEPLOYMENT_MODE": "production", "AST_EXTRACTION_MODE": "local"},
             clear=False,
         ):
-            with caplog.at_level(logging.WARNING):
-                from orchestrator.app.graph_builder import (
-                    warn_if_local_ast_in_production,
-                )
+            from orchestrator.app.graph_builder import (
+                warn_if_local_ast_in_production,
+            )
+            with pytest.raises(ConfigurationError, match="CPU starvation"):
                 warn_if_local_ast_in_production()
-            assert any("local" in r.message.lower() for r in caplog.records)
 
     def test_dev_local_mode_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         with patch.dict(
