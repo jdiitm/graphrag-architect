@@ -119,13 +119,10 @@ class TestCommitToNeo4jErrorLogging:
         from orchestrator.app.graph_builder import commit_to_neo4j
 
         mock_span = MagicMock()
-        mock_tracer = MagicMock()
-        mock_tracer.start_as_current_span.return_value.__enter__ = (
-            MagicMock(return_value=mock_span)
-        )
-        mock_tracer.start_as_current_span.return_value.__exit__ = (
-            MagicMock(return_value=False)
-        )
+        mock_span.__enter__ = MagicMock(return_value=mock_span)
+        mock_span.__exit__ = MagicMock(return_value=False)
+        mock_tracing = MagicMock()
+        mock_tracing.start_span.return_value = mock_span
 
         with (
             patch.dict("os.environ", _ENV_VARS),
@@ -134,8 +131,8 @@ class TestCommitToNeo4jErrorLogging:
                 side_effect=OSError("Connection refused"),
             ),
             patch(
-                "orchestrator.app.graph_builder.get_tracer",
-                return_value=mock_tracer,
+                "orchestrator.app.graph_builder.get_tracing_port",
+                return_value=mock_tracing,
             ),
         ):
             result = await commit_to_neo4j({
@@ -155,13 +152,10 @@ class TestCommitToNeo4jErrorLogging:
         from orchestrator.app.graph_builder import commit_to_neo4j
 
         mock_span = MagicMock()
-        mock_tracer = MagicMock()
-        mock_tracer.start_as_current_span.return_value.__enter__ = (
-            MagicMock(return_value=mock_span)
-        )
-        mock_tracer.start_as_current_span.return_value.__exit__ = (
-            MagicMock(return_value=False)
-        )
+        mock_span.__enter__ = MagicMock(return_value=mock_span)
+        mock_span.__exit__ = MagicMock(return_value=False)
+        mock_tracing = MagicMock()
+        mock_tracing.start_span.return_value = mock_span
 
         os_error = OSError("Connection refused")
         with (
@@ -171,8 +165,8 @@ class TestCommitToNeo4jErrorLogging:
                 side_effect=os_error,
             ),
             patch(
-                "orchestrator.app.graph_builder.get_tracer",
-                return_value=mock_tracer,
+                "orchestrator.app.graph_builder.get_tracing_port",
+                return_value=mock_tracing,
             ),
         ):
             result = await commit_to_neo4j({

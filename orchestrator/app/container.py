@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from orchestrator.app.circuit_breaker import (
     CircuitBreaker,
@@ -10,6 +10,12 @@ from orchestrator.app.circuit_breaker import (
     StateStore,
 )
 from orchestrator.app.config import AuthConfig, ExtractionConfig, RedisConfig
+from orchestrator.app.telemetry_ports import (
+    MetricsPort,
+    NoopMetricsPort,
+    NoopTracingPort,
+    TracingPort,
+)
 
 
 def _build_state_store() -> StateStore:
@@ -29,6 +35,8 @@ class AppContainer:
     circuit_breaker: CircuitBreaker
     auth_config: AuthConfig
     extraction_config: ExtractionConfig
+    tracing_port: TracingPort = field(default_factory=NoopTracingPort)
+    metrics_port: MetricsPort = field(default_factory=NoopMetricsPort)
 
     @classmethod
     def from_env(cls) -> AppContainer:

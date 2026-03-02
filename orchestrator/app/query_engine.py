@@ -75,7 +75,7 @@ from orchestrator.app.neo4j_pool import (
     get_tenant_registry,
     resolve_driver_for_tenant,
 )
-from orchestrator.app.observability import EMBEDDING_FALLBACK_TOTAL, QUERY_DURATION, get_tracer
+from orchestrator.app.telemetry_ports import get_metrics_port, get_tracing_port
 from orchestrator.app.query_classifier import classify_query
 from orchestrator.app.query_models import QueryComplexity, QueryState
 from orchestrator.app.rag_evaluator import (
@@ -239,13 +239,15 @@ async def _embed_query(text: str, tenant_id: str = "") -> Optional[List[float]]:
         return await _CB_EMBEDDING_GLOBAL.call(tenant_id, _raw_embed_query, text)
     except CircuitOpenError:
         _query_logger.warning("Embedding circuit open, falling back to fulltext")
-        EMBEDDING_FALLBACK_TOTAL.add(1, {"reason": "circuit_open"})
+        get_metrics_port().increment_counter(
+            "embedding.fallback_total", 1, {"reason": "circuit_open"},
+        )
         return None
     except Exception:
         _query_logger.warning(
             "Embedding unavailable, falling back to fulltext", exc_info=True,
         )
-        EMBEDDING_FALLBACK_TOTAL.add(1, {"reason": "exception"})
+        get_metrics_port().increment_counter("embedding.fallback_total", 1, {"reason": "exception"})
     return None
 
 
@@ -633,14 +635,13 @@ async def synthesize_with_concurrent_scan(
 
 
 def classify_query_node(state: QueryState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("query.classify") as span:
+    with get_tracing_port().start_span("query.classify") as span:
         start = time.monotonic()
         complexity = classify_query(state["query"])
         fusion_hint = classify_fusion_hint(state["query"])
         span.set_attribute("query.complexity", complexity.value)
-        QUERY_DURATION.record(
-            (time.monotonic() - start) * 1000, {"node": "classify"}
+        get_metrics_port().record_duration(
+            "query.duration_ms", (time.monotonic() - start) * 1000, {"node": "classify"}
         )
         return {
             "complexity": complexity,
@@ -660,8 +661,7 @@ def route_query(state: QueryState) -> str:
 
 
 async def vector_retrieve(state: QueryState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("query.vector_retrieve"):
+    with get_tracing_port().start_span("query.vector_retrieve"):
         start = time.monotonic()
         try:
             tenant_id = state.get("tenant_id", "")
@@ -690,8 +690,8 @@ async def vector_retrieve(state: QueryState) -> dict:
                 result["retrieval_degraded"] = True
             return result
         finally:
-            QUERY_DURATION.record(
-                (time.monotonic() - start) * 1000, {"node": "vector_retrieve"}
+            get_metrics_port().record_duration(
+                "query.duration_ms", (time.monotonic() - start) * 1000, {"node": "vector_retrieve"}
             )
 
 
@@ -759,8 +759,7 @@ def _build_single_hop_cypher() -> str:
 
 
 async def single_hop_retrieve(state: QueryState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("query.single_hop_retrieve"):
+    with get_tracing_port().start_span("query.single_hop_retrieve"):
         start = time.monotonic()
         try:
             async with _neo4j_session(tenant_id=state.get("tenant_id", "")) as driver:
@@ -799,8 +798,8 @@ async def single_hop_retrieve(state: QueryState) -> dict:
                     ),
                 }
         finally:
-            QUERY_DURATION.record(
-                (time.monotonic() - start) * 1000,
+            get_metrics_port().record_duration(
+                "query.duration_ms", (time.monotonic() - start) * 1000,
                 {"node": "single_hop_retrieve"},
             )
 
@@ -938,8 +937,7 @@ def _store_in_semantic_cache(
 
 
 async def cypher_retrieve(state: QueryState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("query.cypher_retrieve"):
+    with get_tracing_port().start_span("query.cypher_retrieve"):
         start = time.monotonic()
         try:
             tenant_id = state.get("tenant_id", "")
@@ -1008,8 +1006,8 @@ async def cypher_retrieve(state: QueryState) -> dict:
                     )
                 raise
         finally:
-            QUERY_DURATION.record(
-                (time.monotonic() - start) * 1000, {"node": "cypher_retrieve"}
+            get_metrics_port().record_duration(
+                "query.duration_ms", (time.monotonic() - start) * 1000, {"node": "cypher_retrieve"}
             )
 
 
@@ -1033,8 +1031,7 @@ def extract_start_node_degree(
 
 
 async def hybrid_retrieve(state: QueryState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("query.hybrid_retrieve"):
+    with get_tracing_port().start_span("query.hybrid_retrieve"):
         start = time.monotonic()
         try:
             async with _neo4j_session(tenant_id=state.get("tenant_id", "")) as driver:
@@ -1069,14 +1066,13 @@ async def hybrid_retrieve(state: QueryState) -> dict:
                     "iteration_count": 0,
                 }
         finally:
-            QUERY_DURATION.record(
-                (time.monotonic() - start) * 1000, {"node": "hybrid_retrieve"}
+            get_metrics_port().record_duration(
+                "query.duration_ms", (time.monotonic() - start) * 1000, {"node": "hybrid_retrieve"}
             )
 
 
 async def compress_context(state: QueryState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("query.compress_context"):
+    with get_tracing_port().start_span("query.compress_context"):
         context: List[Dict[str, Any]] = []
         if state.get("candidates"):
             context.extend(state["candidates"])
@@ -1103,12 +1099,11 @@ async def compress_context(state: QueryState) -> dict:
 
 
 async def synthesize_answer(state: QueryState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("query.synthesize"):
+    with get_tracing_port().start_span("query.synthesize"):
         start = time.monotonic()
         result = await _do_synthesize(state)
-        QUERY_DURATION.record(
-            (time.monotonic() - start) * 1000, {"node": "synthesize"}
+        get_metrics_port().record_duration(
+            "query.duration_ms", (time.monotonic() - start) * 1000, {"node": "synthesize"}
         )
         return result
 
@@ -1348,8 +1343,7 @@ async def _run_background_evaluation(
     query_id: str,
     state: dict,
 ) -> None:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("query.evaluate_background"):
+    with get_tracing_port().start_span("query.evaluate_background"):
         start = time.monotonic()
         try:
             eval_config = RAGEvalConfig.from_env()
@@ -1382,8 +1376,8 @@ async def _run_background_evaluation(
                 "query_id": query_id,
             })
         finally:
-            QUERY_DURATION.record(
-                (time.monotonic() - start) * 1000, {"node": "evaluate"}
+            get_metrics_port().record_duration(
+                "query.duration_ms", (time.monotonic() - start) * 1000, {"node": "evaluate"}
             )
 
 

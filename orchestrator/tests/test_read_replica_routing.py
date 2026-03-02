@@ -300,8 +300,8 @@ class TestGDSPathUsesWriteDriver:
             patch("orchestrator.app.query_engine._get_degree_cap", return_value=500),
             patch("orchestrator.app.query_engine._get_query_timeout", return_value=30.0),
             patch("orchestrator.app.query_engine.gds_pagerank_filter", side_effect=capture_gds),
-            patch("orchestrator.app.query_engine.get_tracer", return_value=MagicMock()),
-            patch("orchestrator.app.query_engine.QUERY_DURATION"),
+            patch("orchestrator.app.query_engine.get_tracing_port", return_value=MagicMock()),
+            patch("orchestrator.app.query_engine.get_metrics_port", return_value=MagicMock()),
         ):
             state = {"query": "test query", "tenant_id": ""}
             await single_hop_retrieve(state)

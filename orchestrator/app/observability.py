@@ -116,6 +116,19 @@ def configure_telemetry(
 
     trace.set_tracer_provider(provider)
     _STATE["tracer"] = provider.get_tracer(_SERVICE_NAME)
+
+    from orchestrator.app.telemetry_ports import (
+        OTelMetricsPort,
+        OTelTracingPort,
+        set_metrics_port,
+        set_tracing_port,
+    )
+    set_tracing_port(OTelTracingPort(_STATE["tracer"]))
+    set_metrics_port(OTelMetricsPort(
+        histograms=_HISTOGRAM_REGISTRY,
+        counters=_COUNTER_REGISTRY,
+    ))
+
     return provider
 
 
@@ -179,6 +192,21 @@ EMBEDDING_FALLBACK_TOTAL = meter.create_counter(
     name="embedding.fallback_total",
     description="Total embedding fallbacks to fulltext search",
 )
+
+_HISTOGRAM_REGISTRY = {
+    "ingestion.duration_ms": INGESTION_DURATION,
+    "llm.extraction_duration_ms": LLM_EXTRACTION_DURATION,
+    "neo4j.transaction_duration_ms": NEO4J_TRANSACTION_DURATION,
+    "query.duration_ms": QUERY_DURATION,
+}
+
+_COUNTER_REGISTRY = {
+    "query.total": QUERY_TOTAL,
+    "query.errors": QUERY_ERRORS,
+    "ingestion.total": INGESTION_TOTAL,
+    "ingestion.errors": INGESTION_ERRORS,
+    "embedding.fallback_total": EMBEDDING_FALLBACK_TOTAL,
+}
 
 
 class ErrorBudgetTracker:

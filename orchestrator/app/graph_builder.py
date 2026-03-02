@@ -36,12 +36,7 @@ from orchestrator.app.circuit_breaker import (
 from orchestrator.app.entity_resolver import EntityResolver
 from orchestrator.app.neo4j_client import GraphRepository
 from orchestrator.app.neo4j_pool import get_driver
-from orchestrator.app.observability import (
-    INGESTION_DURATION,
-    LLM_EXTRACTION_DURATION,
-    NEO4J_TRANSACTION_DURATION,
-    get_tracer,
-)
+from orchestrator.app.telemetry_ports import get_metrics_port, get_tracing_port
 from orchestrator.app.schema_validation import validate_topology
 from orchestrator.app.checkpoint_store import get_checkpointer
 from orchestrator.app.node_sink import IncrementalNodeSink
@@ -455,14 +450,14 @@ def _load_files_sync(
 
 
 async def load_workspace_files(state: IngestionState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("ingestion.load_workspace") as span:
+    with get_tracing_port().start_span("ingestion.load_workspace") as span:
         start = time.monotonic()
         directory_path = state.get("directory_path", "")
         if not directory_path:
             files = state.get("raw_files", [])
             span.set_attribute("file_count", len(files))
-            INGESTION_DURATION.record(
+            get_metrics_port().record_duration(
+                "ingestion.duration_ms",
                 (time.monotonic() - start) * 1000, {"node": "load_workspace"}
             )
             return {"raw_files": files}
@@ -478,7 +473,8 @@ async def load_workspace_files(state: IngestionState) -> dict:
                 len(skipped),
                 ", ".join(skipped[:10]),
             )
-        INGESTION_DURATION.record(
+        get_metrics_port().record_duration(
+            "ingestion.duration_ms",
             (time.monotonic() - start) * 1000, {"node": "load_workspace"}
         )
         return {
@@ -567,8 +563,7 @@ async def _extract_via_grpc(
 
 
 async def parse_source_ast(state: IngestionState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("ingestion.parse_source_ast"):
+    with get_tracing_port().start_span("ingestion.parse_source_ast"):
         start = time.monotonic()
         raw_files = state.get("raw_files", [])
         checkpoint = _load_or_create_checkpoint(state, raw_files)
@@ -581,7 +576,8 @@ async def parse_source_ast(state: IngestionState) -> dict:
                 + [f["path"] for f in pending if f["path"].endswith(".py")]
             )
             checkpoint.mark(extracted_paths, FileStatus.EXTRACTED)
-            INGESTION_DURATION.record(
+            get_metrics_port().record_duration(
+                "ingestion.duration_ms",
                 (time.monotonic() - start) * 1000,
                 {"node": "parse_source_ast"},
             )
@@ -634,7 +630,8 @@ async def parse_source_ast(state: IngestionState) -> dict:
             + [f["path"] for f in pending if f["path"].endswith(".py")]
         )
         checkpoint.mark(extracted_paths, FileStatus.EXTRACTED)
-        INGESTION_DURATION.record(
+        get_metrics_port().record_duration(
+            "ingestion.duration_ms",
             (time.monotonic() - start) * 1000, {"node": "parse_source_ast"}
         )
         return {
@@ -653,8 +650,7 @@ def _load_or_create_checkpoint(
 
 
 async def enrich_with_llm(state: IngestionState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("ingestion.enrich_with_llm"):
+    with get_tracing_port().start_span("ingestion.enrich_with_llm"):
         start = time.monotonic()
         existing = list(state.get("extracted_nodes", []))
         try:
@@ -686,12 +682,13 @@ async def enrich_with_llm(state: IngestionState) -> dict:
         except Exception:
             logger.warning("LLM enrichment unavailable, using AST results only")
         elapsed_ms = (time.monotonic() - start) * 1000
-        LLM_EXTRACTION_DURATION.record(elapsed_ms, {"node": "enrich_with_llm"})
+        get_metrics_port().record_duration(
+            "llm.extraction_duration_ms", elapsed_ms, {"node": "enrich_with_llm"},
+        )
         return {"extracted_nodes": existing}
 
 async def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("ingestion.parse_manifests"):
+    with get_tracing_port().start_span("ingestion.parse_manifests"):
         start = time.monotonic()
         raw_files = state.get("raw_files", [])
         existing = list(state.get("extracted_nodes", []))
@@ -705,7 +702,8 @@ async def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
             if f["path"].endswith((".yaml", ".yml"))
         ]
         checkpoint.mark(yaml_paths, FileStatus.EXTRACTED)
-        INGESTION_DURATION.record(
+        get_metrics_port().record_duration(
+            "ingestion.duration_ms",
             (time.monotonic() - start) * 1000, {"node": "parse_manifests"}
         )
         return {
@@ -714,8 +712,7 @@ async def parse_k8s_and_kafka_manifests(state: IngestionState) -> dict:
         }
 
 async def validate_extracted_schema(state: IngestionState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("ingestion.validate_schema"):
+    with get_tracing_port().start_span("ingestion.validate_schema"):
         errors = await asyncio.to_thread(
             validate_topology, state.get("extracted_nodes", []),
         )
@@ -756,8 +753,7 @@ def _dedup_llm_against_ast(
 
 
 async def fix_extraction_errors(state: IngestionState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("ingestion.fix_errors"):
+    with get_tracing_port().start_span("ingestion.fix_errors"):
         start = time.monotonic()
         existing = state.get("extracted_nodes", [])
         raw_files = state.get("raw_files", [])
@@ -775,7 +771,8 @@ async def fix_extraction_errors(state: IngestionState) -> dict:
         checkpoint.mark([f["path"] for f in failed_files], FileStatus.EXTRACTED)
         llm_services, llm_calls = _dedup_llm_against_ast(ast_entities, result)
 
-        LLM_EXTRACTION_DURATION.record(
+        get_metrics_port().record_duration(
+            "llm.extraction_duration_ms",
             (time.monotonic() - start) * 1000, {"node": "fix_errors"}
         )
         return {
@@ -1001,8 +998,7 @@ class PeriodicVectorDrainer:
 
 
 async def commit_to_neo4j(state: IngestionState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("ingestion.commit_neo4j") as span:
+    with get_tracing_port().start_span("ingestion.commit_neo4j") as span:
         start = time.monotonic()
         try:
             entities = state.get("extracted_nodes", [])
@@ -1038,7 +1034,8 @@ async def commit_to_neo4j(state: IngestionState) -> dict:
             logger.error("Neo4j commit failed: %s", exc)
             return {"commit_status": "failed"}
         finally:
-            NEO4J_TRANSACTION_DURATION.record(
+            get_metrics_port().record_duration(
+                "neo4j.transaction_duration_ms",
                 (time.monotonic() - start) * 1000, {"node": "commit_neo4j"}
             )
 
@@ -1119,8 +1116,7 @@ class StreamingIngestionPipeline:
 
 
 async def run_streaming_pipeline(state: IngestionState) -> dict:
-    tracer = get_tracer()
-    with tracer.start_as_current_span("ingestion.streaming_pipeline") as span:
+    with get_tracing_port().start_span("ingestion.streaming_pipeline") as span:
         directory_path = state.get("directory_path", "")
         pipeline = StreamingIngestionPipeline()
 
