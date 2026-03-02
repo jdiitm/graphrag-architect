@@ -165,7 +165,11 @@ def create_durable_spillover_fn(
             for event in events:
                 loop.create_task(store.write_event(event))
         except RuntimeError:
-            pass
+            logger.warning(
+                "No running event loop for durable spillover; "
+                "%d events buffered in pending list",
+                len(events),
+            )
 
     _spillover.pending = pending  # type: ignore[attr-defined]
     return _spillover

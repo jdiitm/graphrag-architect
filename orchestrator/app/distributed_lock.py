@@ -282,3 +282,42 @@ def create_ingestion_semaphore(
             redis_conn=conn, key=key, max_concurrent=max_concurrent,
         )
     return LocalFallbackSemaphore(max_concurrent=max_concurrent)
+
+
+class TenantAwareSemaphore:
+    def __init__(
+        self,
+        max_concurrent: int = 10,
+        per_tenant_max: int = 0,
+    ) -> None:
+        self._global_max = max_concurrent
+        self._per_tenant_max = per_tenant_max or max(1, max_concurrent // 4)
+        self._global_active: Dict[str, float] = {}
+        self._tenant_active: Dict[str, Dict[str, float]] = {}
+        self._lock = asyncio.Lock()
+
+    async def try_acquire(
+        self, tenant_id: str = "",
+    ) -> Tuple[bool, str]:
+        async with self._lock:
+            if len(self._global_active) >= self._global_max:
+                return False, ""
+            if tenant_id:
+                tenant_slots = self._tenant_active.get(tenant_id, {})
+                if len(tenant_slots) >= self._per_tenant_max:
+                    return False, ""
+            token = uuid.uuid4().hex
+            self._global_active[token] = time.time()
+            if tenant_id:
+                self._tenant_active.setdefault(tenant_id, {})[token] = time.time()
+            return True, token
+
+    async def release(self, token: str) -> None:
+        async with self._lock:
+            self._global_active.pop(token, None)
+            for tenant_slots in self._tenant_active.values():
+                tenant_slots.pop(token, None)
+
+    @property
+    def active_count(self) -> int:
+        return len(self._global_active)

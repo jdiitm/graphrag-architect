@@ -10,11 +10,8 @@ from orchestrator.app.tenant_isolation import (
     IsolationMode,
     TenantRegistry,
     TenantRouter,
+    UnknownTenantError,
 )
-
-
-class UnknownTenantError(LookupError):
-    pass
 
 
 class RegistryUnavailableError(RuntimeError):

@@ -24,6 +24,10 @@ class LogicalIsolationInProductionError(Exception):
     pass
 
 
+class UnknownTenantError(LookupError):
+    pass
+
+
 @dataclass(frozen=True)
 class TenantConfig:
     tenant_id: str
@@ -138,7 +142,10 @@ class TenantRouter:
     def resolve_database(self, tenant_id: str) -> str:
         config = self._registry.get(tenant_id)
         if config is None:
-            return _DEFAULT_DATABASE
+            raise UnknownTenantError(
+                f"Tenant {tenant_id!r} is not registered. "
+                f"Fail-closed: refusing to route to default database."
+            )
         return config.database_name
 
     def session_kwargs(self, tenant_id: str) -> Dict[str, Any]:
