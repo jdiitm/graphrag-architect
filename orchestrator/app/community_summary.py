@@ -44,3 +44,26 @@ def retrieve_community_summaries(
     tenant_id: str,
 ) -> List[CommunitySummary]:
     return store.get_by_tenant(tenant_id)
+
+
+def generate_summary(
+    member_names: List[str],
+    member_types: List[str],
+) -> str:
+    type_counts: Dict[str, int] = {}
+    for mtype in member_types:
+        type_counts[mtype] = type_counts.get(mtype, 0) + 1
+
+    parts: List[str] = []
+    for node_type, count in sorted(type_counts.items()):
+        parts.append(f"{count} {node_type}(s)")
+    type_summary = ", ".join(parts)
+
+    names_str = ", ".join(member_names[:10])
+    if len(member_names) > 10:
+        names_str += f" and {len(member_names) - 10} more"
+
+    return (
+        f"Community of {len(member_names)} nodes ({type_summary}): "
+        f"{names_str}."
+    )

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from orchestrator.app.graph_embeddings import GraphTopology
+from orchestrator.app.macro_node import MacroNode
 from orchestrator.app.prompt_sanitizer import (
     ContentFirewall,
     HMACDelimiter,
@@ -679,3 +680,12 @@ def parse_context_block(raw: str) -> ContextBlock:
     if not _HMAC_DELIMITER.validate(delimiter):
         raise ValueError("Context block delimiter failed HMAC validation")
     return ContextBlock(content=match.group(2), delimiter=delimiter)
+
+
+def format_macro_node_context(macro_node: MacroNode) -> str:
+    return (
+        f"[MacroNode {macro_node.node_id}] "
+        f"(community={macro_node.community_id}, "
+        f"members={macro_node.member_count}): "
+        f"{macro_node.summary_text}"
+    )
