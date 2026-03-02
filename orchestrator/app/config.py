@@ -148,15 +148,18 @@ class VectorStoreConfig:
     qdrant_api_key: str = ""
     pool_size: int = 4
     deployment_mode: str = "dev"
+    shard_by_tenant: bool = False
 
     @classmethod
     def from_env(cls) -> VectorStoreConfig:
+        raw_shard = os.environ.get("QDRANT_SHARD_BY_TENANT", "false")
         return cls(
             backend=os.environ.get("VECTOR_STORE_BACKEND", "memory"),
             qdrant_url=os.environ.get("QDRANT_URL", ""),
             qdrant_api_key=os.environ.get("QDRANT_API_KEY", ""),
             pool_size=int(os.environ.get("QDRANT_POOL_SIZE", "4")),
             deployment_mode=os.environ.get("DEPLOYMENT_MODE", "dev").lower(),
+            shard_by_tenant=raw_shard.lower() in ("true", "1", "yes"),
         )
 
 

@@ -43,7 +43,10 @@ def _cosine_similarity(a: List[float], b: List[float]) -> float:
 @runtime_checkable
 class VectorStore(Protocol):
     async def upsert(
-        self, collection: str, vectors: List[VectorRecord]
+        self,
+        collection: str,
+        vectors: List[VectorRecord],
+        tenant_id: str = "",
     ) -> int:
         ...
 
@@ -64,8 +67,10 @@ class InMemoryVectorStore:
         self._store: Dict[str, Dict[str, VectorRecord]] = {}
 
     async def upsert(
-        self, collection: str, vectors: List[VectorRecord]
+        self, collection: str, vectors: List[VectorRecord],
+        tenant_id: str = "",
     ) -> int:
+        _ = tenant_id
         if collection not in self._store:
             self._store[collection] = {}
         for record in vectors:
@@ -147,6 +152,7 @@ class QdrantVectorStore:
         deployment_mode: str = "dev",
         circuit_breaker: Optional[Any] = None,
         search_timeout_seconds: float = _DEFAULT_SEARCH_TIMEOUT_SECONDS,
+        shard_by_tenant: bool = False,
     ) -> None:
         self._url = url
         self._api_key = api_key
@@ -154,6 +160,8 @@ class QdrantVectorStore:
         self._deployment_mode = deployment_mode
         self._client: Optional[Any] = None
         self._search_timeout = search_timeout_seconds
+        self._shard_by_tenant = shard_by_tenant
+        self._collection_manager: Optional[Any] = None
         if circuit_breaker is not None:
             self._circuit_breaker = circuit_breaker
         else:
@@ -165,6 +173,26 @@ class QdrantVectorStore:
                 config=CircuitBreakerConfig(failure_threshold=3, recovery_timeout=30.0),
                 name="qdrant",
             )
+
+    def _get_collection_manager(self) -> Any:
+        if self._collection_manager is None:
+            from orchestrator.app.vector_collection_manager import (
+                VectorCollectionManager,
+            )
+            self._collection_manager = VectorCollectionManager(
+                client=self._get_client(),
+            )
+        return self._collection_manager
+
+    async def ensure_tenant_shard(
+        self, collection: str, tenant_id: str,
+    ) -> None:
+        if not self._shard_by_tenant or not tenant_id:
+            return
+        manager = self._get_collection_manager()
+        await manager.ensure_shard_key(
+            collection_name=collection, shard_key=tenant_id,
+        )
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -183,7 +211,10 @@ class QdrantVectorStore:
         return self._client
 
     async def upsert(
-        self, collection: str, vectors: List[VectorRecord],
+        self,
+        collection: str,
+        vectors: List[VectorRecord],
+        tenant_id: str = "",
     ) -> int:
         client = self._get_client()
         from qdrant_client.models import PointStruct
@@ -195,7 +226,13 @@ class QdrantVectorStore:
             )
             for record in vectors
         ]
-        await client.upsert(collection_name=collection, points=points)
+        kwargs: Dict[str, Any] = {
+            "collection_name": collection,
+            "points": points,
+        }
+        if self._shard_by_tenant and tenant_id:
+            kwargs["shard_key_selector"] = tenant_id
+        await client.upsert(**kwargs)
         return len(vectors)
 
     async def search(
@@ -248,9 +285,13 @@ class QdrantVectorStore:
             count_result = await client.count(
                 collection_name=collection, count_filter=compound, exact=True,
             )
-            await client.delete(
-                collection_name=collection, points_selector=compound,
-            )
+            delete_kwargs: Dict[str, Any] = {
+                "collection_name": collection,
+                "points_selector": compound,
+            }
+            if self._shard_by_tenant:
+                delete_kwargs["shard_key_selector"] = tenant_id
+            await client.delete(**delete_kwargs)
             return count_result.count
         await client.delete(
             collection_name=collection,
@@ -267,6 +308,7 @@ class QdrantVectorStore:
         deployment_mode: str = "",
     ) -> List[SearchResult]:
         _ = deployment_mode
+        use_shard_key = self._shard_by_tenant
 
         async def _do_search() -> List[SearchResult]:
             client = self._get_client()
@@ -279,13 +321,16 @@ class QdrantVectorStore:
                     ),
                 ],
             )
+            kwargs: Dict[str, Any] = {
+                "collection_name": collection,
+                "query_vector": query_vector,
+                "query_filter": query_filter,
+                "limit": limit,
+            }
+            if use_shard_key:
+                kwargs["shard_key_selector"] = tenant_id
             results = await asyncio.wait_for(
-                client.search(
-                    collection_name=collection,
-                    query_vector=query_vector,
-                    query_filter=query_filter,
-                    limit=limit,
-                ),
+                client.search(**kwargs),
                 timeout=self._search_timeout,
             )
             return [
@@ -312,6 +357,7 @@ def create_vector_store(
     driver: Any = None,
     pool_size: int = 4,
     deployment_mode: str = "dev",
+    shard_by_tenant: bool = False,
 ) -> Any:
     _ = pool_size
     _ = driver
@@ -332,5 +378,6 @@ def create_vector_store(
         return QdrantVectorStore(
             url=url, api_key=api_key, prefer_grpc=True,
             deployment_mode=deployment_mode,
+            shard_by_tenant=shard_by_tenant,
         )
     return InMemoryVectorStore()
