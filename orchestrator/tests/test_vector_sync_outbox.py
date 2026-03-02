@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import json
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,6 +16,8 @@ from orchestrator.app.vector_sync_outbox import (
     RedisOutboxStore,
     VectorSyncEvent,
     VectorSyncOutbox,
+    _deserialize_event_payload,
+    _serialize_event_payload,
 )
 
 
@@ -959,3 +963,100 @@ class TestRedisOutboxStoreDedupKeyLifecycle:
         assert fake_redis._strings[dedup_rkey] == event_new.event_id
         await store.delete_event(event_old.event_id)
         assert fake_redis._strings.get(dedup_rkey) == event_new.event_id
+
+
+class TestAsyncSerializationAPI:
+
+    def test_serialize_event_payload_is_coroutine(self) -> None:
+        assert inspect.iscoroutinefunction(_serialize_event_payload)
+
+    def test_deserialize_event_payload_is_coroutine(self) -> None:
+        assert inspect.iscoroutinefunction(_deserialize_event_payload)
+
+    @pytest.mark.asyncio
+    async def test_serialize_produces_valid_json(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        vectors = [VectorRecord(id="v1", vector=[0.1, 0.2], metadata={"name": "auth"})]
+        pruned_json, vectors_json = await _serialize_event_payload(
+            ["a", "b"], vectors,
+        )
+        assert json.loads(pruned_json) == ["a", "b"]
+        parsed_vecs = json.loads(vectors_json)
+        assert len(parsed_vecs) == 1
+        assert parsed_vecs[0]["id"] == "v1"
+        assert parsed_vecs[0]["vector"] == [0.1, 0.2]
+
+    @pytest.mark.asyncio
+    async def test_deserialize_reconstructs_records(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        pruned, vecs = await _deserialize_event_payload(
+            '["a", "b"]',
+            '[{"id": "v1", "vector": [0.5], "metadata": {}}]',
+        )
+        assert pruned == ["a", "b"]
+        assert len(vecs) == 1
+        assert isinstance(vecs[0], VectorRecord)
+        assert vecs[0].id == "v1"
+        assert vecs[0].vector == [0.5]
+
+    @pytest.mark.asyncio
+    async def test_serialize_deserialize_roundtrip(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        original_pruned = ["x", "y", "z"]
+        original_vectors = [
+            VectorRecord(id="v1", vector=[0.1, 0.2, 0.3], metadata={"k": "v"}),
+            VectorRecord(id="v2", vector=[0.4, 0.5, 0.6], metadata={"k2": "v2"}),
+        ]
+        pruned_json, vectors_json = await _serialize_event_payload(
+            original_pruned, original_vectors,
+        )
+        pruned, vecs = await _deserialize_event_payload(
+            pruned_json, vectors_json,
+        )
+        assert pruned == original_pruned
+        assert len(vecs) == 2
+        assert vecs[0].id == "v1"
+        assert vecs[1].id == "v2"
+        assert vecs[0].vector == [0.1, 0.2, 0.3]
+
+    @pytest.mark.asyncio
+    async def test_serialize_empty_vectors(self) -> None:
+        pruned_json, vectors_json = await _serialize_event_payload(
+            ["a"], [],
+        )
+        assert json.loads(vectors_json) == []
+
+    @pytest.mark.asyncio
+    async def test_deserialize_empty_vectors(self) -> None:
+        pruned, vecs = await _deserialize_event_payload('["a"]', "[]")
+        assert pruned == ["a"]
+        assert vecs == []
+
+    @pytest.mark.asyncio
+    async def test_write_event_uses_thread_offloading(self) -> None:
+        fake_redis = FakeRedis()
+        store = RedisOutboxStore(redis_conn=fake_redis)
+        event = VectorSyncEvent(collection="svc", pruned_ids=["a"])
+        with patch(
+            "orchestrator.app.vector_sync_outbox.asyncio.to_thread",
+            new_callable=AsyncMock,
+        ) as mock_to_thread:
+            mock_to_thread.return_value = ('["a"]', "[]")
+            await store.write_event(event)
+            mock_to_thread.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_load_pending_uses_thread_offloading(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+        fake_redis = FakeRedis()
+        store = RedisOutboxStore(redis_conn=fake_redis)
+        event = VectorSyncEvent(collection="svc", pruned_ids=["a"])
+        await store.write_event(event)
+
+        with patch(
+            "orchestrator.app.vector_sync_outbox._deserialize_event_payload",
+            new_callable=AsyncMock,
+        ) as mock_deser:
+            mock_deser.return_value = (["a"], [])
+            await store.load_pending()
+            assert mock_deser.call_count >= 1
