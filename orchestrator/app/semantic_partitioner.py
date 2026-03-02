@@ -186,7 +186,7 @@ class GDSPartitioner:
     ) -> PartitionResult:
         async def _tx(tx: Any) -> list:
             result = await tx.run(
-                "CALL gds.louvain.stream($graph_name, {"
+                "CALL gds.leiden.stream($graph_name, {"
                 "  nodeLabels: [$node_label],"
                 "  relationshipTypes: [$rel_type]"
                 "}) YIELD nodeId, communityId "

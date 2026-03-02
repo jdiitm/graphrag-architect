@@ -75,7 +75,26 @@ _PROCESS_POOL_MAX_WORKERS = min(
     _AST_POOL_CFG.ceiling,
 )
 
-_USE_REMOTE_AST: bool = os.environ.get("USE_REMOTE_AST", "false").lower() == "true"
+def resolve_use_remote_ast(mode: str) -> bool:
+    return mode == "go"
+
+
+def warn_if_local_ast_in_production() -> None:
+    deployment = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
+    ast_mode = os.environ.get("AST_EXTRACTION_MODE", "")
+    if not ast_mode:
+        ast_mode = "go" if deployment == "production" else "local"
+    if deployment == "production" and ast_mode == "local":
+        logging.getLogger(__name__).warning(
+            "AST extraction is running in local ProcessPoolExecutor mode "
+            "in a production deployment. This causes CPU starvation in "
+            "the ASGI event loop. Set AST_EXTRACTION_MODE=go to offload "
+            "AST parsing to Go workers via gRPC."
+        )
+
+
+_AST_EXTRACTION_CFG = ASTExtractionConfig.from_env()
+_USE_REMOTE_AST: bool = resolve_use_remote_ast(_AST_EXTRACTION_CFG.mode)
 
 
 class _ASTPoolHolder:
@@ -174,6 +193,21 @@ def create_durable_spillover_fn(
 
     _spillover.pending = pending  # type: ignore[attr-defined]
     return _spillover
+
+
+def build_coalescing_outbox(
+    redis_conn: Any = None,
+    max_entries: int = _DEFAULT_COALESCING_MAX_ENTRIES,
+) -> CoalescingOutbox:
+    if redis_conn is not None:
+        store = RedisOutboxStore(redis_conn=redis_conn)
+        spillover = create_durable_spillover_fn(store)
+    else:
+        spillover = _spillover_to_vector_outbox
+    return CoalescingOutbox(
+        max_entries=max_entries,
+        spillover_fn=spillover,
+    )
 
 
 _COALESCING_OUTBOX = CoalescingOutbox(

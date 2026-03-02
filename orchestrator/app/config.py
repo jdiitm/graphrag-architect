@@ -372,8 +372,15 @@ class VectorSyncConfig:
 
     @classmethod
     def from_env(cls) -> VectorSyncConfig:
+        explicit = os.environ.get("VECTOR_SYNC_BACKEND", "")
+        if explicit:
+            backend = explicit
+        elif os.environ.get("REDIS_URL", ""):
+            backend = "redis"
+        else:
+            backend = "memory"
         return cls(
-            backend=os.environ.get("VECTOR_SYNC_BACKEND", "memory"),
+            backend=backend,
             kafka_topic=os.environ.get(
                 "VECTOR_SYNC_KAFKA_TOPIC", "graph.mutations",
             ),

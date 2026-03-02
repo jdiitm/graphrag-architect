@@ -265,6 +265,47 @@ def validate_vector_isolation(
         )
 
 
+_SCHEMA_QUERY_PREFIXES = (
+    "CREATE CONSTRAINT",
+    "DROP CONSTRAINT",
+    "CREATE INDEX",
+    "DROP INDEX",
+    "CALL dbms.",
+    "CALL db.",
+    "SHOW ",
+)
+
+
+class TenantEnforcingDriver:
+    def __init__(
+        self,
+        isolation_mode: IsolationMode = IsolationMode.PHYSICAL,
+    ) -> None:
+        self._isolation_mode = isolation_mode
+
+    def validate_query_params(
+        self,
+        query: str,
+        params: Dict[str, Any],
+    ) -> None:
+        if self._isolation_mode != IsolationMode.LOGICAL:
+            return
+
+        normalized = query.strip().upper()
+        for prefix in _SCHEMA_QUERY_PREFIXES:
+            if normalized.startswith(prefix.upper()):
+                return
+
+        tenant_id = params.get("tenant_id")
+        if not tenant_id:
+            raise TenantIsolationViolation(
+                "Query in LOGICAL isolation mode is missing a non-empty "
+                "'tenant_id' parameter. All data queries must include "
+                "tenant_id to prevent cross-tenant data leakage. "
+                f"Query: {query[:80]!r}"
+            )
+
+
 class OrphanedPoolDetector:
     def __init__(
         self,
