@@ -9,6 +9,7 @@ from orchestrator.app.workspace_loader import (
     MAX_FILE_SIZE_BYTES,
     load_directory,
     load_directory_chunked,
+    load_directory_stream,
 )
 
 
@@ -266,16 +267,40 @@ class TestLoadDirectoryChunked:
 class TestLoadWorkspaceFilesDAGNode:
 
     @pytest.mark.asyncio
-    async def test_dag_node_delegates_to_load_directory(self, workspace: Path):
+    async def test_dag_node_streams_directory_without_materialization(
+        self, workspace: Path,
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        mock_invoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "commit_status": "success",
+            "extraction_errors": [],
+            "extraction_checkpoint": {},
+            "skipped_files": [],
+        })
+
+        with patch(
+            "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+            mock_invoke,
+        ):
+            from orchestrator.app.graph_builder import load_workspace_files
+
+            state = {"directory_path": str(workspace)}
+            result = await load_workspace_files(state)
+
+        assert result["raw_files"] == []
+        assert result["commit_status"] == "success"
+        assert mock_invoke.call_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_dag_node_returns_preloaded_files_when_no_directory(self):
         from orchestrator.app.graph_builder import load_workspace_files
 
-        state = {"directory_path": str(workspace)}
+        files = [{"path": "main.go", "content": "package main"}]
+        state = {"directory_path": "", "raw_files": files}
         result = await load_workspace_files(state)
-        assert "raw_files" in result
-        assert len(result["raw_files"]) == 4
-        paths = [f["path"] for f in result["raw_files"]]
-        assert "main.go" in paths
-        assert "app.py" in paths
+        assert result["raw_files"] == files
 
     @pytest.mark.asyncio
     async def test_dag_node_returns_empty_for_missing_dir(self):
@@ -284,3 +309,93 @@ class TestLoadWorkspaceFilesDAGNode:
         state = {"directory_path": "/nonexistent/path"}
         result = await load_workspace_files(state)
         assert result["raw_files"] == []
+
+
+class TestLoadDirectoryStream:
+
+    @pytest.mark.asyncio
+    async def test_yields_chunks_as_async_generator(self, workspace: Path):
+        chunks = []
+        async for chunk in load_directory_stream(str(workspace), chunk_size=2):
+            chunks.append(chunk)
+        assert len(chunks) >= 1
+        total_files = sum(len(c) for c in chunks)
+        assert total_files == 4
+
+    @pytest.mark.asyncio
+    async def test_chunk_contents_match_sync_version(self, workspace: Path):
+        sync_chunks = list(load_directory_chunked(str(workspace), chunk_size=2))
+        async_chunks = []
+        async for chunk in load_directory_stream(str(workspace), chunk_size=2):
+            async_chunks.append(chunk)
+        sync_all = sorted(
+            [f for c in sync_chunks for f in c], key=lambda e: e["path"],
+        )
+        async_all = sorted(
+            [f for c in async_chunks for f in c], key=lambda e: e["path"],
+        )
+        assert async_all == sync_all
+
+    @pytest.mark.asyncio
+    async def test_enforces_max_total_bytes(self, tmp_path: Path):
+        for i in range(10):
+            (tmp_path / f"file_{i}.go").write_text("x" * 1000)
+        total_files = 0
+        async for chunk in load_directory_stream(
+            str(tmp_path), chunk_size=5, max_total_bytes=3000,
+        ):
+            total_files += len(chunk)
+        assert total_files == 3
+
+    @pytest.mark.asyncio
+    async def test_tracks_skipped_files(self, tmp_path: Path):
+        for i in range(10):
+            (tmp_path / f"file_{i:02d}.go").write_text("x" * 1000)
+        skipped: list[str] = []
+        loaded = 0
+        async for chunk in load_directory_stream(
+            str(tmp_path), chunk_size=5, max_total_bytes=3000, skipped=skipped,
+        ):
+            loaded += len(chunk)
+        assert loaded == 3
+        assert len(skipped) == 7
+        assert loaded + len(skipped) == 10
+
+    @pytest.mark.asyncio
+    async def test_empty_directory_yields_nothing(self, tmp_path: Path):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        chunks = []
+        async for chunk in load_directory_stream(str(empty)):
+            chunks.append(chunk)
+        assert chunks == []
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_directory_yields_nothing(self):
+        chunks = []
+        async for chunk in load_directory_stream("/nonexistent/path"):
+            chunks.append(chunk)
+        assert chunks == []
+
+    @pytest.mark.asyncio
+    async def test_preserves_excluded_dirs(self, workspace: Path):
+        git_dir = workspace / ".git"
+        git_dir.mkdir()
+        (git_dir / "internal.py").write_text("git stuff")
+        all_files = []
+        async for chunk in load_directory_stream(str(workspace)):
+            all_files.extend(chunk)
+        paths = [f["path"] for f in all_files]
+        assert not any(".git" in p for p in paths)
+
+    @pytest.mark.asyncio
+    async def test_preserves_included_extensions(self, workspace: Path):
+        (workspace / "readme.md").write_text("# hello")
+        (workspace / "data.json").write_text("{}")
+        all_files = []
+        async for chunk in load_directory_stream(str(workspace)):
+            all_files.extend(chunk)
+        paths = [f["path"] for f in all_files]
+        assert "readme.md" not in paths
+        assert "data.json" not in paths
+        assert len(paths) == 4

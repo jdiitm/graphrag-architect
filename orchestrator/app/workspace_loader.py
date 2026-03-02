@@ -1,7 +1,8 @@
+import asyncio
 import logging
 import os
 from pathlib import PurePosixPath
-from typing import Dict, Generator, List, Optional
+from typing import AsyncGenerator, Dict, Generator, List, Optional
 
 
 logger = logging.getLogger(__name__)
@@ -139,3 +140,37 @@ def load_directory(
         results.extend(chunk)
     results.sort(key=lambda entry: entry["path"])
     return results
+
+
+async def load_directory_stream(
+    directory_path: str,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    max_total_bytes: Optional[int] = None,
+    skipped: Optional[List[str]] = None,
+) -> AsyncGenerator[List[Dict[str, str]], None]:
+    if not directory_path or not directory_path.strip():
+        return
+
+    root = os.path.abspath(directory_path)
+    if not os.path.isdir(root):
+        return
+
+    effective_max = (
+        max_total_bytes if max_total_bytes is not None else _default_max_bytes()
+    )
+
+    gen = load_directory_chunked(
+        directory_path,
+        chunk_size=chunk_size,
+        max_total_bytes=effective_max,
+        skipped=skipped,
+    )
+
+    def _advance_generator() -> Optional[List[Dict[str, str]]]:
+        return next(gen, None)
+
+    while True:
+        chunk = await asyncio.to_thread(_advance_generator)
+        if chunk is None:
+            break
+        yield chunk

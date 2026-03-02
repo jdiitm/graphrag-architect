@@ -35,23 +35,41 @@ class TestStreamingWorkspaceLoader:
 
 class TestLoadWorkspaceUsesChunkedLoader:
     @pytest.mark.asyncio
-    async def test_load_workspace_files_uses_chunked_for_directory(self, tmp_path):
+    async def test_load_workspace_files_uses_streaming_for_directory(self, tmp_path):
         for i in range(5):
             f = tmp_path / f"svc{i}.go"
             f.write_text(f"package main{i}", encoding="utf-8")
 
-        from orchestrator.app.graph_builder import load_workspace_files
-        state = {
-            "directory_path": str(tmp_path),
-            "raw_files": [],
+        mock_invoke = AsyncMock(return_value={
             "extracted_nodes": [],
+            "commit_status": "success",
             "extraction_errors": [],
-            "validation_retries": 0,
-            "commit_status": "",
             "extraction_checkpoint": {},
-        }
-        result = await load_workspace_files(state)
-        assert len(result["raw_files"]) == 5
+            "skipped_files": [],
+        })
+
+        with (
+            patch.dict("os.environ", _ENV_VARS),
+            patch(
+                "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+                mock_invoke,
+            ),
+        ):
+            from orchestrator.app.graph_builder import load_workspace_files
+            state = {
+                "directory_path": str(tmp_path),
+                "raw_files": [],
+                "extracted_nodes": [],
+                "extraction_errors": [],
+                "validation_retries": 0,
+                "commit_status": "",
+                "extraction_checkpoint": {},
+            }
+            result = await load_workspace_files(state)
+
+        assert result["raw_files"] == []
+        assert result["commit_status"] == "success"
+        assert mock_invoke.call_count >= 1
 
 
 class TestConfigurableChunkSize:
@@ -110,9 +128,23 @@ class TestSkippedFilesTracking:
         for i in range(10):
             (tmp_path / f"file{i:02d}.go").write_text("x" * 1000)
 
+        mock_invoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "commit_status": "success",
+            "extraction_errors": [],
+            "extraction_checkpoint": {},
+            "skipped_files": [],
+        })
+
         from orchestrator.app.graph_builder import load_workspace_files
 
-        with patch.dict("os.environ", {"WORKSPACE_MAX_BYTES": "3000"}):
+        with (
+            patch.dict("os.environ", {**_ENV_VARS, "WORKSPACE_MAX_BYTES": "3000"}),
+            patch(
+                "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+                mock_invoke,
+            ),
+        ):
             result = await load_workspace_files({
                 "directory_path": str(tmp_path),
                 "raw_files": [],
@@ -125,7 +157,7 @@ class TestSkippedFilesTracking:
 
         assert "skipped_files" in result
         assert len(result["skipped_files"]) > 0
-        assert len(result["raw_files"]) + len(result["skipped_files"]) == 10
+        assert result["raw_files"] == []
 
 
 class TestWorkspaceMaxBytesValidation:
@@ -234,11 +266,15 @@ class TestStreamingPipelinePerChunkCommit:
             "skipped_files": [],
         })
 
+        async def fake_stream(directory_path, **kwargs):
+            for chunk in mock_chunks:
+                yield chunk
+
         with (
             patch.dict("os.environ", _ENV_VARS),
             patch(
-                "orchestrator.app.graph_builder.load_directory_chunked",
-                return_value=iter(mock_chunks),
+                "orchestrator.app.graph_builder.load_directory_stream",
+                side_effect=fake_stream,
             ),
             patch(
                 "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
@@ -268,11 +304,15 @@ class TestStreamingPipelinePerChunkCommit:
             "skipped_files": [],
         })
 
+        async def fake_stream(directory_path, **kwargs):
+            for chunk in mock_chunks:
+                yield chunk
+
         with (
             patch.dict("os.environ", _ENV_VARS),
             patch(
-                "orchestrator.app.graph_builder.load_directory_chunked",
-                return_value=iter(mock_chunks),
+                "orchestrator.app.graph_builder.load_directory_stream",
+                side_effect=fake_stream,
             ),
             patch(
                 "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
@@ -309,11 +349,15 @@ class TestStreamingPipelinePerChunkCommit:
             [{"path": "c.go", "content": "package c"}],
         ]
 
+        async def fake_stream(directory_path, **kwargs):
+            for chunk in mock_chunks:
+                yield chunk
+
         with (
             patch.dict("os.environ", _ENV_VARS),
             patch(
-                "orchestrator.app.graph_builder.load_directory_chunked",
-                return_value=iter(mock_chunks),
+                "orchestrator.app.graph_builder.load_directory_stream",
+                side_effect=fake_stream,
             ),
             patch(
                 "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
@@ -354,6 +398,76 @@ class TestStreamingPipelinePerChunkCommit:
         assert result["skipped_files"] == []
 
 
+class TestStreamingPipelineAsyncGenerator:
+    @pytest.mark.asyncio
+    async def test_process_directory_uses_async_stream(self):
+        from orchestrator.app.graph_builder import StreamingIngestionPipeline
+
+        mock_invoke = AsyncMock(return_value={
+            "extracted_nodes": [{"id": "node-1"}],
+            "commit_status": "success",
+            "extraction_errors": [],
+            "extraction_checkpoint": {},
+            "skipped_files": [],
+        })
+
+        async def fake_stream(directory_path, **kwargs):
+            yield [{"path": "a.go", "content": "package a"}]
+            yield [{"path": "b.go", "content": "package b"}]
+
+        with (
+            patch.dict("os.environ", _ENV_VARS),
+            patch(
+                "orchestrator.app.graph_builder.load_directory_stream",
+                side_effect=fake_stream,
+            ),
+            patch(
+                "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+                mock_invoke,
+            ),
+        ):
+            pipeline = StreamingIngestionPipeline()
+            result = await pipeline.process_directory("/some/workspace")
+
+        assert mock_invoke.call_count == 2
+        assert pipeline.chunk_count == 2
+        assert result["commit_status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_process_directory_tracks_skipped_from_stream(self):
+        from orchestrator.app.graph_builder import StreamingIngestionPipeline
+
+        mock_invoke = AsyncMock(return_value={
+            "extracted_nodes": [],
+            "commit_status": "success",
+            "extraction_errors": [],
+            "extraction_checkpoint": {},
+            "skipped_files": [],
+        })
+
+        async def fake_stream(directory_path, **kwargs):
+            skipped = kwargs.get("skipped")
+            if skipped is not None:
+                skipped.extend(["dropped1.go", "dropped2.go"])
+            yield [{"path": "a.go", "content": "package a"}]
+
+        with (
+            patch.dict("os.environ", _ENV_VARS),
+            patch(
+                "orchestrator.app.graph_builder.load_directory_stream",
+                side_effect=fake_stream,
+            ),
+            patch(
+                "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+                mock_invoke,
+            ),
+        ):
+            pipeline = StreamingIngestionPipeline()
+            result = await pipeline.process_directory("/some/workspace")
+
+        assert result["skipped_files"] == ["dropped1.go", "dropped2.go"]
+
+
 class TestStreamingPipelineSkippedFiles:
     @pytest.mark.asyncio
     async def test_skipped_files_surfaced_in_result(self):
@@ -363,11 +477,12 @@ class TestStreamingPipelineSkippedFiles:
             [{"path": "a.go", "content": "package a"}],
         ]
 
-        def fake_chunked(directory_path, **kwargs):
+        async def fake_stream(directory_path, **kwargs):
             skipped = kwargs.get("skipped")
             if skipped is not None:
                 skipped.extend(["dropped1.go", "dropped2.go"])
-            yield from mock_chunks
+            for chunk in mock_chunks:
+                yield chunk
 
         mock_invoke = AsyncMock(return_value={
             "extracted_nodes": [],
@@ -380,8 +495,8 @@ class TestStreamingPipelineSkippedFiles:
         with (
             patch.dict("os.environ", {**_ENV_VARS, "WORKSPACE_MAX_BYTES": "500"}),
             patch(
-                "orchestrator.app.graph_builder.load_directory_chunked",
-                side_effect=fake_chunked,
+                "orchestrator.app.graph_builder.load_directory_stream",
+                side_effect=fake_stream,
             ),
             patch(
                 "orchestrator.app.graph_builder.ingestion_graph.ainvoke",

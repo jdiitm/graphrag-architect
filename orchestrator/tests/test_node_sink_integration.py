@@ -205,10 +205,14 @@ class TestStreamingPipelineMemoryBound:
             for i in range(10)
         ]
 
+        async def fake_stream(directory_path, **kwargs):
+            for chunk in fake_chunks:
+                yield chunk
+
         with (
             patch(
-                "orchestrator.app.graph_builder.load_directory_chunked",
-                return_value=iter(fake_chunks),
+                "orchestrator.app.graph_builder.load_directory_stream",
+                side_effect=fake_stream,
             ),
             patch(
                 "orchestrator.app.graph_builder._process_chunk",

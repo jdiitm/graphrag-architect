@@ -401,20 +401,35 @@ class TestLoadWorkspacePreservesRawFiles:
         assert result["raw_files"] == existing_files
 
     @pytest.mark.asyncio
-    async def test_directory_path_set_loads_from_directory(self, tmp_path):
+    async def test_directory_path_set_streams_via_pipeline(self, tmp_path):
+        from unittest.mock import AsyncMock, patch
         from orchestrator.app.graph_builder import load_workspace_files
 
         go_file = tmp_path / "service.go"
         go_file.write_text("package main", encoding="utf-8")
 
-        state = {
-            "directory_path": str(tmp_path),
-            "raw_files": [],
+        mock_invoke = AsyncMock(return_value={
             "extracted_nodes": [],
+            "commit_status": "success",
             "extraction_errors": [],
-            "validation_retries": 0,
-            "commit_status": "",
-        }
-        result = await load_workspace_files(state)
-        assert len(result["raw_files"]) == 1
-        assert result["raw_files"][0]["path"] == "service.go"
+            "extraction_checkpoint": {},
+            "skipped_files": [],
+        })
+
+        with patch(
+            "orchestrator.app.graph_builder.ingestion_graph.ainvoke",
+            mock_invoke,
+        ):
+            state = {
+                "directory_path": str(tmp_path),
+                "raw_files": [],
+                "extracted_nodes": [],
+                "extraction_errors": [],
+                "validation_retries": 0,
+                "commit_status": "",
+            }
+            result = await load_workspace_files(state)
+
+        assert result["raw_files"] == []
+        assert result["commit_status"] == "success"
+        assert mock_invoke.call_count >= 1
