@@ -1,0 +1,5 @@
+[allowlist]
+description = "Known safe patterns (dev-only compose passwords)"
+paths = [
+    '''infrastructure/docker-compose\.yml''',
+]
