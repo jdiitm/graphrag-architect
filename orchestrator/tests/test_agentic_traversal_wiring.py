@@ -10,7 +10,9 @@ from orchestrator.app.agentic_traversal import (
     TraversalState,
     TraversalStep,
     _NEIGHBOR_DISCOVERY_TEMPLATE,
+    _batched_supernode_expansion,
     build_one_hop_cypher,
+    execute_batched_hop,
     execute_hop,
     run_traversal,
 )
@@ -320,3 +322,108 @@ class TestRunTraversal:
             )
 
         assert context == []
+
+
+def _make_capturing_session():
+    captured_tx_kwargs: list[dict] = []
+    mock_result = AsyncMock()
+    mock_result.data = AsyncMock(return_value=[])
+    mock_tx = AsyncMock()
+    mock_tx.run = AsyncMock(return_value=mock_result)
+
+    call_count = 0
+
+    async def _intercept_execute_read(fn, timeout=30.0):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return [{"degree": 5}]
+        await fn(mock_tx)
+        _, kwargs = mock_tx.run.call_args
+        captured_tx_kwargs.append(dict(kwargs))
+        return []
+
+    session = AsyncMock()
+    session.execute_read = _intercept_execute_read
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    return session, captured_tx_kwargs
+
+
+class TestMinPagerankReachesNeo4j:
+    @pytest.mark.asyncio
+    async def test_execute_hop_passes_min_pagerank(self) -> None:
+        session, captured = _make_capturing_session()
+        driver = _mock_driver(session)
+
+        await execute_hop(
+            driver=driver,
+            source_id="svc-a",
+            tenant_id="t-1",
+            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+        )
+
+        assert len(captured) == 1
+        assert "min_pagerank" in captured[0]
+        assert captured[0]["min_pagerank"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_execute_batched_hop_passes_min_pagerank(self) -> None:
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=[])
+        mock_tx = AsyncMock()
+        mock_tx.run = AsyncMock(return_value=mock_result)
+
+        async def _intercept(fn, timeout=30.0):
+            await fn(mock_tx)
+            return []
+
+        session = AsyncMock()
+        session.execute_read = _intercept
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        driver = _mock_driver(session)
+
+        with patch(
+            "orchestrator.app.agentic_traversal.batch_check_degrees",
+            new_callable=AsyncMock,
+            return_value={"svc-a": 5},
+        ):
+            await execute_batched_hop(
+                driver=driver,
+                source_ids=["svc-a"],
+                tenant_id="t-1",
+                acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+            )
+
+        _, kwargs = mock_tx.run.call_args
+        assert "min_pagerank" in kwargs
+        assert kwargs["min_pagerank"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_batched_supernode_expansion_passes_min_pagerank(self) -> None:
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(return_value=[])
+        mock_tx = AsyncMock()
+        mock_tx.run = AsyncMock(return_value=mock_result)
+
+        async def _intercept(fn, timeout=30.0):
+            await fn(mock_tx)
+            return []
+
+        session = AsyncMock()
+        session.execute_read = _intercept
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        driver = _mock_driver(session)
+
+        await _batched_supernode_expansion(
+            driver=driver,
+            source_ids=["super-node-1"],
+            tenant_id="t-1",
+            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+        )
+
+        _, kwargs = mock_tx.run.call_args
+        assert "min_pagerank" in kwargs
+        assert kwargs["min_pagerank"] == 0.0

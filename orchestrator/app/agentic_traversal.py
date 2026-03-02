@@ -52,6 +52,7 @@ class TraversalConfig:
     max_visited: int = MAX_VISITED
     timeout: float = 30.0
     beam_width: int = 50
+    min_pagerank: float = 0.0
 
     @classmethod
     def from_env(cls) -> TraversalConfig:
@@ -77,6 +78,9 @@ class TraversalConfig:
             ),
             timeout=float(os.environ.get("TRAVERSAL_TIMEOUT", "30.0")),
             beam_width=int(os.environ.get("TRAVERSAL_BEAM_WIDTH", "50")),
+            min_pagerank=float(
+                os.environ.get("TRAVERSAL_MIN_PAGERANK", "0.0")
+            ),
         )
 
 
@@ -409,6 +413,7 @@ async def _run_sampled_query(
         "source_id": source_id,
         "tenant_id": tenant_id,
         "sample_size": sample_size,
+        "min_pagerank": 0.0,
         **acl_params,
     }
     if query_embedding is not None:
@@ -455,6 +460,7 @@ async def execute_hop(
         "tenant_id": tenant_id,
         "limit": limit,
         "sample_size": sample_size,
+        "min_pagerank": 0.0,
         **acl_params,
     }
     provider.validate_query(
@@ -490,6 +496,7 @@ async def execute_hop(
             "source_id": source_id,
             "tenant_id": tenant_id,
             "limit": limit,
+            "min_pagerank": 0.0,
             **acl_params,
         }
 
@@ -537,6 +544,7 @@ async def execute_batched_hop(
             "tenant_id": tenant_id,
             "limit": limit,
             "per_source_limit": per_source_limit,
+            "min_pagerank": 0.0,
             **acl_params,
         }
         provider.validate_query(batched_query, params)
@@ -612,6 +620,7 @@ async def _batched_supernode_expansion(
         "source_ids": source_ids,
         "tenant_id": tenant_id,
         "sample_size": sample_size,
+        "min_pagerank": 0.0,
         **acl_params,
     }
     provider.validate_query(query, params)
