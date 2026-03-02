@@ -49,11 +49,19 @@ class VectorSyncKafkaConsumer:
     async def process_event(self, event: GraphMutationEvent) -> None:
         if event.mutation_type in _DELETE_MUTATIONS:
             await self._deleter.delete(event.entity_ids)
-        elif event.mutation_type in _UPSERT_MUTATIONS and self._upserter is not None:
-            await self._upserter.upsert(
-                entity_ids=event.entity_ids,
-                tenant_id=event.tenant_id,
-            )
+        elif event.mutation_type in _UPSERT_MUTATIONS:
+            if self._upserter is not None:
+                await self._upserter.upsert(
+                    entity_ids=event.entity_ids,
+                    tenant_id=event.tenant_id,
+                )
+            else:
+                logger.warning(
+                    "Received %s event but no upserter configured; "
+                    "%d entity IDs dropped",
+                    event.mutation_type,
+                    len(event.entity_ids),
+                )
         self._processed_count += 1
 
     async def process_raw(self, payload: Dict[str, Any]) -> None:

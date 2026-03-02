@@ -170,6 +170,47 @@ class TestGraphBuilderPublishesMutations:
         assert set(tombstone_events[0].entity_ids) == {"edge-1", "edge-2"}
 
 
+    @pytest.mark.asyncio
+    async def test_post_commit_publishes_both_upsert_and_tombstone(self) -> None:
+        from orchestrator.app.graph_builder import _post_commit_side_effects
+
+        mock_repo = AsyncMock()
+        mock_repo.prune_stale_edges = AsyncMock(
+            return_value=(1, ["edge-1"]),
+        )
+        mock_span = MagicMock()
+        mock_publisher = AsyncMock()
+
+        with patch(
+            "orchestrator.app.graph_builder._get_mutation_publisher",
+            return_value=mock_publisher,
+        ), patch(
+            "orchestrator.app.graph_builder._enqueue_vector_cleanup",
+            new_callable=AsyncMock,
+        ), patch(
+            "orchestrator.app.graph_builder.invalidate_caches_after_ingest",
+            new_callable=AsyncMock,
+        ), patch(
+            "orchestrator.app.graph_builder._safe_drain_vector_outbox",
+            new_callable=AsyncMock,
+        ):
+            await _post_commit_side_effects(
+                repo=mock_repo,
+                ingestion_id="ing-1",
+                tenant_id="t1",
+                span=mock_span,
+                committed_node_ids={"svc-a"},
+            )
+
+        mock_publisher.publish.assert_awaited()
+        all_events: List[GraphMutationEvent] = []
+        for call in mock_publisher.publish.call_args_list:
+            all_events.extend(call[0][0])
+        types = {e.mutation_type for e in all_events}
+        assert "node_upsert" in types
+        assert "edge_tombstone" in types
+
+
 class TestMutationPublisherWiring:
 
     def test_get_mutation_publisher_returns_none_without_kafka(self) -> None:

@@ -303,8 +303,8 @@ def _get_mutation_publisher() -> Optional[KafkaMutationPublisher]:
         topic = os.environ.get(
             "VECTOR_SYNC_KAFKA_TOPIC", "graph.mutations",
         )
-        from orchestrator.app.mutation_publisher import InMemoryMutationTransport
-        transport = InMemoryMutationTransport()
+        from orchestrator.app.mutation_publisher import LoggingMutationTransport
+        transport = LoggingMutationTransport()
         _MutationPublisherHolder.value = KafkaMutationPublisher(
             transport=transport,
             topic=topic,
