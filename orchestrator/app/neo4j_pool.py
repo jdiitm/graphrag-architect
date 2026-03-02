@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, Dict, Optional, Tuple
 
 from neo4j import AsyncDriver, AsyncGraphDatabase
@@ -207,6 +208,10 @@ class TenantConnectionTracker:
             else:
                 self._active[tenant_id] = current - 1
 
+    async def snapshot(self) -> Dict[str, int]:
+        async with self._lock:
+            return dict(self._active)
+
 
 _LUA_ACQUIRE = """
 local key = KEYS[1]
@@ -269,11 +274,80 @@ class RedisTenantConnectionTracker:
         await self._redis.eval(_LUA_RELEASE, 1, key)
 
 
+class HybridConnectionTracker:
+    def __init__(
+        self,
+        pool_size: int,
+        max_tenant_fraction: float = 0.2,
+        redis_conn: Any = None,
+        sync_interval: float = 5.0,
+    ) -> None:
+        self._local = TenantConnectionTracker(pool_size, max_tenant_fraction)
+        self._redis_conn = redis_conn
+        self._sync_interval = sync_interval
+        self._sync_task: Optional[asyncio.Task[None]] = None
+        self._sync_completed = asyncio.Event()
+
+    @property
+    def max_per_tenant(self) -> int:
+        return self._local.max_per_tenant
+
+    async def acquire(self, tenant_id: str) -> None:
+        await self._local.acquire(tenant_id)
+
+    async def release(self, tenant_id: str) -> None:
+        await self._local.release(tenant_id)
+
+    async def active_count(self, tenant_id: str) -> int:
+        return await self._local.active_count(tenant_id)
+
+    async def start_sync(self) -> None:
+        if self._sync_task is None:
+            self._sync_task = asyncio.create_task(self._sync_loop())
+
+    async def stop_sync(self) -> None:
+        if self._sync_task is not None:
+            self._sync_task.cancel()
+            try:
+                await self._sync_task
+            except asyncio.CancelledError:
+                pass
+            self._sync_task = None
+
+    async def _sync_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self._sync_interval)
+            try:
+                await self._report_to_redis()
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Redis sync failed, continuing with local-only tracking",
+                    exc_info=True,
+                )
+            finally:
+                self._sync_completed.set()
+
+    async def _report_to_redis(self) -> None:
+        if self._redis_conn is None:
+            return
+        snapshot = await self._local.snapshot()
+        for tenant_id, count in snapshot.items():
+            key = f"neo4j:conn:hybrid:{tenant_id}"
+            await self._redis_conn.set(key, str(count))
+
+
 def create_connection_tracker(
     pool_size: int,
     max_tenant_fraction: float = 0.2,
     redis_conn: Any = None,
-) -> TenantConnectionTracker | RedisTenantConnectionTracker:
+    mode: str = "auto",
+) -> "TenantConnectionTracker | RedisTenantConnectionTracker | HybridConnectionTracker":
+    if mode == "hybrid" and redis_conn is not None:
+        return HybridConnectionTracker(
+            pool_size=pool_size,
+            max_tenant_fraction=max_tenant_fraction,
+            redis_conn=redis_conn,
+        )
     if redis_conn is not None:
         return RedisTenantConnectionTracker(
             redis_conn=redis_conn,
@@ -286,7 +360,11 @@ def create_connection_tracker(
     )
 
 
-_TrackerType = TenantConnectionTracker | RedisTenantConnectionTracker
+_TrackerType = (
+    TenantConnectionTracker
+    | RedisTenantConnectionTracker
+    | HybridConnectionTracker
+)
 
 _TRACKER_STATE: Dict[str, Optional[_TrackerType]] = {
     "tracker": None,

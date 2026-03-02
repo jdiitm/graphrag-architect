@@ -29,6 +29,27 @@ class ConfigurationError(Exception):
 
 
 @dataclass(frozen=True)
+class ProjectionGuardConfig:
+    max_projection_nodes: int = 500_000
+    max_concurrent_projections: int = 3
+    estimation_query_timeout: float = 5.0
+
+    @classmethod
+    def from_env(cls) -> ProjectionGuardConfig:
+        return cls(
+            max_projection_nodes=int(
+                os.environ.get("GDS_MAX_PROJECTION_NODES", "500000"),
+            ),
+            max_concurrent_projections=int(
+                os.environ.get("GDS_MAX_CONCURRENT_PROJECTIONS", "3"),
+            ),
+            estimation_query_timeout=float(
+                os.environ.get("GDS_ESTIMATION_QUERY_TIMEOUT", "5.0"),
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class Node2VecConfig:
     walk_length: int = DEFAULT_WALK_LENGTH
     num_walks: int = DEFAULT_NUM_WALKS
@@ -351,16 +372,26 @@ _DEFAULT_MUTATION_THRESHOLD = 100
 _PROJECTION_TTL_SECONDS = 3600
 
 
+_ESTIMATE_COUNT_CYPHER = (
+    "MATCH (n) WHERE n.tenant_id = $tenant_id RETURN count(n) AS cnt"
+)
+
+
 class GDSProjectionManager:
     def __init__(
         self,
         driver: Any,
         redis_conn: Any,
         mutation_threshold: int = _DEFAULT_MUTATION_THRESHOLD,
+        guard_config: Optional[ProjectionGuardConfig] = None,
     ) -> None:
         self._driver = driver
         self._redis = redis_conn
         self._mutation_threshold = mutation_threshold
+        self._guard = guard_config or ProjectionGuardConfig()
+        self._projection_semaphore = asyncio.Semaphore(
+            self._guard.max_concurrent_projections,
+        )
 
     def graph_name(self, tenant_id: str) -> str:
         return f"graphrag_{tenant_id}"
@@ -383,6 +414,26 @@ class GDSProjectionManager:
             return True
         return False
 
+    async def _estimate_tenant_graph_size(self, tenant_id: str) -> int:
+        async def _run_estimation() -> int:
+            async with self._driver.session() as session:
+                result = await session.run(
+                    _ESTIMATE_COUNT_CYPHER, tenant_id=tenant_id,
+                )
+                record = await result.single()
+                return int(record["cnt"]) if record else 0
+
+        try:
+            return await asyncio.wait_for(
+                _run_estimation(),
+                timeout=self._guard.estimation_query_timeout,
+            )
+        except Exception as exc:
+            raise GraphTooLargeError(
+                f"Estimation query failed for tenant {tenant_id!r}, "
+                f"failing closed to prevent unbounded projection"
+            ) from exc
+
     async def ensure_projection(self, tenant_id: str) -> bool:
         stale = await self._check_and_reset_mutations(tenant_id)
         if stale:
@@ -392,10 +443,20 @@ class GDSProjectionManager:
         if cached is not None:
             return False
 
-        await self._project_graph(tenant_id)
-        await self._redis.set(
-            self._cache_key(tenant_id), "1", ex=_PROJECTION_TTL_SECONDS,
-        )
+        node_count = await self._estimate_tenant_graph_size(tenant_id)
+        if node_count > self._guard.max_projection_nodes:
+            raise GraphTooLargeError(
+                f"Tenant {tenant_id!r} graph has {node_count} nodes, "
+                f"exceeding projection limit "
+                f"{self._guard.max_projection_nodes}"
+            )
+
+        async with self._projection_semaphore:
+            await self._project_graph(tenant_id)
+            await self._redis.set(
+                self._cache_key(tenant_id), "1",
+                ex=_PROJECTION_TTL_SECONDS,
+            )
         return True
 
     async def invalidate_projection(self, tenant_id: str) -> None:
@@ -598,6 +659,38 @@ class FusionWeightResolver:
         return cls._WEIGHT_MAP.get(key, cls._LEGACY)
 
 
+@dataclass(frozen=True)
+class EdgeTypeWeights:
+    calls: float = 1.0
+    produces: float = 0.8
+    consumes: float = 0.8
+    deployed_in: float = 0.5
+
+    _FIELD_MAP: ClassVar[Dict[str, str]] = {
+        "CALLS": "calls",
+        "PRODUCES": "produces",
+        "CONSUMES": "consumes",
+        "DEPLOYED_IN": "deployed_in",
+    }
+
+    def weight_for(self, edge_type: str) -> float:
+        field_name = self._FIELD_MAP.get(edge_type)
+        if field_name is not None:
+            return getattr(self, field_name)
+        return 1.0
+
+
+def edge_type_weighted_score(
+    base_score: float,
+    edge_type: Optional[str],
+    weights: Optional[EdgeTypeWeights] = None,
+) -> float:
+    if edge_type is None:
+        return base_score
+    resolved = weights or EdgeTypeWeights()
+    return base_score * resolved.weight_for(edge_type)
+
+
 def rerank_with_structural(
     text_results: List[Any],
     structural_embeddings: Dict[str, List[float]],
@@ -607,6 +700,7 @@ def rerank_with_structural(
     complexity: Optional[Any] = None,
     fusion_strategy: str = "linear",
     hint: Optional[FusionHint] = None,
+    edge_weights: Optional[EdgeTypeWeights] = None,
 ) -> List[Any]:
     if not text_results:
         return []
@@ -642,6 +736,15 @@ def rerank_with_structural(
     struct_sims = _batch_cosine_similarities(
         ids, structural_embeddings, query_vec, len(query_structural),
     )
+
+    if edge_weights is not None:
+        for idx, meta in enumerate(metadatas):
+            et = meta.get("edge_type") if isinstance(meta, dict) else None
+            if et is not None:
+                struct_sims[idx] = edge_type_weighted_score(
+                    float(struct_sims[idx]), et, edge_weights,
+                )
+
     combined = text_weight * text_scores + structural_weight * struct_sims
     order = np.argsort(-combined)
 

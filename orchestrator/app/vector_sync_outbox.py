@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_VECTOR_SYNC_TOPIC = "graphrag.vector-sync"
 
 
+class OutboxOverflowError(RuntimeError):
+    pass
+
+
 @runtime_checkable
 class KafkaPublisher(Protocol):
     async def publish(self, event: "VectorSyncEvent") -> None: ...
@@ -28,14 +32,20 @@ class VectorSyncRouter:
         mode: str = "memory",
         kafka_publisher: Any = None,
         memory_outbox: Any = None,
+        overflow_strategy: str = "buffer",
     ) -> None:
         self._mode = mode
         self._kafka_publisher = kafka_publisher
         self._memory_outbox = memory_outbox
+        self._overflow_strategy = overflow_strategy
 
     @property
     def mode(self) -> str:
         return self._mode
+
+    @property
+    def overflow_strategy(self) -> str:
+        return self._overflow_strategy
 
     async def route(self, event: "VectorSyncEvent") -> None:
         if self._mode == "kafka" and self._kafka_publisher is not None:
@@ -43,6 +53,10 @@ class VectorSyncRouter:
                 await self._kafka_publisher.publish(event)
                 return
             except Exception as exc:
+                if self._overflow_strategy == "reject":
+                    raise OutboxOverflowError(
+                        f"Kafka publish failed and overflow_strategy=reject: {exc}"
+                    ) from exc
                 logger.warning(
                     "Kafka publish failed, fallback to in-memory outbox: %s",
                     exc,
@@ -58,10 +72,14 @@ class VectorSyncRouter:
     ) -> "VectorSyncRouter":
         import os
         mode = os.environ.get("VECTOR_SYNC_MODE", "memory").lower()
+        overflow = os.environ.get(
+            "VECTOR_SYNC_OVERFLOW_STRATEGY", "buffer",
+        ).lower()
         return cls(
             mode=mode,
             kafka_publisher=kafka_publisher,
             memory_outbox=memory_outbox,
+            overflow_strategy=overflow,
         )
 
 

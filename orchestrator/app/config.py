@@ -272,6 +272,30 @@ class IngestionConfig:
 
 
 @dataclass(frozen=True)
+class ASTResourceGuard:
+    max_file_size_bytes: int = 2_097_152
+    per_file_timeout_seconds: float = 30.0
+    pool_exhaustion_timeout: float = 60.0
+
+    def exceeds_file_size(self, content: str) -> bool:
+        return len(content.encode("utf-8", errors="replace")) > self.max_file_size_bytes
+
+    @classmethod
+    def from_env(cls) -> ASTResourceGuard:
+        return cls(
+            max_file_size_bytes=int(
+                os.environ.get("AST_MAX_FILE_SIZE_BYTES", "2097152"),
+            ),
+            per_file_timeout_seconds=float(
+                os.environ.get("AST_PER_FILE_TIMEOUT", "30.0"),
+            ),
+            pool_exhaustion_timeout=float(
+                os.environ.get("AST_POOL_EXHAUSTION_TIMEOUT", "60.0"),
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class ASTPoolConfig:
     ceiling: int = 8
 
