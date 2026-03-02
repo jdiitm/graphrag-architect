@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 class CheckpointStoreConfig:
     backend: str = "memory"
     postgres_dsn: str = ""
-    pool_size: int = 4
     batch_max_size: int = 50
     batch_flush_interval_ms: int = 500
 
@@ -28,7 +27,6 @@ class CheckpointStoreConfig:
         return cls(
             backend=os.environ.get("CHECKPOINT_BACKEND", "memory"),
             postgres_dsn=os.environ.get("CHECKPOINT_POSTGRES_DSN", ""),
-            pool_size=int(os.environ.get("CHECKPOINT_POOL_SIZE", "4")),
             batch_max_size=int(
                 os.environ.get("CHECKPOINT_BATCH_MAX_SIZE", "50"),
             ),
@@ -65,14 +63,23 @@ async def _create_postgres_checkpointer(dsn: str) -> Any:
 async def init_checkpointer() -> None:
     config = CheckpointStoreConfig.from_env()
     if config.backend == "postgres" and config.postgres_dsn:
-        _state["checkpointer"] = await _create_postgres_checkpointer(
-            config.postgres_dsn
+        inner = await _create_postgres_checkpointer(config.postgres_dsn)
+        from orchestrator.app.batched_checkpoint import BatchedCheckpointSaver
+        batched = BatchedCheckpointSaver(
+            inner_saver=inner,
+            batch_max_size=config.batch_max_size,
+            flush_interval_ms=config.batch_flush_interval_ms,
         )
+        await batched.start_timer()
+        _state["checkpointer"] = batched
     else:
         _state["checkpointer"] = MemorySaver()
 
 
 async def close_checkpointer() -> None:
+    cp = _state.get("checkpointer")
+    if cp is not None and hasattr(cp, "close"):
+        await cp.close()
     conn = _state.get("connection")
     if conn is not None:
         await conn.close()

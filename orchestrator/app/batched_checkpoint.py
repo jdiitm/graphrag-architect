@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections import deque
 from typing import Any, Deque, Dict, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+_DEFAULT_BATCH_MAX_SIZE = 50
+_DEFAULT_FLUSH_INTERVAL_MS = 500
 
 
 class BatchedCheckpointSaver:
     def __init__(
         self,
         inner_saver: Any,
-        batch_max_size: int = 50,
-        flush_interval_ms: int = 500,
+        batch_max_size: int = _DEFAULT_BATCH_MAX_SIZE,
+        flush_interval_ms: int = _DEFAULT_FLUSH_INTERVAL_MS,
     ) -> None:
         self._inner = inner_saver
         self._batch_max_size = batch_max_size
@@ -33,6 +33,10 @@ class BatchedCheckpointSaver:
         checkpoint: Any,
         metadata: Any,
     ) -> None:
+        if self._closed:
+            raise RuntimeError(
+                "Cannot write to a closed BatchedCheckpointSaver"
+            )
         async with self._lock:
             self._buffer.append((config, checkpoint, metadata))
             if len(self._buffer) >= self._batch_max_size:
@@ -42,9 +46,20 @@ class BatchedCheckpointSaver:
         return await self._inner.aget_tuple(config)
 
     async def _flush_locked(self) -> None:
+        failed: Deque[Tuple[Dict[str, Any], Any, Any]] = deque()
+        err: Optional[BaseException] = None
         while self._buffer:
-            config, checkpoint, metadata = self._buffer.popleft()
-            await self._inner.aput(config, checkpoint, metadata)
+            entry = self._buffer.popleft()
+            try:
+                await self._inner.aput(entry[0], entry[1], entry[2])
+            except Exception as exc:
+                failed.append(entry)
+                err = exc
+                break
+        if failed:
+            failed.extend(self._buffer)
+            self._buffer = failed
+            raise err  # type: ignore[misc]
 
     async def flush(self) -> None:
         async with self._lock:
@@ -60,7 +75,10 @@ class BatchedCheckpointSaver:
         while not self._closed:
             await asyncio.sleep(interval)
             if self._buffer:
-                await self.flush()
+                try:
+                    await self.flush()
+                except Exception:
+                    pass
 
     async def close(self) -> None:
         self._closed = True
@@ -71,4 +89,5 @@ class BatchedCheckpointSaver:
             except asyncio.CancelledError:
                 pass
             self._timer_task = None
-        await self.flush()
+        async with self._lock:
+            await self._flush_locked()

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional, Tuple
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -10,10 +9,6 @@ from orchestrator.app.checkpoint_store import CheckpointStoreConfig
 
 
 class TestCheckpointStoreConfig:
-
-    def test_pool_size_default(self) -> None:
-        config = CheckpointStoreConfig()
-        assert config.pool_size == 4
 
     def test_batch_max_size_default(self) -> None:
         config = CheckpointStoreConfig()
@@ -29,25 +24,17 @@ class TestCheckpointStoreConfig:
             {
                 "CHECKPOINT_BACKEND": "postgres",
                 "CHECKPOINT_POSTGRES_DSN": "postgresql://test",
-                "CHECKPOINT_POOL_SIZE": "8",
                 "CHECKPOINT_BATCH_MAX_SIZE": "100",
                 "CHECKPOINT_BATCH_FLUSH_MS": "250",
             },
             clear=False,
         ):
             config = CheckpointStoreConfig.from_env()
-            assert config.pool_size == 8
             assert config.batch_max_size == 100
             assert config.batch_flush_interval_ms == 250
 
 
 class TestBatchedCheckpointSaver:
-
-    def test_batched_saver_exists(self) -> None:
-        from orchestrator.app.batched_checkpoint import (
-            BatchedCheckpointSaver,
-        )
-        assert BatchedCheckpointSaver is not None
 
     @pytest.mark.asyncio
     async def test_put_buffers_without_immediate_write(self) -> None:
@@ -61,10 +48,8 @@ class TestBatchedCheckpointSaver:
             flush_interval_ms=10000,
         )
         config = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
-        checkpoint = {"id": "cp-1", "ts": "2026-01-01"}
-        metadata = {"step": 1}
 
-        await saver.aput(config, checkpoint, metadata)
+        await saver.aput(config, {"id": "cp-1"}, {"step": 1})
 
         assert saver.pending_count == 1
         inner.aput.assert_not_awaited()
@@ -155,21 +140,74 @@ class TestBatchedCheckpointSaver:
         assert inner.aput.await_count == 20
 
     @pytest.mark.asyncio
-    async def test_timer_flush_triggers_periodically(self) -> None:
+    async def test_put_after_close_raises(self) -> None:
         from orchestrator.app.batched_checkpoint import (
             BatchedCheckpointSaver,
         )
         inner = AsyncMock()
         saver = BatchedCheckpointSaver(
             inner_saver=inner,
-            batch_max_size=1000,
-            flush_interval_ms=50,
+            batch_max_size=10,
+            flush_interval_ms=60000,
+        )
+        await saver.close()
+
+        with pytest.raises(RuntimeError, match="closed"):
+            await saver.aput(
+                {"configurable": {"thread_id": "t1"}},
+                {"id": "cp-1"},
+                {"step": 1},
+            )
+
+    @pytest.mark.asyncio
+    async def test_flush_error_preserves_buffer(self) -> None:
+        from orchestrator.app.batched_checkpoint import (
+            BatchedCheckpointSaver,
+        )
+        call_count = 0
+
+        async def _failing_put(config: dict, cp: dict, meta: dict) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise ConnectionError("db gone")
+
+        inner = AsyncMock()
+        inner.aput = _failing_put
+        saver = BatchedCheckpointSaver(
+            inner_saver=inner,
+            batch_max_size=100,
+            flush_interval_ms=60000,
         )
         config = {"configurable": {"thread_id": "t1", "checkpoint_ns": ""}}
 
         await saver.aput(config, {"id": "cp-1"}, {"step": 1})
-        await saver.start_timer()
-        await asyncio.sleep(0.15)
-        await saver.close()
+        await saver.aput(config, {"id": "cp-2"}, {"step": 2})
+        await saver.aput(config, {"id": "cp-3"}, {"step": 3})
 
-        assert inner.aput.await_count >= 1
+        with pytest.raises(ConnectionError):
+            await saver.flush()
+
+        assert saver.pending_count == 2
+        saver._closed = True
+
+
+class TestCheckpointStoreIntegration:
+
+    @pytest.mark.asyncio
+    async def test_init_checkpointer_wraps_in_batched_saver(self) -> None:
+        from orchestrator.app.checkpoint_store import (
+            _state,
+            close_checkpointer,
+            init_checkpointer,
+        )
+        with patch.dict(
+            "os.environ",
+            {"CHECKPOINT_BACKEND": "memory"},
+            clear=False,
+        ):
+            await init_checkpointer()
+            cp = _state["checkpointer"]
+            from langgraph.checkpoint.memory import MemorySaver
+            assert isinstance(cp, MemorySaver)
+            await close_checkpointer()
