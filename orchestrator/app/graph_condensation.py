@@ -59,16 +59,20 @@ def _build_macro_nodes(
     return macro_nodes
 
 
-def _find_inter_community_edges(
-    topology: GraphTopology,
-    partition: PartitionResult,
+def _build_member_to_macro_map(
     macro_nodes: List[MacroNode],
-) -> List[Tuple[str, str]]:
-    member_to_macro: Dict[str, str] = {}
+) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
     for mn in macro_nodes:
         for member in mn.member_ids:
-            member_to_macro[member] = mn.node_id
+            mapping[member] = mn.node_id
+    return mapping
 
+
+def _find_inter_community_edges(
+    topology: GraphTopology,
+    member_to_macro: Dict[str, str],
+) -> List[Tuple[str, str]]:
     edge_pairs: Set[Tuple[str, str]] = set()
     for node in topology.nodes:
         src_macro = member_to_macro.get(node)
@@ -96,14 +100,8 @@ def condense_graph(
     if not macro_nodes:
         return CondensationResult()
 
-    inter_edges = _find_inter_community_edges(
-        topology, partition, macro_nodes,
-    )
-
-    node_to_macro: Dict[str, str] = {}
-    for mn in macro_nodes:
-        for member in mn.member_ids:
-            node_to_macro[member] = mn.node_id
+    node_to_macro = _build_member_to_macro_map(macro_nodes)
+    inter_edges = _find_inter_community_edges(topology, node_to_macro)
 
     logger.info(
         "Condensed %d nodes into %d macro-nodes with %d inter-community edges "

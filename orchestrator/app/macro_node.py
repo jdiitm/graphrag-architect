@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet
+from typing import Any, Dict, FrozenSet, List
 
 
 @dataclass(frozen=True)
@@ -12,7 +12,7 @@ class MacroNode:
     member_ids: FrozenSet[str]
     summary_text: str
     member_count: int
-    centroid_embedding: list[float] = field(default_factory=list)
+    centroid_embedding: List[float] = field(default_factory=list)
 
     @property
     def neo4j_label(self) -> str:

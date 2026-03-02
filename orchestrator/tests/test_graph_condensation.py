@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-
 from orchestrator.app.graph_embeddings import GraphTopology
 
 
@@ -94,8 +89,10 @@ class TestGraphCondensationPipeline:
             tenant_id="t1",
             min_community_size=2,
         )
-        if len(result.macro_nodes) >= 2:
-            assert len(result.inter_community_edges) >= 1
+        assert len(result.macro_nodes) >= 2, (
+            "Expected at least 2 macro-nodes from two dense clusters"
+        )
+        assert len(result.inter_community_edges) >= 1
 
     def test_condensation_result_has_node_to_macro_map(self) -> None:
         from orchestrator.app.graph_condensation import condense_graph
@@ -108,12 +105,14 @@ class TestGraphCondensationPipeline:
             tenant_id="t1",
             min_community_size=2,
         )
-        if result.macro_nodes:
-            assert len(result.node_to_macro) >= 1
-            for node_id, macro_id in result.node_to_macro.items():
-                assert any(
-                    mn.node_id == macro_id for mn in result.macro_nodes
-                )
+        assert len(result.macro_nodes) >= 1, (
+            "Expected at least 1 macro-node from a 3-node clique"
+        )
+        assert len(result.node_to_macro) >= 1
+        for node_id, macro_id in result.node_to_macro.items():
+            assert any(
+                mn.node_id == macro_id for mn in result.macro_nodes
+            )
 
 
 class TestSummaryGeneration:
