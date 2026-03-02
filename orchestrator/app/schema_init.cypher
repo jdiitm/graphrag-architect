@@ -23,6 +23,11 @@ CREATE INDEX service_lang_idx IF NOT EXISTS FOR (s:Service) ON (s.language);
 CREATE INDEX service_framework_idx IF NOT EXISTS FOR (s:Service) ON (s.framework);
 CREATE FULLTEXT INDEX service_name_index IF NOT EXISTS FOR (n:Service) ON EACH [n.name];
 
+CREATE INDEX service_pagerank_idx IF NOT EXISTS FOR (s:Service) ON (s.tenant_id, s.pagerank);
+CREATE INDEX database_pagerank_idx IF NOT EXISTS FOR (d:Database) ON (d.tenant_id, d.pagerank);
+CREATE INDEX topic_pagerank_idx IF NOT EXISTS FOR (t:KafkaTopic) ON (t.tenant_id, t.pagerank);
+CREATE INDEX deployment_pagerank_idx IF NOT EXISTS FOR (k:K8sDeployment) ON (k.tenant_id, k.pagerank);
+
 CREATE INDEX rel_ingestion_id_idx IF NOT EXISTS FOR ()-[r:CALLS]-() ON (r.ingestion_id);
 CREATE INDEX rel_produces_ingestion_id_idx IF NOT EXISTS FOR ()-[r:PRODUCES]-() ON (r.ingestion_id);
 CREATE INDEX rel_consumes_ingestion_id_idx IF NOT EXISTS FOR ()-[r:CONSUMES]-() ON (r.ingestion_id);

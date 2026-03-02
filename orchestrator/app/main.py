@@ -211,6 +211,12 @@ def _decode_documents(request: IngestRequest) -> List[Dict[str, str]]:
     return list(_iter_decoded_documents(request))
 
 
+async def _decode_documents_async(
+    request: IngestRequest,
+) -> List[Dict[str, str]]:
+    return await asyncio.to_thread(_decode_documents, request)
+
+
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "healthy"}
@@ -245,7 +251,7 @@ async def ingest(
     sync: bool = False,
 ) -> JSONResponse:
     _verify_ingest_auth(authorization)
-    raw_files = _decode_documents(request)
+    raw_files = await _decode_documents_async(request)
 
     if sync:
         return await _ingest_sync(raw_files)
