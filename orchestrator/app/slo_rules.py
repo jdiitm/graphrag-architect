@@ -128,7 +128,7 @@ def _render_rules(slos: Sequence[SLODefinition]) -> str:
         lines.append(f"      - record: slo:{slo.name}")
         lines.append(f"        expr: {slo.metric_query}")
 
-        error_budget_expr = f"1 - (slo:{slo.name} / {slo.target})"
+        error_budget_expr = f"(slo:{slo.name} - {slo.target}) / (1 - {slo.target})"
         lines.append(f"      - record: slo:{slo.name}:error_budget_remaining")
         lines.append(f"        expr: clamp_min({error_budget_expr}, 0)")
 

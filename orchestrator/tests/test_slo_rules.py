@@ -148,6 +148,25 @@ class TestPrometheusRuleGeneration:
                 f"Missing error budget rule for {slo.name}"
             )
 
+    def test_error_budget_expression_uses_correct_formula(self) -> None:
+        rules_yaml = generate_prometheus_rules()
+        for slo in PRODUCTION_SLOS:
+            correct_expr = (
+                f"(slo:{slo.name} - {slo.target}) / (1 - {slo.target})"
+            )
+            assert correct_expr in rules_yaml, (
+                f"Error budget for {slo.name} must use "
+                f"(actual - target) / (1 - target), got no match for: {correct_expr}"
+            )
+
+    def test_error_budget_expression_rejects_old_formula(self) -> None:
+        rules_yaml = generate_prometheus_rules()
+        for slo in PRODUCTION_SLOS:
+            wrong_expr = f"1 - (slo:{slo.name} / {slo.target})"
+            assert wrong_expr not in rules_yaml, (
+                f"Error budget for {slo.name} still uses wrong formula: {wrong_expr}"
+            )
+
     def test_rules_group_name(self) -> None:
         rules_yaml = generate_prometheus_rules()
         assert "graphrag_slo_recording_rules" in rules_yaml
