@@ -47,7 +47,7 @@ from orchestrator.app.checkpoint_store import get_checkpointer
 from orchestrator.app.node_sink import IncrementalNodeSink
 from orchestrator.app.vector_store import create_vector_store, resolve_collection_name
 from orchestrator.app.config import VectorStoreConfig
-from orchestrator.app.workspace_loader import load_directory_chunked
+from orchestrator.app.workspace_loader import load_directory_chunked, load_directory_stream
 from orchestrator.app.vector_sync_outbox import (
     CoalescingOutbox,
     DurableOutboxDrainer,
@@ -404,11 +404,11 @@ async def load_workspace_files(state: IngestionState) -> dict:
                 (time.monotonic() - start) * 1000, {"node": "load_workspace"}
             )
             return {"raw_files": files}
-        max_bytes = _get_workspace_max_bytes()
-        files, skipped = await asyncio.to_thread(
-            _load_files_sync, directory_path, max_bytes,
-        )
-        span.set_attribute("file_count", len(files))
+        pipeline = StreamingIngestionPipeline()
+        result = await pipeline.process_directory(directory_path)
+        span.set_attribute("chunk_count", pipeline.chunk_count)
+        span.set_attribute("total_entities", pipeline.total_entities)
+        skipped = result.get("skipped_files", [])
         if skipped:
             span.set_attribute("skipped_count", len(skipped))
             logger.warning(
@@ -419,7 +419,13 @@ async def load_workspace_files(state: IngestionState) -> dict:
         INGESTION_DURATION.record(
             (time.monotonic() - start) * 1000, {"node": "load_workspace"}
         )
-        return {"raw_files": files, "skipped_files": skipped}
+        return {
+            "raw_files": [],
+            "skipped_files": skipped,
+            "commit_status": result.get("commit_status", "success"),
+            "extracted_nodes": result.get("extracted_nodes", []),
+            "extraction_errors": result.get("extraction_errors", []),
+        }
 
 
 def _run_ast_extraction(
@@ -985,7 +991,7 @@ class StreamingIngestionPipeline:
         return self._commit_status
 
     async def process_directory(self, directory_path: str) -> dict:
-        for chunk in load_directory_chunked(
+        async for chunk in load_directory_stream(
             directory_path,
             chunk_size=self._chunk_size,
             max_total_bytes=self._max_bytes,
