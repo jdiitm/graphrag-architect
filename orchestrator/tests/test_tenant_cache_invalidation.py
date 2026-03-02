@@ -78,14 +78,14 @@ class TestSemanticCacheTenantInvalidation:
 
 class TestGranularCacheInvalidation:
     @pytest.mark.asyncio
-    async def test_ingest_invalidation_passes_tenant_id(self) -> None:
+    async def test_ingest_invalidation_advances_generation(self) -> None:
         from orchestrator.app.graph_builder import invalidate_caches_after_ingest
 
         subgraph_cache = MagicMock()
-        subgraph_cache.invalidate_tenant = MagicMock(return_value=2)
+        subgraph_cache.advance_generation = MagicMock(return_value=2)
 
         semantic_cache = MagicMock()
-        semantic_cache.invalidate_tenant = MagicMock(return_value=1)
+        semantic_cache.advance_generation = MagicMock(return_value=2)
 
         with (
             patch(
@@ -99,8 +99,10 @@ class TestGranularCacheInvalidation:
         ):
             await invalidate_caches_after_ingest(tenant_id="team-alpha")
 
-        subgraph_cache.invalidate_tenant.assert_called_once_with("team-alpha")
-        semantic_cache.invalidate_tenant.assert_called_once_with("team-alpha")
+        subgraph_cache.advance_generation.assert_called_once()
+        semantic_cache.advance_generation.assert_called_once()
+        subgraph_cache.invalidate_tenant.assert_not_called()
+        semantic_cache.invalidate_tenant.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_ingest_invalidation_rejects_empty_tenant(self) -> None:

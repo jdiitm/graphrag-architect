@@ -563,6 +563,72 @@ async def _llm_synthesize(
         })
 
 
+_SynthesizeFn = Any
+_ClassifyFn = Any
+
+
+async def synthesize_with_concurrent_scan(
+    query: str,
+    context: List[Dict[str, Any]],
+    synthesize_fn: _SynthesizeFn,
+    classify_fn: _ClassifyFn,
+) -> str:
+    context_text = _serialize_context_for_classification(context)
+
+    synthesis_task = asyncio.create_task(synthesize_fn(query, context))
+    classify_task = asyncio.create_task(classify_fn(context_text))
+
+    done, _waiting = await asyncio.wait(
+        [synthesis_task, classify_task],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    if classify_task in done:
+        try:
+            injection_result = classify_task.result()
+            if injection_result.is_flagged:
+                synthesis_task.cancel()
+                try:
+                    await synthesis_task
+                except asyncio.CancelledError:
+                    pass
+                raise PromptInjectionBlockedError(
+                    query=query,
+                    score=injection_result.score,
+                    patterns=injection_result.detected_patterns,
+                )
+        except PromptInjectionBlockedError:
+            raise
+        except Exception:
+            _query_logger.warning(
+                "Context injection classifier failed (non-fatal), "
+                "allowing synthesis to proceed",
+                exc_info=True,
+            )
+
+    if synthesis_task in done:
+        synthesis_result = synthesis_task.result()
+        if classify_task not in done:
+            try:
+                injection_result = await classify_task
+                if injection_result.is_flagged:
+                    raise PromptInjectionBlockedError(
+                        query=query,
+                        score=injection_result.score,
+                        patterns=injection_result.detected_patterns,
+                    )
+            except PromptInjectionBlockedError:
+                raise
+            except Exception:
+                _query_logger.warning(
+                    "Context injection classifier failed (non-fatal)",
+                    exc_info=True,
+                )
+        return synthesis_result
+
+    return await synthesis_task
+
+
 def classify_query_node(state: QueryState) -> dict:
     tracer = get_tracer()
     with tracer.start_as_current_span("query.classify") as span:

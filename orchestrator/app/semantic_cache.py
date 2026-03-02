@@ -446,6 +446,29 @@ class SemanticQueryCache:
             best_entry, best_sim, second_sim, len(scoped_entries),
         )
 
+    def lookup_swr(
+        self,
+        query_embedding: List[float],
+        tenant_id: str = "",
+        acl_key: str = "",
+    ) -> Optional[Tuple[Dict[str, Any], bool]]:
+        scoped_entries = self._prepare_scoped_entries(tenant_id, acl_key)
+        if scoped_entries is None:
+            return None
+        best_entry, best_sim, second_sim = _vectorized_best_match(
+            query_embedding, scoped_entries,
+        )
+        result = self._apply_match_result(
+            best_entry, best_sim, second_sim, len(scoped_entries),
+        )
+        if result is None:
+            return None
+        entry_gen = self._entry_generations.get(
+            best_entry.key_hash, 0,  # type: ignore[union-attr]
+        )
+        is_stale = entry_gen < self._generation
+        return result, is_stale
+
     async def async_lookup(
         self,
         query_embedding: List[float],
