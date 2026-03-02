@@ -72,3 +72,18 @@ data:
     CREATE RANGE INDEX tombstone_produces_idx IF NOT EXISTS FOR ()-[r:PRODUCES]-() ON (r.tombstoned_at);
     CREATE RANGE INDEX tombstone_consumes_idx IF NOT EXISTS FOR ()-[r:CONSUMES]-() ON (r.tombstoned_at);
     CREATE RANGE INDEX tombstone_deployed_in_idx IF NOT EXISTS FOR ()-[r:DEPLOYED_IN]-() ON (r.tombstoned_at);
+
+    // --- RBAC label migration: back-populate labels from properties ---
+    MATCH (n) WHERE n.team_owner IS NOT NULL
+    CALL apoc.create.addLabels(n, ['Team_' + apoc.text.replace(n.team_owner, '[^a-zA-Z0-9_]', '_')]) YIELD node
+    RETURN count(node);
+
+    MATCH (n) WHERE n.namespace_acl IS NOT NULL
+    UNWIND n.namespace_acl AS ns
+    CALL apoc.create.addLabels(n, ['Ns_' + apoc.text.replace(ns, '[^a-zA-Z0-9_]', '_')]) YIELD node
+    RETURN count(node);
+
+    MATCH (n) WHERE n.read_roles IS NOT NULL
+    UNWIND n.read_roles AS role
+    CALL apoc.create.addLabels(n, ['Role_' + apoc.text.replace(role, '[^a-zA-Z0-9_]', '_')]) YIELD node
+    RETURN count(node);

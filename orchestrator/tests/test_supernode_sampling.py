@@ -47,7 +47,7 @@ class TestSupernodeReturnsSampledResults:
         driver = _mock_driver_with_sampling(degree_data, sample_results=sampled)
         results = await execute_hop(
             driver=driver, source_id="hub-node", tenant_id="t1",
-            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+            acl_params={"is_admin": True, "acl_labels": []},
         )
         assert len(results) == 2
         assert results[0]["target_id"] == "s1"
@@ -62,7 +62,7 @@ class TestSampleSizeRespected:
         driver = _mock_driver_with_sampling(degree_data, sample_results=sampled)
         results = await execute_hop(
             driver=driver, source_id="big-hub", tenant_id="t1",
-            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+            acl_params={"is_admin": True, "acl_labels": []},
             sample_size=25,
         )
         assert len(results) == 25
@@ -78,7 +78,7 @@ class TestNormalNodeUnchanged:
         driver = _mock_driver_with_sampling(degree_data, normal_results=normal)
         results = await execute_hop(
             driver=driver, source_id="normal-node", tenant_id="t1",
-            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+            acl_params={"is_admin": True, "acl_labels": []},
         )
         assert len(results) == 1
         assert results[0]["target_id"] == "a"
@@ -120,7 +120,7 @@ class TestSemanticPruningSupernodes:
             driver=driver,
             source_id="hub-node",
             tenant_id="t1",
-            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+            acl_params={"is_admin": True, "acl_labels": []},
             query_embedding=[0.1, 0.2, 0.3],
             similarity_threshold=0.5,
         )
@@ -139,7 +139,7 @@ class TestSemanticPruningSupernodes:
             driver=driver,
             source_id="hub-node",
             tenant_id="t1",
-            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+            acl_params={"is_admin": True, "acl_labels": []},
         )
         assert len(results) == 1
         assert results[0]["target_id"] == "det1"
@@ -177,7 +177,7 @@ class TestSemanticPruningSupernodes:
             driver=driver,
             source_id="hub",
             tenant_id="t1",
-            acl_params={"is_admin": True, "acl_team": "", "acl_namespaces": []},
+            acl_params={"is_admin": True, "acl_labels": []},
             query_embedding=[0.1, 0.2],
             similarity_threshold=0.7,
         )
@@ -202,8 +202,7 @@ class TestSampledNeighborTemplateExists:
 
     def test_template_includes_acl_filtering(self) -> None:
         assert "$is_admin" in _SAMPLED_NEIGHBOR_TEMPLATE
-        assert "$acl_team" in _SAMPLED_NEIGHBOR_TEMPLATE
-        assert "$acl_namespaces" in _SAMPLED_NEIGHBOR_TEMPLATE
+        assert "$acl_labels" in _SAMPLED_NEIGHBOR_TEMPLATE
 
     def test_template_includes_tombstone_filter(self) -> None:
         assert "tombstoned_at IS NULL" in _SAMPLED_NEIGHBOR_TEMPLATE

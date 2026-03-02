@@ -326,11 +326,13 @@ def _build_traversal_acl_params(state: QueryState) -> Dict[str, Any]:
         token_secret=auth_config.token_secret,
     )
     namespaces = [principal.namespace] if principal.namespace != "*" else []
-    return {
-        "is_admin": principal.is_admin,
-        "acl_team": principal.team,
-        "acl_namespaces": namespaces,
-    }
+    from orchestrator.app.query_templates import build_acl_params as _build_params
+    return _build_params(
+        tenant_id="",
+        is_admin=principal.is_admin,
+        team=principal.team,
+        namespaces=namespaces,
+    )
 
 
 def _build_synthesis_provider() -> LLMProvider:
@@ -895,9 +897,8 @@ def _compute_acl_cache_key(state: QueryState) -> str:
     is_admin = acl_params.get("is_admin", False)
     if is_admin:
         return "admin"
-    team = acl_params.get("acl_team", "")
-    namespaces = sorted(acl_params.get("acl_namespaces", []))
-    return f"{team}:{','.join(namespaces)}"
+    acl_labels = sorted(acl_params.get("acl_labels", []))
+    return ",".join(acl_labels)
 
 
 async def _check_semantic_cache(

@@ -18,9 +18,9 @@ class TestACLFragmentParameterSafety:
     def test_acl_fragment_uses_only_dollar_params(self) -> None:
         fragment = _acl_where_fragment()
         assert "$is_admin" in fragment
-        assert "$acl_team" in fragment
-        assert "$acl_namespaces" in fragment
-        non_param_names = re.findall(r"(?<!\$)\bacl_team\b", fragment)
+        assert "$acl_labels" in fragment
+        assert "labels(" in fragment
+        non_param_names = re.findall(r"(?<!\$)\bacl_labels\b", fragment)
         assert len(non_param_names) == 0, (
             "ACL fragment must use only $-prefixed parameters, never literals; "
             f"found bare references: {non_param_names}"
@@ -30,8 +30,8 @@ class TestACLFragmentParameterSafety:
         cypher = build_traversal_neighbor_discovery()
         assert "$tenant_id" in cypher
         assert "$is_admin" in cypher
-        assert "$acl_team" in cypher
-        assert "$acl_namespaces" in cypher
+        assert "$acl_labels" in cypher
+        assert "labels(" in cypher
         assert "$source_id" in cypher
         assert "$limit" in cypher
 
@@ -63,6 +63,7 @@ class TestACLFragmentParameterSafety:
         frag1 = _acl_where_fragment()
         frag2 = _acl_where_fragment()
         assert frag1 == frag2, "ACL fragment must be a static template"
-        assert frag1.count("$") >= 3, (
-            "ACL fragment must have at least 3 parameter placeholders"
+        assert frag1.count("$") >= 2, (
+            "ACL fragment must have at least 2 parameter placeholders "
+            "($is_admin, $acl_labels)"
         )

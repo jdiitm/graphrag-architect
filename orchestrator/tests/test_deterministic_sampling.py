@@ -44,4 +44,4 @@ class TestSampledNeighborTemplateDeterminism:
     def test_template_preserves_tenant_and_acl_filters(self) -> None:
         assert "tenant_id" in _SAMPLED_NEIGHBOR_TEMPLATE
         assert "tombstoned_at IS NULL" in _SAMPLED_NEIGHBOR_TEMPLATE
-        assert "acl_team" in _SAMPLED_NEIGHBOR_TEMPLATE
+        assert "acl_labels" in _SAMPLED_NEIGHBOR_TEMPLATE

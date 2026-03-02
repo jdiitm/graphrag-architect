@@ -24,8 +24,8 @@ class TestACLVerificationGateSimpleQueries:
         filt = _viewer_filter()
         cypher = "MATCH (n:Service) RETURN n"
         injected, params = filt.inject_into_cypher(cypher)
-        assert "n.team_owner" in injected
-        assert params["acl_team"] == "platform"
+        assert "$acl_labels" in injected
+        assert "Team_platform" in params["acl_labels"]
 
     def test_admin_bypasses_verification(self):
         filt = _admin_filter()
@@ -44,7 +44,7 @@ class TestACLVerificationGateComplexQueries:
             "MATCH (n:Service) RETURN n"
         )
         injected, params = filt.inject_into_cypher(cypher)
-        acl_count = injected.count("n.team_owner")
+        acl_count = injected.count("$acl_labels")
         assert acl_count >= 2
 
     def test_call_subquery_verified(self):
@@ -55,7 +55,7 @@ class TestACLVerificationGateComplexQueries:
             "RETURN n, t"
         )
         injected, params = filt.inject_into_cypher(cypher)
-        acl_count = injected.count("n.team_owner")
+        acl_count = injected.count("$acl_labels")
         assert acl_count >= 2
 
 
@@ -67,7 +67,7 @@ class TestACLCoverageErrorRaised:
         filt = CypherPermissionFilter(principal, verify_coverage=True)
         cypher = "MATCH (n:Service) RETURN n"
         injected, params = filt.inject_into_cypher(cypher)
-        assert "n.team_owner" in injected
+        assert "$acl_labels" in injected
 
     def test_inject_raises_acl_coverage_error_on_validation_failure(self):
         from unittest.mock import patch
@@ -95,7 +95,7 @@ class TestACLCoverageErrorRaised:
             return_value=False,
         ):
             injected, _ = filt.inject_into_cypher(cypher)
-            assert "n.team_owner" in injected
+            assert "$acl_labels" in injected
 
     def test_verify_coverage_flag_defaults_true(self):
         filt = CypherPermissionFilter(

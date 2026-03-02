@@ -223,8 +223,9 @@ class TestAclFilterMatchesPopulatedNodes:
         )
         pf = CypherPermissionFilter(principal)
         clause, params = pf.node_filter("n")
-        assert params["acl_role"] == "reader"
-        assert "$acl_role IN n.read_roles" in clause
+        assert "Role_reader" in params["acl_labels"]
+        assert "labels(n)" in clause
+        assert "$acl_labels" in clause
 
     def test_namespace_scoped_user_matches_populated_namespace_acl(self) -> None:
         principal = SecurityPrincipal(
@@ -232,8 +233,9 @@ class TestAclFilterMatchesPopulatedNodes:
         )
         pf = CypherPermissionFilter(principal)
         clause, params = pf.node_filter("n")
-        assert params["acl_namespace"] == "production"
-        assert "$acl_namespace IN n.namespace_acl" in clause
+        assert "Ns_production" in params["acl_labels"]
+        assert "labels(n)" in clause
+        assert "$acl_labels" in clause
 
     def test_manifest_parsed_node_has_all_acl_fields_for_matching(self) -> None:
         content = textwrap.dedent("""\

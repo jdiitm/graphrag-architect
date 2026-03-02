@@ -21,8 +21,8 @@ class TestRejectsMissingTenantId:
         query = (
             "MATCH (n {id: $source_id, tenant_id: $tenant_id})-[r]->(t) "
             "WHERE t.tenant_id = $tenant_id "
-            "AND ($is_admin OR t.team_owner = $acl_team "
-            "OR ANY(ns IN t.namespace_acl WHERE ns IN $acl_namespaces)) "
+            "AND ($is_admin "
+            "OR ANY(lbl IN labels(t) WHERE lbl IN $acl_labels)) "
             "RETURN t"
         )
         params: dict = {"source_id": "s1"}
@@ -34,8 +34,8 @@ class TestRejectsMissingTenantId:
         query = (
             "MATCH (n {id: $source_id, tenant_id: $tenant_id})-[r]->(t) "
             "WHERE t.tenant_id = $tenant_id "
-            "AND ($is_admin OR t.team_owner = $acl_team "
-            "OR ANY(ns IN t.namespace_acl WHERE ns IN $acl_namespaces)) "
+            "AND ($is_admin "
+            "OR ANY(lbl IN labels(t) WHERE lbl IN $acl_labels)) "
             "RETURN t"
         )
         params: dict = {"source_id": "s1", "tenant_id": None}
@@ -47,8 +47,8 @@ class TestRejectsMissingTenantId:
         query = (
             "MATCH (n {id: $source_id, tenant_id: $tenant_id})-[r]->(t) "
             "WHERE t.tenant_id = $tenant_id "
-            "AND ($is_admin OR t.team_owner = $acl_team "
-            "OR ANY(ns IN t.namespace_acl WHERE ns IN $acl_namespaces)) "
+            "AND ($is_admin "
+            "OR ANY(lbl IN labels(t) WHERE lbl IN $acl_labels)) "
             "RETURN t"
         )
         params: dict = {"source_id": "s1", "tenant_id": ""}
@@ -70,16 +70,15 @@ class TestRejectsQueryWithoutACLClause:
             "MATCH (source {id: $source_id, tenant_id: $tenant_id})"
             "-[r]->(target) "
             "WHERE target.tenant_id = $tenant_id "
-            "AND ($is_admin OR target.team_owner = $acl_team "
-            "OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
+            "AND ($is_admin "
+            "OR ANY(lbl IN labels(target) WHERE lbl IN $acl_labels)) "
             "RETURN target"
         )
         params = {
             "source_id": "s1",
             "tenant_id": "t1",
             "is_admin": False,
-            "acl_team": "platform",
-            "acl_namespaces": ["prod"],
+            "acl_labels": ["Team_platform", "Ns_prod"],
         }
         provider.validate_query(query, params)
 
@@ -92,30 +91,30 @@ class TestACLCannotBeOmittedFromBuilders:
         cypher = build_traversal_one_hop(rel_type)
         assert "$tenant_id" in cypher
         assert "$is_admin" in cypher
-        assert "$acl_team" in cypher
-        assert "$acl_namespaces" in cypher
+        assert "$acl_labels" in cypher
+        assert "labels(" in cypher
         assert "tenant_id" in cypher
 
     def test_neighbor_discovery_always_has_acl(self):
         cypher = build_traversal_neighbor_discovery()
         assert "$tenant_id" in cypher
         assert "$is_admin" in cypher
-        assert "$acl_team" in cypher
-        assert "$acl_namespaces" in cypher
+        assert "$acl_labels" in cypher
+        assert "labels(" in cypher
 
     def test_sampled_neighbor_always_has_acl(self):
         cypher = build_traversal_sampled_neighbor()
         assert "$tenant_id" in cypher
         assert "$is_admin" in cypher
-        assert "$acl_team" in cypher
-        assert "$acl_namespaces" in cypher
+        assert "$acl_labels" in cypher
+        assert "labels(" in cypher
 
     def test_batched_neighbor_always_has_acl(self):
         cypher = build_traversal_batched_neighbor()
         assert "$tenant_id" in cypher
         assert "$is_admin" in cypher
-        assert "$acl_team" in cypher
-        assert "$acl_namespaces" in cypher
+        assert "$acl_labels" in cypher
+        assert "labels(" in cypher
 
     def test_all_builders_pass_provider_validation(self):
         provider = TenantSecurityProvider()
@@ -123,8 +122,7 @@ class TestACLCannotBeOmittedFromBuilders:
             "source_id": "s1",
             "tenant_id": "t1",
             "is_admin": False,
-            "acl_team": "platform",
-            "acl_namespaces": ["prod"],
+            "acl_labels": ["Team_platform", "Ns_prod"],
             "limit": 50,
             "sample_size": 50,
             "frontier_ids": ["s1"],
@@ -218,8 +216,7 @@ class TestTraversalExecutionGoesthroughProvider:
                 tenant_id="t1",
                 acl_params={
                     "is_admin": False,
-                    "acl_team": "platform",
-                    "acl_namespaces": ["prod"],
+                    "acl_labels": ["Team_platform", "Ns_prod"],
                 },
             )
             mock_instance.validate_query.assert_called()
@@ -251,8 +248,7 @@ class TestTraversalExecutionGoesthroughProvider:
                 tenant_id="t1",
                 acl_params={
                     "is_admin": False,
-                    "acl_team": "platform",
-                    "acl_namespaces": ["prod"],
+                    "acl_labels": ["Team_platform", "Ns_prod"],
                 },
             )
             mock_instance.validate_query.assert_called()

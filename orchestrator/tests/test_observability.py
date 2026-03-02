@@ -335,6 +335,9 @@ class TestMissingQuerySpans:
             "tenant_id": "test-tenant",
         }
         with patch(
+            "orchestrator.app.query_engine._apply_acl",
+            side_effect=lambda cypher, state, alias="n": (cypher, {}),
+        ), patch(
             "orchestrator.app.query_engine._get_neo4j_driver"
         ) as mock_get, patch(
             "orchestrator.app.query_engine._get_neo4j_write_driver"

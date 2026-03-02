@@ -226,8 +226,8 @@ ALLOWED_RELATIONSHIP_TYPES = frozenset({
 
 _ACL_NODE_FILTER = (
     "({alias}.tenant_id = $tenant_id) "
-    "AND ($is_admin OR {alias}.team_owner = $acl_team "
-    "OR ANY(ns IN {alias}.namespace_acl WHERE ns IN $acl_namespaces))"
+    "AND ($is_admin "
+    "OR ANY(lbl IN labels({alias}) WHERE lbl IN $acl_labels))"
 )
 
 _ACL_TEMPLATES: Dict[str, QueryTemplate] = {
@@ -237,14 +237,14 @@ _ACL_TEMPLATES: Dict[str, QueryTemplate] = {
             "CALL db.index.vector.queryNodes($index_name, $k, $query_embedding) "
             "YIELD node, score "
             "WHERE node.tenant_id = $tenant_id "
-            "AND ($is_admin OR node.team_owner = $acl_team "
-            "OR ANY(ns IN node.namespace_acl WHERE ns IN $acl_namespaces)) "
+            "AND ($is_admin "
+            "OR ANY(lbl IN labels(node) WHERE lbl IN $acl_labels)) "
             "RETURN node {.*, score: score} AS result "
             "ORDER BY score DESC "
             "LIMIT $limit"
         ),
         parameters=("index_name", "k", "query_embedding", "tenant_id",
-                     "is_admin", "acl_team", "acl_namespaces", "limit"),
+                     "is_admin", "acl_labels", "limit"),
         description="Vector search with mandatory tenant isolation and ACL filtering",
     ),
     "acl_fulltext_search": QueryTemplate(
@@ -253,13 +253,12 @@ _ACL_TEMPLATES: Dict[str, QueryTemplate] = {
             "CALL db.index.fulltext.queryNodes('service_name_index', $query) "
             "YIELD node, score "
             "WHERE node.tenant_id = $tenant_id "
-            "AND ($is_admin OR node.team_owner = $acl_team "
-            "OR ANY(ns IN node.namespace_acl WHERE ns IN $acl_namespaces)) "
+            "AND ($is_admin "
+            "OR ANY(lbl IN labels(node) WHERE lbl IN $acl_labels)) "
             "RETURN node {.*, score: score} AS result "
             "ORDER BY score DESC LIMIT $limit"
         ),
-        parameters=("query", "tenant_id", "is_admin", "acl_team",
-                     "acl_namespaces", "limit"),
+        parameters=("query", "tenant_id", "is_admin", "acl_labels", "limit"),
         description="Fulltext search with mandatory tenant isolation and ACL filtering",
     ),
 }
@@ -270,13 +269,13 @@ def build_acl_single_hop_query(rel_type: str) -> str:
         raise ValueError(f"Disallowed relationship type: {rel_type}")
     return (
         f"MATCH (source:Service {{id: $source_id, tenant_id: $tenant_id}}) "
-        f"WHERE $is_admin OR source.team_owner = $acl_team "
-        f"OR ANY(ns IN source.namespace_acl WHERE ns IN $acl_namespaces) "
+        f"WHERE $is_admin "
+        f"OR ANY(lbl IN labels(source) WHERE lbl IN $acl_labels) "
         f"MATCH (source)-[r:{rel_type}]->(target) "
         f"WHERE target.tenant_id = $tenant_id "
         f"AND r.tombstoned_at IS NULL "
-        f"AND ($is_admin OR target.team_owner = $acl_team "
-        f"OR ANY(ns IN target.namespace_acl WHERE ns IN $acl_namespaces)) "
+        f"AND ($is_admin "
+        f"OR ANY(lbl IN labels(target) WHERE lbl IN $acl_labels)) "
         f"RETURN target {{.*}} AS result "
         f"LIMIT $limit"
     )
@@ -289,8 +288,8 @@ def build_acl_multi_hop_query(max_depth: int) -> str:
         f"-[:CALLS*1..{max_depth}]->(target:Service) "
         f"WHERE ALL(n IN nodes(path) WHERE "
         f"n.tenant_id = $tenant_id "
-        f"AND ($is_admin OR n.team_owner = $acl_team "
-        f"OR ANY(ns IN n.namespace_acl WHERE ns IN $acl_namespaces))) "
+        f"AND ($is_admin "
+        f"OR ANY(lbl IN labels(n) WHERE lbl IN $acl_labels))) "
         f"AND ALL(rel IN relationships(path) WHERE rel.tombstoned_at IS NULL) "
         f"RETURN target.name AS name, length(path) AS hops "
         f"ORDER BY hops "
@@ -304,17 +303,29 @@ def dynamic_cypher_allowed() -> bool:
     )
 
 
+_LABEL_UNSAFE_PATTERN = re.compile(r"[^a-zA-Z0-9_]")
+
+
+def _sanitize_label(value: str) -> str:
+    return _LABEL_UNSAFE_PATTERN.sub("_", value)
+
+
 def build_acl_params(
     tenant_id: str,
     is_admin: bool,
     team: str,
     namespaces: List[str],
 ) -> Dict[str, Any]:
+    acl_labels: List[str] = []
+    if team and team != "*":
+        acl_labels.append(f"Team_{_sanitize_label(team)}")
+    for ns in namespaces:
+        if ns and ns != "*":
+            acl_labels.append(f"Ns_{_sanitize_label(ns)}")
     return {
         "tenant_id": tenant_id,
         "is_admin": is_admin,
-        "acl_team": team,
-        "acl_namespaces": namespaces,
+        "acl_labels": acl_labels,
     }
 
 
