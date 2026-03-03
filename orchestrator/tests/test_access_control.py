@@ -33,19 +33,19 @@ class TestSecurityPrincipal:
             f"Bearer {token}", token_secret=secret
         )
         assert principal.team == "platform"
-        assert principal.namespace == "*"
+        assert principal.namespace == "__anonymous__"
         assert principal.role == "viewer"
 
     def test_from_header_returns_anonymous_on_empty(self):
         principal = SecurityPrincipal.from_header("")
-        assert principal.team == "*"
-        assert principal.namespace == "*"
+        assert principal.team == "__anonymous__"
+        assert principal.namespace == "__anonymous__"
         assert principal.role == "anonymous"
 
     def test_from_header_returns_anonymous_on_none(self):
         principal = SecurityPrincipal.from_header(None)
-        assert principal.team == "*"
-        assert principal.namespace == "*"
+        assert principal.team == "__anonymous__"
+        assert principal.namespace == "__anonymous__"
         assert principal.role == "anonymous"
 
     def test_is_admin(self):
@@ -412,12 +412,12 @@ class TestJWTTokenVerification:
     def test_empty_header_still_returns_anonymous(self):
         principal = SecurityPrincipal.from_header("", token_secret="some-secret")
         assert principal.role == "anonymous"
-        assert principal.team == "*"
+        assert principal.team == "__anonymous__"
 
     def test_none_header_still_returns_anonymous(self):
         principal = SecurityPrincipal.from_header(None, token_secret="some-secret")
         assert principal.role == "anonymous"
-        assert principal.team == "*"
+        assert principal.team == "__anonymous__"
 
     def test_no_secret_rejects_token_fail_closed(self):
         with pytest.raises(InvalidTokenError, match="no secret configured"):

@@ -15,8 +15,9 @@ class TestCypherTenantScopeEnforcement:
             "team-a",
         )
 
-    def test_allows_wildcard_tenant_any_cypher(self) -> None:
-        enforce_cypher_tenant_scope("MATCH (n) RETURN n", "*")
+    def test_rejects_wildcard_tenant(self) -> None:
+        with pytest.raises(ValueError, match="wildcard"):
+            enforce_cypher_tenant_scope("MATCH (n) RETURN n", "*")
 
     def test_rejects_empty_tenant_id(self) -> None:
         with pytest.raises(ValueError, match="tenant_id"):

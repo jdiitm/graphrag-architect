@@ -106,7 +106,7 @@ class SecurityPrincipal:
         token_secret: str = "",
     ) -> SecurityPrincipal:
         if not header or not header.strip():
-            return cls(team="*", namespace="*", role="anonymous")
+            return cls(team="__anonymous__", namespace="__anonymous__", role="anonymous")
 
         token = header.removeprefix("Bearer ").strip()
 
@@ -118,8 +118,8 @@ class SecurityPrincipal:
             )
 
         return cls(
-            team=claims.get("team", "*"),
-            namespace=claims.get("namespace", "*"),
+            team=claims.get("team", "__anonymous__"),
+            namespace=claims.get("namespace", "__anonymous__"),
             role=claims.get("role", "viewer"),
         )
 

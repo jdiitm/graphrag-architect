@@ -570,7 +570,7 @@ async def _raw_llm_synthesize(
             if context_injection.is_flagged:
                 context = _strip_context_boundary_values(context, context_injection)
 
-    context_block = format_context_for_prompt(context)
+    context_block = format_context_for_prompt(context, budget=_DEFAULT_TOKEN_BUDGET)
     messages = [
         SystemMessage(
             content=(
@@ -631,7 +631,7 @@ async def _raw_llm_synthesize_stream(
             if context_injection.is_flagged:
                 context = _strip_context_boundary_values(context, context_injection)
 
-    context_block = format_context_for_prompt(context)
+    context_block = format_context_for_prompt(context, budget=_DEFAULT_TOKEN_BUDGET)
     messages = [
         SystemMessage(
             content=(
