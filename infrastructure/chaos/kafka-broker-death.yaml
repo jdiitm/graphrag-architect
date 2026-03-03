@@ -1,0 +1,82 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: kafka-broker-death
+  namespace: graphrag
+  labels:
+    experiment: kafka-broker-death
+    component: kafka
+    severity: critical
+spec:
+  entry: kafka-broker-death-workflow
+  templates:
+    - name: kafka-broker-death-workflow
+      templateType: Serial
+      children:
+        - steady-state-validation
+        - inject-broker-kill
+        - verify-recovery
+
+    - name: steady-state-validation
+      templateType: Task
+      task:
+        container:
+          name: steady-state-check
+          image: apache/kafka:3.9.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              BROKERS=$(/opt/kafka/bin/kafka-metadata.sh \
+                --snapshot /var/kafka-logs/__cluster_metadata-0/00000000000000000000.log \
+                --broker-list 2>/dev/null | wc -l)
+              if [ "$BROKERS" -ge 3 ]; then
+                echo "STEADY_STATE: $BROKERS brokers active"
+                exit 0
+              fi
+              /opt/kafka/bin/kafka-broker-api-versions.sh \
+                --bootstrap-server kafka.graphrag.svc.cluster.local:9092 \
+                --command-config /etc/kafka/client.properties 2>&1 \
+              | grep -c "id:" | xargs -I{} test {} -ge 3 \
+              && echo "STEADY_STATE: cluster healthy" \
+              || (echo "STEADY_STATE_FAILED: fewer than 3 brokers" && exit 1)
+
+    - name: inject-broker-kill
+      templateType: PodChaos
+      deadline: 180s
+      podChaos:
+        action: pod-kill
+        mode: one
+        selector:
+          namespaces:
+            - graphrag
+          labelSelectors:
+            app: kafka
+          fieldSelectors:
+            metadata.name: kafka-1
+        gracePeriod: 0
+
+    - name: verify-recovery
+      templateType: Task
+      task:
+        container:
+          name: recovery-check
+          image: apache/kafka:3.9.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              for i in $(seq 1 30); do
+                ISR_COUNT=$(/opt/kafka/bin/kafka-topics.sh \
+                  --bootstrap-server kafka.graphrag.svc.cluster.local:9092 \
+                  --describe --topic raw-documents \
+                  --command-config /etc/kafka/client.properties 2>/dev/null \
+                | grep -c "Isr:.*,.*,")
+                if [ "$ISR_COUNT" -gt 0 ]; then
+                  echo "VERIFY: ISR restored for raw-documents after ${i}0s"
+                  exit 0
+                fi
+                sleep 10
+              done
+              echo "VERIFY_FAILED: ISR not restored after 300s"
+              exit 1
