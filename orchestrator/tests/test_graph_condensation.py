@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
+import pytest
+
 from orchestrator.app.graph_embeddings import GraphTopology
 
 
@@ -113,6 +117,30 @@ class TestGraphCondensationPipeline:
             assert any(
                 mn.node_id == macro_id for mn in result.macro_nodes
             )
+
+    @pytest.mark.asyncio
+    async def test_condense_graph_with_llm_enriches_macro_summaries(self) -> None:
+        from orchestrator.app.graph_condensation import condense_graph_with_llm
+
+        topology = GraphTopology(
+            nodes=["a", "b", "c", "d"],
+            adjacency={
+                "a": ["b", "c"],
+                "b": ["a", "c"],
+                "c": ["a", "b"],
+                "d": ["a"],
+            },
+        )
+        provider = AsyncMock()
+        provider.ainvoke = AsyncMock(return_value="Critical auth boundary community.")
+        result = await condense_graph_with_llm(
+            topology=topology,
+            tenant_id="t1",
+            provider=provider,
+            min_community_size=2,
+        )
+        assert result.macro_nodes
+        assert all("Critical auth boundary community." in mn.summary_text for mn in result.macro_nodes)
 
 
 class TestSummaryGeneration:

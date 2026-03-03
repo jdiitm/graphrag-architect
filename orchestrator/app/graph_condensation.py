@@ -4,8 +4,12 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Tuple
 
-from orchestrator.app.community_summary import generate_summary
+from orchestrator.app.community_summary import (
+    generate_summary,
+    generate_summary_with_llm,
+)
 from orchestrator.app.graph_embeddings import GraphTopology
+from orchestrator.app.llm_provider import LLMProvider
 from orchestrator.app.macro_node import MacroNode
 from orchestrator.app.semantic_partitioner import (
     PartitionResult,
@@ -117,3 +121,37 @@ def condense_graph(
         inter_community_edges=inter_edges,
         node_to_macro=node_to_macro,
     )
+
+
+async def condense_graph_with_llm(
+    topology: GraphTopology,
+    tenant_id: str,
+    provider: LLMProvider,
+    min_community_size: int = DEFAULT_MIN_COMMUNITY_SIZE,
+) -> CondensationResult:
+    result = condense_graph(
+        topology=topology,
+        tenant_id=tenant_id,
+        min_community_size=min_community_size,
+    )
+    enriched: List[MacroNode] = []
+    for macro in result.macro_nodes:
+        member_names = sorted(macro.member_ids)
+        member_types = ["Node"] * len(member_names)
+        summary = await generate_summary_with_llm(
+            provider=provider,
+            tenant_id=tenant_id,
+            community_id=macro.community_id,
+            member_names=member_names,
+            member_types=member_types,
+        )
+        enriched.append(MacroNode(
+            node_id=macro.node_id,
+            community_id=macro.community_id,
+            tenant_id=macro.tenant_id,
+            member_ids=macro.member_ids,
+            summary_text=summary,
+            member_count=macro.member_count,
+        ))
+    result.macro_nodes = enriched
+    return result
