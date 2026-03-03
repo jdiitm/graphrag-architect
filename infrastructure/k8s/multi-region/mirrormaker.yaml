@@ -1,0 +1,66 @@
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaMirrorMaker2
+metadata:
+  name: graphrag-mirrormaker
+  namespace: graphrag
+  labels:
+    app: graphrag
+    component: mirrormaker
+spec:
+  version: "3.7.0"
+  replicas: 2
+  connectCluster: target
+  clusters:
+    - alias: source
+      bootstrapServers: kafka-source-bootstrap.graphrag.svc:9093
+      tls:
+        trustedCertificates:
+          - secretName: source-cluster-ca-cert
+            certificate: ca.crt
+      authentication:
+        type: tls
+        certificateAndKey:
+          secretName: mirrormaker-source-tls
+          certificate: user.crt
+          key: user.key
+    - alias: target
+      bootstrapServers: kafka-target-bootstrap.graphrag.svc:9093
+      tls:
+        trustedCertificates:
+          - secretName: target-cluster-ca-cert
+            certificate: ca.crt
+      authentication:
+        type: tls
+        certificateAndKey:
+          secretName: mirrormaker-target-tls
+          certificate: user.crt
+          key: user.key
+      config:
+        config.storage.replication.factor: 3
+        offset.storage.replication.factor: 3
+        status.storage.replication.factor: 3
+  mirrors:
+    - sourceCluster: source
+      targetCluster: target
+      sourceConnector:
+        config:
+          replication.factor: 3
+          offset-syncs.topic.replication.factor: 3
+          sync.topic.acls.enabled: "false"
+          replication.policy.class: "org.apache.kafka.connect.mirror.IdentityReplicationPolicy"
+      heartbeatConnector:
+        config:
+          heartbeats.topic.replication.factor: 3
+      checkpointConnector:
+        config:
+          checkpoints.topic.replication.factor: 3
+          sync.group.offsets.enabled: "true"
+      topicsPattern: "graphrag\\..*"
+      groupsPattern: "graphrag-.*"
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
