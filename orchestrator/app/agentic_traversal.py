@@ -326,7 +326,6 @@ class TraversalAgent:
         step: TraversalStep,
     ) -> None:
         state.visited_nodes.add(step.node_id)
-        state.remaining_hops -= 1
         for result in step.results:
             token_count = estimate_tokens(str(result))
             state.accumulated_context.append(result)
@@ -717,6 +716,7 @@ async def _batched_bfs(
             timeout=timeout,
         )
         _record_batched_results(agent, state, frontier_batch, results, hop_number)
+        state.remaining_hops -= 1
 
     return agent.get_context(state)
 

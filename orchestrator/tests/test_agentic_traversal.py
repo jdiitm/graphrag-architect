@@ -136,7 +136,7 @@ class TestTraversalAgent:
         )
         agent.record_step(state, step)
         assert "start" in state.visited_nodes
-        assert state.remaining_hops == MAX_HOPS - 1
+        assert state.remaining_hops == MAX_HOPS
         assert len(state.accumulated_context) == 1
         assert "svc-a" in state.frontier
 
