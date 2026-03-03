@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -39,7 +40,9 @@ return 0
 
 _DEFAULT_TTL = 300
 _DEFAULT_RETRY_ATTEMPTS = 10
-_DEFAULT_RETRY_DELAY = 0.3
+_DEFAULT_RETRY_DELAY = 0.1
+_DEFAULT_MAX_RETRY_DELAY = 2.0
+_JITTER_RANGE = 0.1
 
 
 class DistributedLock:
@@ -65,12 +68,16 @@ class DistributedLock:
         full_key = f"{self._prefix}{key}"
         owner = uuid.uuid4().hex
         acquired = False
-        for _ in range(self._retry_attempts):
+        for attempt in range(self._retry_attempts):
             result = await self._redis.set(full_key, owner, nx=True, ex=ttl)
             if result:
                 acquired = True
                 break
-            await asyncio.sleep(self._retry_delay)
+            base = min(
+                self._retry_delay * (2 ** attempt), _DEFAULT_MAX_RETRY_DELAY,
+            )
+            jitter = base * random.uniform(-_JITTER_RANGE, _JITTER_RANGE)
+            await asyncio.sleep(base + jitter)
 
         if not acquired:
             raise TimeoutError(
