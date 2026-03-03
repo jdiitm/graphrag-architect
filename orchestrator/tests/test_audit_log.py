@@ -94,12 +94,21 @@ class TestSecurityAuditLogger:
             complexity="MULTI_HOP",
             result_count=42,
             duration_ms=150.5,
+            raw_user_query="what breaks if auth fails?",
+            cypher_query="MATCH (n)-[r]->(m) RETURN n,m",
+            cypher_params={"tenant_id": "t1", "api_key": "secret"},
+            node_ids_returned=["auth", "orders"],
         )
         parsed = json.loads(handler.records[0])
         assert parsed["action"] == "query.execute"
         assert parsed["complexity"] == "MULTI_HOP"
         assert parsed["result_count"] == 42
         assert parsed["duration_ms"] == 150.5
+        assert parsed["raw_user_query"] == "what breaks if auth fails?"
+        assert parsed["cypher_query"] == "MATCH (n)-[r]->(m) RETURN n,m"
+        assert parsed["cypher_params"]["tenant_id"] == "t1"
+        assert parsed["cypher_params"]["api_key"] == "[REDACTED]"
+        assert parsed["node_ids_returned"] == ["auth", "orders"]
 
     def test_log_query_reject(self) -> None:
         audit, handler = _make_logger()

@@ -130,6 +130,7 @@ class TestVectorStoreProductionGuard:
             backend="qdrant",
             url="http://localhost:6333",
             deployment_mode="production",
+            shard_by_tenant=True,
         )
         assert isinstance(store, QdrantVectorStore)
 
@@ -155,20 +156,17 @@ class TestStreamingSynthesis:
     async def test_streaming_synthesize_yields_chunks(self) -> None:
         from orchestrator.app.query_engine import _raw_llm_synthesize_stream
 
-        mock_llm = MagicMock()
-
-        async def fake_astream(messages):
-            for chunk in ["Hello", " world", "!"]:
-                mock_chunk = MagicMock()
-                mock_chunk.content = chunk
-                yield mock_chunk
-
-        mock_llm.astream = fake_astream
+        mock_provider = MagicMock()
 
         with patch(
-            "langchain_google_genai.ChatGoogleGenerativeAI",
-            return_value=mock_llm,
+            "orchestrator.app.query_engine._build_synthesis_provider",
+            return_value=mock_provider,
         ):
+            async def fake_astream(messages):
+                for chunk in ["Hello", " world", "!"]:
+                    yield chunk
+
+            mock_provider.astream = fake_astream
             chunks = []
             async for token in _raw_llm_synthesize_stream(
                 "test query", [{"node": "auth-service"}],

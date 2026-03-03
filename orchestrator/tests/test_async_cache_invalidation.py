@@ -324,3 +324,47 @@ class TestSscanMultiPageCursor:
         assert mock_redis.sscan.call_count == 2
         assert invalidated == 3
         assert mock_redis.unlink.call_count == 3
+
+
+class TestBoundedAsyncInvalidation:
+
+    @pytest.mark.asyncio
+    async def test_limits_nodes_processed_per_message(self) -> None:
+        mock_redis = AsyncMock()
+        event_data = {"node_ids": json.dumps(["n1", "n2", "n3"])}
+        mock_redis.xreadgroup = AsyncMock(return_value=[
+            ("stream", [("msg-1", event_data)]),
+        ])
+        mock_redis.sscan = AsyncMock(return_value=(0, ["k1"]))
+        mock_redis.unlink = AsyncMock()
+        mock_redis.xack = AsyncMock()
+
+        worker = CacheInvalidationWorker(
+            redis_conn=mock_redis,
+            key_prefix="graphrag:semcache:",
+            max_nodes_per_message=2,
+        )
+        await worker.process_batch()
+        assert mock_redis.sscan.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_unlink_is_chunked_for_large_member_pages(self) -> None:
+        mock_redis = AsyncMock()
+        event_data = {"node_ids": json.dumps(["n1"])}
+        mock_redis.xreadgroup = AsyncMock(return_value=[
+            ("stream", [("msg-1", event_data)]),
+        ])
+        mock_redis.sscan = AsyncMock(return_value=(0, ["k1", "k2", "k3", "k4", "k5"]))
+        mock_redis.unlink = AsyncMock()
+        mock_redis.xack = AsyncMock()
+
+        worker = CacheInvalidationWorker(
+            redis_conn=mock_redis,
+            key_prefix="graphrag:semcache:",
+            unlink_batch_size=2,
+        )
+        await worker.process_batch()
+        unlink_calls = [call.args for call in mock_redis.unlink.call_args_list]
+        assert ("k1", "k2") in unlink_calls
+        assert ("k3", "k4") in unlink_calls
+        assert ("k5",) in unlink_calls

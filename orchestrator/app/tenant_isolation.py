@@ -24,6 +24,10 @@ class LogicalIsolationInProductionError(Exception):
     pass
 
 
+class QdrantShardingRequiredInProductionError(TenantIsolationViolation):
+    pass
+
+
 class UnknownTenantError(LookupError):
     pass
 
@@ -110,6 +114,9 @@ class TenantAuditLogger(Protocol):
         tenant_id: str,
         query_hash: str,
         result_count: int,
+        raw_user_query: str = "",
+        cypher_query: str = "",
+        node_ids_returned: Optional[List[str]] = None,
     ) -> None: ...
 
 
@@ -122,11 +129,17 @@ class StructuredTenantAuditLogger:
         tenant_id: str,
         query_hash: str,
         result_count: int,
+        raw_user_query: str = "",
+        cypher_query: str = "",
+        node_ids_returned: Optional[List[str]] = None,
     ) -> None:
         entry = json.dumps({
             "tenant_id": tenant_id,
             "query_hash": query_hash,
             "result_count": result_count,
+            "raw_user_query": raw_user_query,
+            "cypher_query": cypher_query,
+            "node_ids_returned": node_ids_returned or [],
             "timestamp": time.time(),
         })
         self._logger.info(entry)
@@ -272,6 +285,18 @@ def validate_vector_isolation(
             "LOGICAL vector isolation is forbidden in production. "
             "Use PHYSICAL isolation with per-tenant Qdrant collections "
             "for SOC2/FedRAMP compliance."
+        )
+
+
+def validate_vector_shard_enforcement(
+    deployment_mode: str,
+    backend: str,
+    shard_by_tenant: bool,
+) -> None:
+    if deployment_mode == "production" and backend == "qdrant" and not shard_by_tenant:
+        raise QdrantShardingRequiredInProductionError(
+            "Qdrant sharding by tenant is mandatory in production. "
+            "Set QDRANT_SHARD_BY_TENANT=true."
         )
 
 

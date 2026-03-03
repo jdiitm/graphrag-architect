@@ -201,6 +201,8 @@ class TestProductionConfigEndToEnd:
         monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
         monkeypatch.setenv("NEO4J_PASSWORD", "secret")
         monkeypatch.setenv("VECTOR_SYNC_BACKEND", "kafka")
+        monkeypatch.setenv("VECTOR_STORE_BACKEND", "qdrant")
+        monkeypatch.setenv("QDRANT_SHARD_BY_TENANT", "true")
         ProductionConfigValidator.from_env().validate_production_invariants()
 
     def test_dev_all_memory_via_env_passes(
@@ -211,3 +213,15 @@ class TestProductionConfigEndToEnd:
         monkeypatch.delenv("NEO4J_PASSWORD", raising=False)
         monkeypatch.setenv("VECTOR_SYNC_BACKEND", "memory")
         ProductionConfigValidator.from_env().validate_production_invariants()
+
+    def test_production_qdrant_without_sharding_raises(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("DEPLOYMENT_MODE", "production")
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
+        monkeypatch.setenv("NEO4J_PASSWORD", "secret")
+        monkeypatch.setenv("VECTOR_SYNC_BACKEND", "kafka")
+        monkeypatch.setenv("VECTOR_STORE_BACKEND", "qdrant")
+        monkeypatch.setenv("QDRANT_SHARD_BY_TENANT", "false")
+        with pytest.raises(ConfigurationError, match="QDRANT_SHARD_BY_TENANT"):
+            ProductionConfigValidator.from_env().validate_production_invariants()

@@ -40,6 +40,7 @@ class QueryResponse(BaseModel):
     evaluation_score: Optional[float] = None
     retrieval_quality: str = "skipped"
     query_id: str = ""
+    evaluation_details: Optional[Dict[str, Any]] = None
 
 
 class QueryJobResponse(BaseModel):

@@ -707,6 +707,8 @@ class CacheInvalidationWorker:
         key_prefix: str = "graphrag:semcache:",
         batch_size: int = _DEFAULT_INVALIDATION_BATCH_SIZE,
         consumer_name: str = "worker-0",
+        max_nodes_per_message: int = 500,
+        unlink_batch_size: int = 200,
     ) -> None:
         self._redis = redis_conn
         self._prefix = key_prefix
@@ -714,6 +716,8 @@ class CacheInvalidationWorker:
         self._stream_key = f"{key_prefix}{_STREAM_KEY_SUFFIX}"
         self._consumer_group = _CONSUMER_GROUP
         self._consumer_name = consumer_name
+        self._max_nodes_per_message = max(1, max_nodes_per_message)
+        self._unlink_batch_size = max(1, unlink_batch_size)
 
     @property
     def stream_key(self) -> str:
@@ -776,7 +780,8 @@ class CacheInvalidationWorker:
 
     async def _invalidate_node_keys(self, node_ids: list[str]) -> int:
         count = 0
-        for nid in node_ids:
+        bounded_ids = node_ids[: self._max_nodes_per_message]
+        for nid in bounded_ids:
             tag_key = f"{self._prefix}nodetag:{nid}"
             cursor = 0
             while True:
@@ -784,12 +789,18 @@ class CacheInvalidationWorker:
                     tag_key, cursor=cursor, count=self._batch_size,
                 )
                 if members:
-                    await self._redis.unlink(*members)
-                    count += len(members)
+                    for batch in _chunk_members(members, self._unlink_batch_size):
+                        await self._redis.unlink(*batch)
+                        count += len(batch)
+                        await asyncio.sleep(0)
                 if cursor == 0:
                     break
             await self._redis.unlink(tag_key)
         return count
+
+
+def _chunk_members(members: list[str], size: int) -> list[list[str]]:
+    return [members[i:i + size] for i in range(0, len(members), size)]
 
 
 class RedisSemanticQueryCache:

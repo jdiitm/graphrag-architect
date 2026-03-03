@@ -59,7 +59,7 @@ from orchestrator.app.node_sink import IncrementalNodeSink
 from orchestrator.app.schema_validation import validate_topology
 from orchestrator.app.secret_scanner import scan_and_redact
 from orchestrator.app.telemetry_ports import get_metrics_port, get_tracing_port
-from orchestrator.app.vector_store import create_vector_store
+from orchestrator.app.vector_store import create_vector_store, resolve_collection_name
 from orchestrator.app.vector_sync_outbox import (
     CoalescingOutbox,
     DurableOutboxDrainer,
@@ -162,8 +162,12 @@ def get_ast_dlq() -> List[Dict[str, Any]]:
 
 
 def resolve_vector_collection(tenant_id: Optional[str] = None) -> str:
-    _ = tenant_id
-    return _VECTOR_COLLECTION
+    cfg = VectorStoreConfig.from_env()
+    return resolve_collection_name(
+        base_collection=_VECTOR_COLLECTION,
+        tenant_id=tenant_id or "",
+        per_tenant_collection=cfg.per_tenant_collection,
+    )
 
 _VECTOR_OUTBOX = VectorSyncOutbox()
 
@@ -828,7 +832,7 @@ async def _enqueue_vector_cleanup(
         return
     collection = resolve_vector_collection(tenant_id or None)
     event = VectorSyncEvent(
-        collection=collection, pruned_ids=pruned_ids,
+        collection=collection, pruned_ids=pruned_ids, tenant_id=tenant_id,
     )
     if neo4j_driver is not None:
         store = Neo4jOutboxStore(driver=neo4j_driver)
@@ -854,7 +858,7 @@ async def _enqueue_vector_cleanup_durable(
 ) -> None:
     collection = resolve_vector_collection(tenant_id or None)
     event = VectorSyncEvent(
-        collection=collection, pruned_ids=pruned_ids,
+        collection=collection, pruned_ids=pruned_ids, tenant_id=tenant_id,
     )
     store = Neo4jOutboxStore(driver=neo4j_driver)
     await store.write_event(event)

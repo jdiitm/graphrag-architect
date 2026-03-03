@@ -120,6 +120,8 @@ class VectorSyncEvent(BaseModel):
     vectors: List[Any] = Field(default_factory=list)
     status: str = "pending"
     retry_count: int = 0
+    version: int = Field(default_factory=time.time_ns)
+    tenant_id: str = ""
 
     @field_validator("pruned_ids")
     @classmethod
@@ -155,6 +157,14 @@ class ClaimableOutboxStore(OutboxStore, Protocol):
     async def release_claim(self, event_id: str) -> None: ...
 
     async def release_expired_claims(self) -> int: ...
+
+
+@runtime_checkable
+class VersionFenceStore(Protocol):
+    async def get_version_fence(self, fence_key: str, tenant_id: str = "") -> int: ...
+    async def update_version_fence(
+        self, fence_key: str, version: int, tenant_id: str = "",
+    ) -> None: ...
 
 
 class VectorSyncOutbox:
@@ -336,6 +346,7 @@ class RedisOutboxStore:
     _KEY_PREFIX = "graphrag:vecoutbox:"
     _INDEX_KEY = "graphrag:vecoutbox:pending"
     _DEDUP_PREFIX = "graphrag:vecoutbox:dedup:"
+    _FENCE_PREFIX = "graphrag:vecoutbox:fence:"
 
     _CLAIM_LUA_SCRIPT = """
 local index_key = KEYS[1]
@@ -434,6 +445,8 @@ return 1
             "vectors": vectors_json,
             "status": event.status,
             "retry_count": str(event.retry_count),
+            "version": str(event.version),
+            "tenant_id": event.tenant_id,
             "_dedup_rkey": dedup_rkey,
         }
         flat_args: list[str] = []
@@ -470,6 +483,8 @@ return 1
                 vectors=vectors,
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", "0")),
+                version=int(data.get("version", "0")) or time.time_ns(),
+                tenant_id=data.get("tenant_id", ""),
             ))
         return events
 
@@ -537,6 +552,8 @@ return 1
                 vectors=vectors,
                 status="claimed",
                 retry_count=int(data.get("retry_count", "0")),
+                version=int(data.get("version", "0")) or time.time_ns(),
+                tenant_id=data.get("tenant_id", ""),
             ))
         return claimed
 
@@ -571,6 +588,23 @@ return 1
                 released += 1
         return released
 
+    async def get_version_fence(self, fence_key: str, tenant_id: str = "") -> int:
+        redis_key = f"{self._FENCE_PREFIX}{tenant_id}:{fence_key}"
+        raw = await self._redis.get(redis_key)
+        if raw is None:
+            return -1
+        if isinstance(raw, bytes):
+            return int(raw.decode())
+        return int(raw)
+
+    async def update_version_fence(
+        self, fence_key: str, version: int, tenant_id: str = "",
+    ) -> None:
+        redis_key = f"{self._FENCE_PREFIX}{tenant_id}:{fence_key}"
+        current = await self.get_version_fence(fence_key, tenant_id=tenant_id)
+        if version > current:
+            await self._redis.set(redis_key, str(version))
+
 
 class Neo4jOutboxStore:
     _LOAD_BATCH_LIMIT = 100
@@ -583,7 +617,9 @@ class Neo4jOutboxStore:
         "  pruned_ids: $pruned_ids,"
         "  vectors: $vectors,"
         "  status: $status,"
-        "  retry_count: $retry_count"
+        "  retry_count: $retry_count,"
+        "  version: $version,"
+        "  tenant_id: $tenant_id"
         "})"
     )
     _LOAD_QUERY = (
@@ -591,7 +627,8 @@ class Neo4jOutboxStore:
         "RETURN e.event_id AS event_id, e.collection AS collection, "
         "e.operation AS operation, e.pruned_ids AS pruned_ids, "
         "e.vectors AS vectors, e.status AS status, "
-        "e.retry_count AS retry_count "
+        "e.retry_count AS retry_count, e.version AS version, "
+        "e.tenant_id AS tenant_id "
         f"ORDER BY e.retry_count ASC LIMIT {_LOAD_BATCH_LIMIT}"
     )
     _DELETE_QUERY = (
@@ -613,7 +650,8 @@ class Neo4jOutboxStore:
         "RETURN e.event_id AS event_id, e.collection AS collection, "
         "e.operation AS operation, e.pruned_ids AS pruned_ids, "
         "e.vectors AS vectors, e.status AS status, "
-        "e.retry_count AS retry_count"
+        "e.retry_count AS retry_count, e.version AS version, "
+        "e.tenant_id AS tenant_id"
     )
     _RELEASE_CLAIM_QUERY = (
         "MATCH (e:OutboxEvent {event_id: $event_id}) "
@@ -631,6 +669,15 @@ class Neo4jOutboxStore:
         "    e.lease_expires_at = NULL "
         "RETURN count(e) AS released"
     )
+    _GET_FENCE_QUERY = (
+        "MATCH (f:OutboxVersionFence {fence_key: $fence_key, tenant_id: $tenant_id}) "
+        "RETURN f.version AS version"
+    )
+    _UPSERT_FENCE_QUERY = (
+        "MERGE (f:OutboxVersionFence {fence_key: $fence_key, tenant_id: $tenant_id}) "
+        "ON CREATE SET f.version = $version "
+        "ON MATCH SET f.version = CASE WHEN f.version < $version THEN $version ELSE f.version END"
+    )
 
     def __init__(self, driver: Any) -> None:
         self._driver = driver
@@ -647,6 +694,8 @@ class Neo4jOutboxStore:
             "vectors": vectors_json,
             "status": event.status,
             "retry_count": event.retry_count,
+            "version": event.version,
+            "tenant_id": event.tenant_id,
         }
 
     async def write_in_tx(self, tx: Any, event: VectorSyncEvent) -> None:
@@ -688,6 +737,8 @@ class Neo4jOutboxStore:
                 vectors=vectors,
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", 0)),
+                version=int(data.get("version", 0)) or time.time_ns(),
+                tenant_id=str(data.get("tenant_id") or ""),
             ))
         return events
 
@@ -745,6 +796,8 @@ class Neo4jOutboxStore:
                 vectors=vectors,
                 status="claimed",
                 retry_count=int(data.get("retry_count", 0)),
+                version=int(data.get("version", 0)) or time.time_ns(),
+                tenant_id=str(data.get("tenant_id") or ""),
             ))
         return events
 
@@ -799,6 +852,46 @@ class Neo4jOutboxStore:
             return int(records[0].get("released", 0))
         return 0
 
+    async def get_version_fence(self, fence_key: str, tenant_id: str = "") -> int:
+        async with self._driver.session(default_access_mode="READ") as session:
+            records = await session.execute_read(
+                self._get_fence_tx, fence_key=fence_key, tenant_id=tenant_id,
+            )
+        if records:
+            return int(records[0].get("version", -1))
+        return -1
+
+    @staticmethod
+    async def _get_fence_tx(tx: Any, fence_key: str, tenant_id: str) -> list[Any]:
+        result = await tx.run(
+            Neo4jOutboxStore._GET_FENCE_QUERY,
+            fence_key=fence_key,
+            tenant_id=tenant_id,
+        )
+        return [record.data() async for record in result]
+
+    async def update_version_fence(
+        self, fence_key: str, version: int, tenant_id: str = "",
+    ) -> None:
+        async with self._driver.session(default_access_mode="WRITE") as session:
+            await session.execute_write(
+                self._upsert_fence_tx,
+                fence_key=fence_key,
+                version=version,
+                tenant_id=tenant_id,
+            )
+
+    @staticmethod
+    async def _upsert_fence_tx(
+        tx: Any, fence_key: str, version: int, tenant_id: str,
+    ) -> None:
+        await tx.run(
+            Neo4jOutboxStore._UPSERT_FENCE_QUERY,
+            fence_key=fence_key,
+            version=version,
+            tenant_id=tenant_id,
+        )
+
     @staticmethod
     async def _release_expired_tx(tx: Any, now: float) -> list[Any]:
         result = await tx.run(
@@ -828,6 +921,7 @@ class DurableOutboxDrainer:
         self._max_retries = max_retries
         self._worker_id = worker_id or str(uuid.uuid4())
         self._lease_seconds = lease_seconds
+        self._latest_version_by_key: Dict[str, int] = {}
 
     async def _load_events(self) -> List[VectorSyncEvent]:
         if isinstance(self._store, ClaimableOutboxStore):
@@ -851,6 +945,19 @@ class DurableOutboxDrainer:
 
         processed = 0
         for event in pending:
+            fence_key = self._event_fence_key(event)
+            tenant_id = self._event_tenant_id(event)
+            scoped_fence_key = f"{tenant_id}:{fence_key}"
+            latest = self._latest_version_by_key.get(scoped_fence_key, -1)
+            if isinstance(self._store, VersionFenceStore):
+                persisted = await self._store.get_version_fence(
+                    fence_key, tenant_id=tenant_id,
+                )
+                latest = max(latest, persisted)
+            if event.version < latest:
+                await self._finalize_event(event.event_id)
+                processed += 1
+                continue
             try:
                 if event.operation == "upsert":
                     await self._vector_store.upsert(
@@ -859,6 +966,11 @@ class DurableOutboxDrainer:
                 else:
                     await self._vector_store.delete(
                         event.collection, event.pruned_ids,
+                    )
+                self._latest_version_by_key[scoped_fence_key] = event.version
+                if isinstance(self._store, VersionFenceStore):
+                    await self._store.update_version_fence(
+                        fence_key, event.version, tenant_id=tenant_id,
                     )
                 await self._finalize_event(event.event_id)
                 processed += 1
@@ -882,3 +994,24 @@ class DurableOutboxDrainer:
                     if isinstance(self._store, ClaimableOutboxStore):
                         await self._store.release_claim(event.event_id)
         return processed
+
+    @staticmethod
+    def _event_fence_key(event: VectorSyncEvent) -> str:
+        if event.operation == "upsert" and event.vectors:
+            vector_ids = sorted(str(getattr(v, "id", "")) for v in event.vectors)
+            return f"{event.collection}:upsert:{','.join(vector_ids)}"
+        return f"{event.collection}:{event.operation}:{','.join(sorted(event.pruned_ids))}"
+
+    @staticmethod
+    def _event_tenant_id(event: VectorSyncEvent) -> str:
+        if event.tenant_id:
+            return event.tenant_id
+        if event.operation == "upsert" and event.vectors:
+            first = event.vectors[0]
+            metadata = getattr(first, "metadata", {})
+            if isinstance(metadata, dict):
+                return str(metadata.get("tenant_id", ""))
+        base = "service_embeddings_"
+        if event.collection.startswith(base):
+            return event.collection[len(base):]
+        return ""

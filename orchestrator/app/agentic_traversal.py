@@ -219,7 +219,8 @@ _APOC_NODES_QUERY = (
     "MATCH (start {id: $source_id, tenant_id: $tenant_id}) "
     "CALL apoc.path.expandConfig(start, {"
     "  maxLevel: $max_hops, limit: $max_visited, bfs: true,"
-    "  filterStartNode: false, uniqueness: 'NODE_GLOBAL'"
+    "  filterStartNode: false, uniqueness: 'NODE_GLOBAL',"
+    "  labelFilter: $apoc_label_filter"
     "}) YIELD path "
     "UNWIND nodes(path) AS n "
     "WHERE n.tenant_id = $tenant_id "
@@ -232,7 +233,8 @@ _APOC_EDGES_QUERY = (
     "MATCH (start {id: $source_id, tenant_id: $tenant_id}) "
     "CALL apoc.path.expandConfig(start, {"
     "  maxLevel: $max_hops, limit: $max_visited, bfs: true,"
-    "  filterStartNode: false, uniqueness: 'NODE_GLOBAL'"
+    "  filterStartNode: false, uniqueness: 'NODE_GLOBAL',"
+    "  labelFilter: $apoc_label_filter"
     "}) YIELD path "
     "UNWIND relationships(path) AS r "
     "WHERE r.tombstoned_at IS NULL "
@@ -769,11 +771,13 @@ async def apoc_path_expansion(
     max_hops: int = 3,
     max_visited: int = 500,
 ) -> Dict[str, Any]:
+    apoc_label_filter = _build_apoc_label_filter(acl_params)
     params: Dict[str, Any] = {
         "source_id": source_id,
         "tenant_id": tenant_id,
         "max_hops": max_hops,
         "max_visited": max_visited,
+        "apoc_label_filter": apoc_label_filter,
         **acl_params,
     }
 
@@ -791,6 +795,15 @@ async def apoc_path_expansion(
     ))
 
     return {"nodes": nodes, "edges": edges}
+
+
+def _build_apoc_label_filter(acl_params: Dict[str, Any]) -> str:
+    if acl_params.get("is_admin", False):
+        return ""
+    labels = [str(lbl) for lbl in acl_params.get("acl_labels", []) if lbl]
+    if not labels:
+        return "-*"
+    return "|".join(f"+{label}" for label in labels)
 
 
 def _format_apoc_for_traversal(

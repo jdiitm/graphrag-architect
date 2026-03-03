@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -45,22 +44,21 @@ class TestConcurrentInjectionScanning:
         assert result == "safe answer"
 
     @pytest.mark.asyncio
-    async def test_malicious_context_aborts_and_raises(self) -> None:
+    async def test_malicious_context_blocks_before_synthesis(self) -> None:
         from orchestrator.app.query_engine import (
             synthesize_with_concurrent_scan,
         )
 
-        synthesis_started = asyncio.Event()
+        synthesis_called = False
 
         async def mock_synthesize(
             query: str, context: List[Dict[str, Any]],
         ) -> str:
-            synthesis_started.set()
-            await asyncio.sleep(5.0)
+            nonlocal synthesis_called
+            synthesis_called = True
             return "should not reach here"
 
         async def mock_classify(text: str) -> InjectionResult:
-            await synthesis_started.wait()
             return _flagged_injection_result()
 
         with pytest.raises(PromptInjectionBlockedError):
@@ -70,6 +68,7 @@ class TestConcurrentInjectionScanning:
                 synthesize_fn=mock_synthesize,
                 classify_fn=mock_classify,
             )
+        assert synthesis_called is False
 
     @pytest.mark.asyncio
     async def test_classifier_failure_allows_synthesis(self) -> None:
@@ -94,23 +93,21 @@ class TestConcurrentInjectionScanning:
         assert result == "answer despite classifier failure"
 
     @pytest.mark.asyncio
-    async def test_concurrent_scan_does_not_block_critical_path(self) -> None:
+    async def test_classifier_runs_before_synthesis(self) -> None:
         from orchestrator.app.query_engine import (
             synthesize_with_concurrent_scan,
         )
 
-        classify_started = asyncio.Event()
-        classify_done = asyncio.Event()
+        order: List[str] = []
 
         async def mock_synthesize(
             query: str, context: List[Dict[str, Any]],
         ) -> str:
+            order.append("synthesize")
             return "fast answer"
 
         async def mock_classify(text: str) -> InjectionResult:
-            classify_started.set()
-            await asyncio.sleep(2.0)
-            classify_done.set()
+            order.append("classify")
             return _safe_injection_result()
 
         result = await synthesize_with_concurrent_scan(
@@ -120,7 +117,7 @@ class TestConcurrentInjectionScanning:
             classify_fn=mock_classify,
         )
         assert result == "fast answer"
-        assert classify_started.is_set()
+        assert order == ["classify", "synthesize"]
 
     @pytest.mark.asyncio
     async def test_synthesis_failure_propagates_even_with_safe_context(self) -> None:

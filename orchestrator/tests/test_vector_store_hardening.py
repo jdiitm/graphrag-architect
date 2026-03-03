@@ -53,5 +53,6 @@ class TestRemainingBackendsWork:
             backend="qdrant",
             url="http://localhost:6333",
             deployment_mode="production",
+            shard_by_tenant=True,
         )
         assert isinstance(store, QdrantVectorStore)

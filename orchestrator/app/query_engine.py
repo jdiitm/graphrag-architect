@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import importlib
 import inspect
 import json
@@ -17,6 +18,7 @@ from typing import (
     Set,
     Tuple,
     TypeVar,
+    cast,
 )
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -28,6 +30,7 @@ from orchestrator.app.access_control import (
     CypherPermissionFilter,
     SecurityPrincipal,
 )
+from orchestrator.app.audit_log import SecurityAuditLogger
 from orchestrator.app.agentic_traversal import run_traversal
 from orchestrator.app.circuit_breaker import (
     CircuitBreakerConfig,
@@ -97,7 +100,12 @@ from orchestrator.app.subgraph_cache import (
 )
 from orchestrator.app.telemetry_ports import get_metrics_port, get_tracing_port
 from orchestrator.app.tombstone_filter import filter_tombstoned_results
-from orchestrator.app.vector_store import SearchResult, VectorDegradedError, create_vector_store
+from orchestrator.app.vector_store import (
+    SearchResult,
+    VectorDegradedError,
+    create_vector_store,
+    resolve_collection_name,
+)
 
 _OPENAI_MODULE: Any = None
 try:
@@ -118,6 +126,23 @@ async def _execute_read_tx(
 
 
 _query_logger = logging.getLogger(__name__)
+_SEC_AUDIT = SecurityAuditLogger()
+class _NoopSubgraphCache:
+    def get(self, key: str) -> Optional[List[Any]]:
+        _ = key
+        return cast(Optional[List[Any]], None)
+
+    def put(
+        self,
+        key: str,
+        value: list[Any],
+        node_ids: Optional[Set[str]] = None,
+    ) -> None:
+        _ = (key, value, node_ids)
+
+    def advance_generation(self) -> int:
+        return 0
+
 
 _ROUTE_MAP = {
     QueryComplexity.ENTITY_LOOKUP: "vector",
@@ -131,18 +156,62 @@ MAX_CYPHER_ITERATIONS = 3
 _TEMPLATE_CATALOG = TemplateCatalog()
 _TEMPLATE_REGISTRY = TemplateHashRegistry(_TEMPLATE_CATALOG)
 _SANDBOX = SandboxedQueryExecutor(registry=_TEMPLATE_REGISTRY)
-_SUBGRAPH_CACHE = create_subgraph_cache()
-_SEMANTIC_CACHE = create_semantic_cache()
+def _safe_create_subgraph_cache() -> Any:
+    try:
+        return create_subgraph_cache()
+    except Exception:
+        _query_logger.warning(
+            "Subgraph cache initialization failed; using in-memory fallback",
+            exc_info=True,
+        )
+        return _NoopSubgraphCache()
+
+
+def _safe_create_semantic_cache() -> Any:
+    try:
+        return create_semantic_cache()
+    except Exception:
+        _query_logger.warning(
+            "Semantic cache initialization failed; continuing without cache",
+            exc_info=True,
+        )
+        return None
+
+
+def _safe_create_vector_store() -> Any:
+    cfg = VectorStoreConfig.from_env()
+    try:
+        return create_vector_store(
+            backend=cfg.backend, url=cfg.qdrant_url, api_key=cfg.qdrant_api_key,
+            pool_size=cfg.pool_size, deployment_mode=cfg.deployment_mode,
+            shard_by_tenant=cfg.shard_by_tenant,
+        )
+    except Exception:
+        if cfg.deployment_mode == "production":
+            raise
+        _query_logger.warning(
+            "Vector store initialization failed; using in-memory fallback",
+            exc_info=True,
+        )
+        return create_vector_store(backend="memory", deployment_mode="dev")
+
+
+_SUBGRAPH_CACHE = _safe_create_subgraph_cache()
+_SEMANTIC_CACHE = _safe_create_semantic_cache()
 _INJECTION_CLASSIFIER = PromptInjectionClassifier()
 
 _VS_CFG = VectorStoreConfig.from_env()
-_VECTOR_STORE = create_vector_store(
-    backend=_VS_CFG.backend, url=_VS_CFG.qdrant_url, api_key=_VS_CFG.qdrant_api_key,
-    pool_size=_VS_CFG.pool_size, deployment_mode=_VS_CFG.deployment_mode,
-    shard_by_tenant=_VS_CFG.shard_by_tenant,
-)
+_VECTOR_STORE = _safe_create_vector_store()
 
 _VECTOR_COLLECTION = "service_embeddings"
+
+
+def _collection_for_tenant(tenant_id: str = "") -> str:
+    return resolve_collection_name(
+        base_collection=_VECTOR_COLLECTION,
+        tenant_id=tenant_id,
+        per_tenant_collection=_VS_CFG.per_tenant_collection,
+    )
 
 _GLOBAL_CB_CFG = CircuitBreakerConfig(
     failure_threshold=5, recovery_timeout=60.0, half_open_max_calls=1,
@@ -419,6 +488,25 @@ def _strip_context_values(
     ]
 
 
+def _strip_context_boundary_values(
+    context: List[Dict[str, Any]],
+    result: InjectionResult,
+) -> List[Dict[str, Any]]:
+    if not result.is_flagged:
+        return context
+    return [
+        {
+            k: (
+                _INJECTION_CLASSIFIER.strip_context_data(v, result)
+                if isinstance(v, str)
+                else v
+            )
+            for k, v in record.items()
+        }
+        for record in context
+    ]
+
+
 async def _classify_async(text: str) -> Any:
     return await asyncio.to_thread(_INJECTION_CLASSIFIER.classify, text)
 
@@ -454,7 +542,7 @@ async def _raw_llm_synthesize(
         context_text = _serialize_context_for_classification(context)
         context_injection = await _classify_async(context_text)
         if context_injection.is_flagged:
-            context = _strip_context_values(context, context_injection)
+            context = _strip_context_boundary_values(context, context_injection)
 
     context_block = format_context_for_prompt(context)
     messages = [
@@ -484,6 +572,7 @@ async def _raw_llm_synthesize_stream(
     query: str,
     context: List[Dict[str, Any]],
 ) -> AsyncIterator[str]:
+    provider = _build_synthesis_provider()
     sanitized = sanitize_query_input(query)
 
     if _prompt_guardrails_enabled():
@@ -510,15 +599,7 @@ async def _raw_llm_synthesize_stream(
         context_text = _serialize_context_for_classification(context)
         context_injection = await _classify_async(context_text)
         if context_injection.is_flagged:
-            context = _strip_context_values(context, context_injection)
-
-    from langchain_google_genai import ChatGoogleGenerativeAI
-
-    config = ExtractionConfig.from_env()
-    llm = ChatGoogleGenerativeAI(
-        model=config.model_name,
-        google_api_key=config.google_api_key,
-    )
+            context = _strip_context_boundary_values(context, context_injection)
 
     context_block = format_context_for_prompt(context)
     messages = [
@@ -541,9 +622,9 @@ async def _raw_llm_synthesize_stream(
         ),
     ]
     try:
-        async for chunk in llm.astream(messages):
-            if hasattr(chunk, "content") and chunk.content:
-                yield str(chunk.content)
+        async for chunk in provider.astream(messages):
+            if chunk:
+                yield str(chunk)
     except LLMError:
         _query_logger.warning(
             "Streaming LLM provider failed, yielding degraded response",
@@ -605,59 +686,23 @@ async def synthesize_with_concurrent_scan(
     classify_fn: _ClassifyFn,
 ) -> str:
     context_text = _serialize_context_for_classification(context)
-
-    synthesis_task = asyncio.create_task(synthesize_fn(query, context))
-    classify_task = asyncio.create_task(classify_fn(context_text))
-
-    done, _waiting = await asyncio.wait(
-        [synthesis_task, classify_task],
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-
-    if classify_task in done:
-        try:
-            injection_result = classify_task.result()
-            if injection_result.is_flagged:
-                synthesis_task.cancel()
-                try:
-                    await synthesis_task
-                except asyncio.CancelledError:
-                    pass
-                raise PromptInjectionBlockedError(
-                    query=query,
-                    score=injection_result.score,
-                    patterns=injection_result.detected_patterns,
-                )
-        except PromptInjectionBlockedError:
-            raise
-        except Exception:
-            _query_logger.warning(
-                "Context injection classifier failed (non-fatal), "
-                "allowing synthesis to proceed",
-                exc_info=True,
+    try:
+        injection_result = await classify_fn(context_text)
+        if injection_result.is_flagged:
+            raise PromptInjectionBlockedError(
+                query=query,
+                score=injection_result.score,
+                patterns=injection_result.detected_patterns,
             )
-
-    if synthesis_task in done:
-        synthesis_result = synthesis_task.result()
-        if classify_task not in done:
-            try:
-                injection_result = await classify_task
-                if injection_result.is_flagged:
-                    raise PromptInjectionBlockedError(
-                        query=query,
-                        score=injection_result.score,
-                        patterns=injection_result.detected_patterns,
-                    )
-            except PromptInjectionBlockedError:
-                raise
-            except Exception:
-                _query_logger.warning(
-                    "Context injection classifier failed (non-fatal)",
-                    exc_info=True,
-                )
-        return str(synthesis_result)
-
-    return str(await synthesis_task)
+    except PromptInjectionBlockedError:
+        raise
+    except Exception:
+        _query_logger.warning(
+            "Context injection classifier failed (non-fatal), "
+            "allowing synthesis to proceed",
+            exc_info=True,
+        )
+    return str(await synthesize_fn(query, context))
 
 
 def classify_query_node(state: QueryState) -> Dict[str, Any]:
@@ -738,16 +783,17 @@ async def _fetch_candidates_with_embedding(
 ) -> List[Any]:
     limit = state.get("max_results", 10)
     tenant_id = state.get("tenant_id", "")
+    collection = _collection_for_tenant(tenant_id)
 
     if query_embedding is not None:
         if tenant_id:
             results = await _VECTOR_STORE.search_with_tenant(
-                _VECTOR_COLLECTION, query_embedding,
+                collection, query_embedding,
                 tenant_id=tenant_id, limit=limit,
             )
         else:
             results = await _VECTOR_STORE.search(
-                _VECTOR_COLLECTION, query_embedding, limit=limit,
+                collection, query_embedding, limit=limit,
             )
         candidates = _search_results_to_dicts(results)
         return await filter_tombstoned_results(driver, candidates, tenant_id)
@@ -1131,10 +1177,45 @@ async def synthesize_answer(state: QueryState) -> Dict[str, Any]:
     with get_tracing_port().start_span("query.synthesize"):
         start = time.monotonic()
         result = await _do_synthesize(state)
+        duration_ms = (time.monotonic() - start) * 1000
+        _log_query_audit(state, result, duration_ms)
         get_metrics_port().record_duration(
-            "query.duration_ms", (time.monotonic() - start) * 1000, {"node": "synthesize"}
+            "query.duration_ms", duration_ms, {"node": "synthesize"}
         )
         return result
+
+
+def _log_query_audit(
+    state: QueryState,
+    result: Dict[str, Any],
+    duration_ms: float,
+) -> None:
+    query = str(state.get("query", ""))
+    query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()
+    sources = result.get("sources", [])
+    node_ids = _extract_node_ids(sources if isinstance(sources, list) else [])
+    _SEC_AUDIT.log_query(
+        tenant_id=str(state.get("tenant_id", "")),
+        principal=str(state.get("tenant_id", "")),
+        query_hash=query_hash,
+        complexity=str(state.get("complexity", "")),
+        result_count=len(sources) if isinstance(sources, list) else 0,
+        duration_ms=duration_ms,
+        raw_user_query=query,
+        cypher_query=str(state.get("cypher_query", "")),
+        cypher_params={},
+        node_ids_returned=node_ids,
+    )
+
+
+def _extract_node_ids(records: List[Dict[str, Any]]) -> List[str]:
+    node_ids: List[str] = []
+    for record in records:
+        for key in ("id", "source", "target", "target_id"):
+            value = record.get(key)
+            if isinstance(value, str) and value and value not in node_ids:
+                node_ids.append(value)
+    return node_ids
 
 
 _DEFAULT_RERANKER = BM25Reranker()

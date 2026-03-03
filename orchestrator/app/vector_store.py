@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, cast, runtime_checkable
 from uuid import UUID
@@ -26,6 +27,20 @@ class SearchResult:
     id: str
     score: float
     metadata: Dict[str, Any]
+
+
+_COLL_SUFFIX_SANITIZER = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def resolve_collection_name(
+    base_collection: str,
+    tenant_id: str,
+    per_tenant_collection: bool,
+) -> str:
+    if not per_tenant_collection or not tenant_id:
+        return base_collection
+    safe_tenant = _COLL_SUFFIX_SANITIZER.sub("_", tenant_id)
+    return f"{base_collection}_{safe_tenant}"
 
 
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
@@ -366,6 +381,8 @@ def create_vector_store(
     deployment_mode: str = "dev",
     shard_by_tenant: bool = False,
 ) -> Any:
+    from orchestrator.app.tenant_isolation import validate_vector_shard_enforcement
+
     _ = pool_size
     _ = driver
     if backend == "neo4j":
@@ -381,6 +398,11 @@ def create_vector_store(
             f"Production deployments require 'qdrant'. "
             f"Set VECTOR_STORE_BACKEND=qdrant."
         )
+    validate_vector_shard_enforcement(
+        deployment_mode=deployment_mode,
+        backend=backend,
+        shard_by_tenant=shard_by_tenant,
+    )
     if backend == "qdrant":
         return QdrantVectorStore(
             url=url, api_key=api_key, prefer_grpc=True,
