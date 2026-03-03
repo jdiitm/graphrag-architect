@@ -9,7 +9,6 @@ from orchestrator.app.extraction_models import ServiceNode
 from orchestrator.app.node_sink import IncrementalNodeSink
 from orchestrator.app.vector_sync_outbox import VectorSyncEvent
 
-
 SAMPLE_SERVICE = ServiceNode(
     id="order-service",
     name="order-service",

@@ -57,7 +57,7 @@ evidence sources, and remediation actions.
 
 | Evidence Type | Location | Description |
 |--------------|----------|-------------|
-| CI Pipeline | .github/workflows/ci.yml | 8-job pipeline with lint, test, security, integration |
+| CI Pipeline | .github/workflows/ci.yml | 10-job pipeline with lint, type check, test, security, integration, Docker build |
 | Network Policies | infrastructure/k8s/network-policies.yaml | deny-all + allowlist policies |
 | Alerting Rules | infrastructure/k8s/alerting.yaml | SLO recording rules and alerts |
 | Incident Response | docs/incident-response.md | Severity levels, escalation, post-mortem |

@@ -56,7 +56,7 @@ For the full system specification — data model, functional requirements, secur
 
 ```
 graphrag-architect/
-├── orchestrator/                  # Python orchestrator (100 modules, 4,140 tests)
+├── orchestrator/                  # Python orchestrator (101 modules, 4,196 tests)
 │   ├── app/                      # LangGraph DAGs, FastAPI, Neo4j, LLM extraction
 │   │   ├── main.py               # FastAPI app: /ingest, /query, /health, /metrics
 │   │   ├── graph_builder.py      # LangGraph ingestion DAG + streaming pipeline
@@ -68,7 +68,7 @@ graphrag-architect/
 │   │   ├── gdpr.py               # GDPR data export + erasure endpoints
 │   │   ├── data_residency.py     # Tenant region routing + data residency
 │   │   └── plugins/base.py       # Extensible plugin architecture
-│   ├── tests/                    # 318 test files (unit, e2e, contract, security)
+│   ├── tests/                    # 328 test files (unit, e2e, contract, security)
 │   │   ├── e2e/                  # Testcontainers-based E2E (Kafka → Go → Python → Neo4j)
 │   │   └── contract/             # HTTP API contract verification (Go ↔ Python)
 │   └── requirements.txt
@@ -149,7 +149,7 @@ export PROCESSOR_MODE="kafka"                     # kafka | ast | http
 ### 4. Run tests
 
 ```bash
-# Python tests (4,140 tests)
+# Python tests (4,196 tests)
 source .venv/bin/activate
 python -m pytest orchestrator/tests/ -v
 
@@ -166,7 +166,7 @@ The GitHub Actions CI runs 10 jobs on every push and PR:
 | Python lint | pylint | `orchestrator/` |
 | Python type check | mypy --strict | `orchestrator/app/` |
 | Python lint (style) | ruff | `orchestrator/` |
-| Python tests | pytest | 4,140 tests |
+| Python tests | pytest | 4,196 tests |
 | Go tests | go test -race | 14 packages |
 | Go lint | golangci-lint | `workers/ingestion/` |
 | Secret scanning | gitleaks | Full repo history |
