@@ -121,6 +121,7 @@ class VectorSyncEvent(BaseModel):
     status: str = "pending"
     retry_count: int = 0
     version: int = Field(default_factory=time.time_ns)
+    tenant_id: str = ""
 
     @field_validator("pruned_ids")
     @classmethod
@@ -445,6 +446,7 @@ return 1
             "status": event.status,
             "retry_count": str(event.retry_count),
             "version": str(event.version),
+            "tenant_id": event.tenant_id,
             "_dedup_rkey": dedup_rkey,
         }
         flat_args: list[str] = []
@@ -482,6 +484,7 @@ return 1
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", "0")),
                 version=int(data.get("version", "0")) or time.time_ns(),
+                tenant_id=data.get("tenant_id", ""),
             ))
         return events
 
@@ -550,6 +553,7 @@ return 1
                 status="claimed",
                 retry_count=int(data.get("retry_count", "0")),
                 version=int(data.get("version", "0")) or time.time_ns(),
+                tenant_id=data.get("tenant_id", ""),
             ))
         return claimed
 
@@ -614,7 +618,8 @@ class Neo4jOutboxStore:
         "  vectors: $vectors,"
         "  status: $status,"
         "  retry_count: $retry_count,"
-        "  version: $version"
+        "  version: $version,"
+        "  tenant_id: $tenant_id"
         "})"
     )
     _LOAD_QUERY = (
@@ -622,7 +627,8 @@ class Neo4jOutboxStore:
         "RETURN e.event_id AS event_id, e.collection AS collection, "
         "e.operation AS operation, e.pruned_ids AS pruned_ids, "
         "e.vectors AS vectors, e.status AS status, "
-        "e.retry_count AS retry_count, e.version AS version "
+        "e.retry_count AS retry_count, e.version AS version, "
+        "e.tenant_id AS tenant_id "
         f"ORDER BY e.retry_count ASC LIMIT {_LOAD_BATCH_LIMIT}"
     )
     _DELETE_QUERY = (
@@ -644,7 +650,8 @@ class Neo4jOutboxStore:
         "RETURN e.event_id AS event_id, e.collection AS collection, "
         "e.operation AS operation, e.pruned_ids AS pruned_ids, "
         "e.vectors AS vectors, e.status AS status, "
-        "e.retry_count AS retry_count, e.version AS version"
+        "e.retry_count AS retry_count, e.version AS version, "
+        "e.tenant_id AS tenant_id"
     )
     _RELEASE_CLAIM_QUERY = (
         "MATCH (e:OutboxEvent {event_id: $event_id}) "
@@ -688,6 +695,7 @@ class Neo4jOutboxStore:
             "status": event.status,
             "retry_count": event.retry_count,
             "version": event.version,
+            "tenant_id": event.tenant_id,
         }
 
     async def write_in_tx(self, tx: Any, event: VectorSyncEvent) -> None:
@@ -730,6 +738,7 @@ class Neo4jOutboxStore:
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", 0)),
                 version=int(data.get("version", 0)) or time.time_ns(),
+                tenant_id=str(data.get("tenant_id", "")),
             ))
         return events
 
@@ -788,6 +797,7 @@ class Neo4jOutboxStore:
                 status="claimed",
                 retry_count=int(data.get("retry_count", 0)),
                 version=int(data.get("version", 0)) or time.time_ns(),
+                tenant_id=str(data.get("tenant_id", "")),
             ))
         return events
 
@@ -994,6 +1004,8 @@ class DurableOutboxDrainer:
 
     @staticmethod
     def _event_tenant_id(event: VectorSyncEvent) -> str:
+        if event.tenant_id:
+            return event.tenant_id
         if event.operation == "upsert" and event.vectors:
             first = event.vectors[0]
             metadata = getattr(first, "metadata", {})

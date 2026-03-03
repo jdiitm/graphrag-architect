@@ -305,3 +305,28 @@ class TestDurableOutboxDrainer:
         drainer = DurableOutboxDrainer(store=store, vector_store=mock_vs, max_retries=3)
         await drainer.process_once()
         assert mock_vs.upsert.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_delete_events_use_explicit_tenant_scope_for_fence(self) -> None:
+        store = _FakeOutboxStore()
+        t1_delete = VectorSyncEvent(
+            collection="service_embeddings",
+            pruned_ids=["id-1"],
+            tenant_id="t1",
+            version=20,
+        )
+        t2_delete = VectorSyncEvent(
+            collection="service_embeddings",
+            pruned_ids=["id-1"],
+            tenant_id="t2",
+            version=10,
+        )
+        await store.write_event(t1_delete)
+        await store.write_event(t2_delete)
+
+        mock_vs = AsyncMock()
+        mock_vs.delete = AsyncMock(return_value=1)
+        mock_vs.upsert = AsyncMock(return_value=1)
+        drainer = DurableOutboxDrainer(store=store, vector_store=mock_vs, max_retries=3)
+        await drainer.process_once()
+        assert mock_vs.delete.call_count == 2

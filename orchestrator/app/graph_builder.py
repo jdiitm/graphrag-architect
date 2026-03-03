@@ -832,7 +832,7 @@ async def _enqueue_vector_cleanup(
         return
     collection = resolve_vector_collection(tenant_id or None)
     event = VectorSyncEvent(
-        collection=collection, pruned_ids=pruned_ids,
+        collection=collection, pruned_ids=pruned_ids, tenant_id=tenant_id,
     )
     if neo4j_driver is not None:
         store = Neo4jOutboxStore(driver=neo4j_driver)
@@ -858,7 +858,7 @@ async def _enqueue_vector_cleanup_durable(
 ) -> None:
     collection = resolve_vector_collection(tenant_id or None)
     event = VectorSyncEvent(
-        collection=collection, pruned_ids=pruned_ids,
+        collection=collection, pruned_ids=pruned_ids, tenant_id=tenant_id,
     )
     store = Neo4jOutboxStore(driver=neo4j_driver)
     await store.write_event(event)
