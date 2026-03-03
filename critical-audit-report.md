@@ -233,4 +233,6 @@ All findings from this audit have been remediated:
 | Finding 5: Test RuntimeWarnings | Low | Informational — no functional impact | N/A |
 | Finding 6: Docker Compose Dev Credentials | Low | Informational — dev-only file | N/A |
 
+**Additional hardening (PR #268, March 2026):** Six production-hardening fixes applied — per-level hop decrement in BFS traversal, transactional outbox coupling for vector sync, vector-weighted supernode sampling, exponential backoff with jitter for distributed locks, evaluation endpoint authentication, and NFKC normalization order fix in prompt sanitizer.
+
 This report is retained as a historical artifact. For current system status, see `docs/SPEC.md` Section 19.

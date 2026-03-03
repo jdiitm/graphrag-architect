@@ -62,6 +62,17 @@ payloads can bypass streaming.
 or Neo4j under memory pressure. The `cypher_validator.py` cost estimator should reject
 expensive queries, but estimates can be inaccurate.
 
+### 6. Distributed Lock Contention During Ingestion
+
+**Symptoms:** Elevated `distributed_lock_wait_seconds` metric. Ingestion throughput
+plateaus despite available CPU/memory.
+
+**Root cause:** Multiple orchestrator replicas competing for Redis-based distributed
+locks during concurrent entity mutations.
+
+**Relevant code:** `distributed_lock.py` — `DistributedLock` with exponential backoff
+(`min(base * 2^attempt, 2.0s)`) and ±10% jitter to prevent thundering herd.
+
 ---
 
 ## Troubleshooting Steps

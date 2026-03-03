@@ -1,7 +1,7 @@
 # GraphRAG Architect — Definitive System Specification
 
-> **Status:** Canonical | **Version:** 1.0.0 | **Classification:** Internal — Confidential
-> **Maintainer:** Architecture Team | **Last Updated:** 2026-02-26
+> **Status:** Canonical | **Version:** 1.1.0 | **Classification:** Internal — Confidential
+> **Maintainer:** Architecture Team | **Last Updated:** 2026-03-03
 > **Supersedes:** `docs/prd/*`, `docs/rfc/*`, `docs/architecture/01_SYSTEM_DESIGN.md`, `docs/architecture/02_DATA_DICTIONARY.md`, `docs/architecture/03_ENTERPRISE_ARCHITECTURE_SPEC.md`
 
 This is the single source of truth for GraphRAG Architect. All prior PRD, RFC, and architecture documents are superseded. Changes to this specification require the RFC process defined in [Section 17.1](#171-rfc-process).
@@ -249,7 +249,7 @@ graph TB
 
 **Current State (2 Deployable Services):**
 
-1. **Python Orchestrator** (`orchestrator/`): FastAPI application containing both the LangGraph ingestion DAG and query DAG, LLM extraction, Neo4j client, access control, tenant isolation, and observability. 100 Python modules, 318 test files, 4,140 tests.
+1. **Python Orchestrator** (`orchestrator/`): FastAPI application containing both the LangGraph ingestion DAG and query DAG, LLM extraction, Neo4j client, access control, tenant isolation, and observability. 101 Python modules, 328 test files, 4,196 tests.
 2. **Go Ingestion Workers** (`workers/ingestion/`): Kafka consumer with dispatcher, forwarding processor, DLQ handler, AST processor, blob forwarding, rate limiter, deduplication, outbox, healthz, and metrics server.
 
 **Target State (6 Logical Services) [Planned]:**
@@ -935,6 +935,8 @@ RETURN s.name, s.language, t.name AS topic, p.event_schema
 |---|---|
 | **Traversal Agent** | LangGraph sub-graph with state: `visited_nodes`, `frontier`, `accumulated_context`, `remaining_hops`. |
 | **Step Logic** | Each step: LLM decides frontier expansion → execute 1-hop parameterized template → add results to context → decide continue or synthesize. |
+| **Hop Decrement** | `remaining_hops` decrements once per BFS level (inside `_batched_bfs`), not per individual node expansion. A batch of N nodes at the same depth consumes exactly 1 hop. |
+| **Supernode Sampling** | When a node's degree exceeds `MAX_NODE_DEGREE`, batched expansion accepts an optional `query_embedding` to perform vector-weighted sampling (cosine similarity) instead of random truncation. |
 | **Hard Limits** | `max_hops=5`, `max_visited=50`, `token_budget=32_000`. |
 | **Template Usage** | Each hop uses parameterized templates from FR-10 (no dynamic Cypher). |
 | **Routing** | Primary strategy for MULTI_HOP queries. |
@@ -1093,7 +1095,7 @@ Multi-window burn rate alerts detect SLO violations early without triggering on 
 
 | OWASP ID | Vulnerability | Defense |
 |---|---|---|
-| LLM01 | Prompt Injection | Input sanitization (strip injection patterns), output schema validation, sandboxed extraction |
+| LLM01 | Prompt Injection | Input sanitization (strip injection patterns), NFKC Unicode normalization before byte-length checks, output schema validation, sandboxed extraction |
 | LLM02 | Sensitive Information Disclosure | Pre-extraction secret scanning (regex for API keys, passwords, tokens), post-extraction PII filtering, log redaction |
 | LLM03 | Supply Chain | SBOM generation (CycloneDX), dependency signature verification, periodic Trivy/Snyk scanning |
 | LLM04 | Data and Model Poisoning | Anomaly detection on extraction output, human-in-the-loop for high-risk repos, extraction confidence scoring |
@@ -1297,7 +1299,7 @@ flowchart TD
 | Max UNION clauses | 2 per query | Static analysis |
 | EXPLAIN cost estimation | 100,000 estimated rows | Preemptive rejection (HTTP 422) |
 
-**Traversal Mitigations:** Bidirectional BFS (reduce O(d^k) to O(2·d^(k/2))), Leiden community pre-computation (scope traversals to communities), materialized path summaries for frequent patterns, `apoc.path.expandConfig` with `maxLevel` and `limit`.
+**Traversal Mitigations:** Bidirectional BFS (reduce O(d^k) to O(2·d^(k/2))), per-level hop decrement (batch of N nodes at same depth consumes 1 hop, not N), vector-weighted supernode sampling (cosine similarity against query embedding instead of random truncation), Leiden community pre-computation (scope traversals to communities), materialized path summaries for frequent patterns, `apoc.path.expandConfig` with `maxLevel` and `limit`.
 
 ### 11.5 Capacity Planning
 
@@ -1730,7 +1732,7 @@ flowchart TD
     end
     G1 --> G2
     subgraph G2 ["Gate 2: Unit Tests [Implemented]"]
-        Py["pytest 4140 tests"]
+        Py["pytest 4196 tests"]
         Go["go test -race -cover"]
     end
     G2 --> G5["Gate 5: Build & Publish [Implemented]<br/>(Docker build)"]
@@ -1753,13 +1755,13 @@ flowchart TD
     end
 ```
 
-**Current CI (`.github/workflows/ci.yml`):** 10 jobs — `python-lint` (Pylint), `python-mypy` (mypy --strict), `python-ruff` (ruff), `python-test` (pytest, 4,140 tests), `go-lint` (golangci-lint), `go-test` (go test -race), `gitleaks` (secret scanning), `security-scan` (Trivy fs + SBOM), `docker-build` (build + Trivy image scan for orchestrator + ingestion-worker), `integration-test` (contract + E2E with Kafka + Neo4j services). All gates blocking.
+**Current CI (`.github/workflows/ci.yml`):** 10 jobs — `python-lint` (Pylint), `python-mypy` (mypy --strict), `python-ruff` (ruff), `python-test` (pytest, 4,196 tests), `go-lint` (golangci-lint), `go-test` (go test -race), `gitleaks` (secret scanning), `security-scan` (Trivy fs + SBOM), `docker-build` (build + Trivy image scan for orchestrator + ingestion-worker), `integration-test` (contract + E2E with Kafka + Neo4j services). All gates blocking.
 
 ### 16.3 Test Strategy
 
 | Layer | Count | Coverage Target | Infrastructure |
 |---|---|---|---|
-| Unit Tests | 4,140 Python, 14 Go packages (28 test files) | Python 80%, Go 70%, 100% on security-critical paths | In-process mocks |
+| Unit Tests | 4,196 Python, 14 Go packages (28 test files) | Python 80%, Go 70%, 100% on security-critical paths | In-process mocks |
 | Contract Tests | ~15 | Go worker ↔ Python orchestrator HTTP API | Pact |
 | Integration Tests | ~30 | Component interactions with real Neo4j + Kafka | Testcontainers |
 | E2E Tests | ~10 | Full pipeline (Kafka → Go → Python → Neo4j → query) | Testcontainers |
@@ -1924,9 +1926,9 @@ graph TB
 
 ## 19. Production Readiness
 
-### 19.1 Checklist (55 Items)
+### 19.1 Checklist (61 Items)
 
-#### Security (17 items)
+#### Security (19 items)
 
 | ID | Item | Priority | Status | Evidence |
 |---|---|---|---|---|
@@ -1936,7 +1938,7 @@ graph TB
 | SEC-04 | Fix Kafka StatefulSet KAFKA_ADVERTISED_LISTENERS | P0 | **Implemented** | `kafka-statefulset.yaml` has `KAFKA_ADVERTISED_LISTENERS` configured |
 | SEC-05 | Add NetworkPolicy for neo4j-schema-init Job | P0 | **Implemented** | `network-policies.yaml` includes `neo4j-schema-init` policies |
 | SEC-06 | Per-tenant rate limiting (token bucket) | P1 | **Implemented** | `token_bucket.py` has `RedisTokenBucket`, `AdaptiveTokenBucket`; `main.py` has `_enforce_rate_limit()` |
-| SEC-07 | Prompt injection defense for LLM extraction | P1 | **Implemented** | `prompt_sanitizer.py` has injection pattern detection and sanitization |
+| SEC-07 | Prompt injection defense for LLM extraction | P1 | **Implemented** | `prompt_sanitizer.py` has injection pattern detection, NFKC normalization (before byte-length check), structural entropy scoring, and sanitization |
 | SEC-08 | Secret scanning in extraction pipeline | P1 | **Implemented** | `secret_scanner.py` — pattern-based detection + redaction in extraction pipeline |
 | SEC-09 | TLS 1.3 / mTLS for internal communication | P1 | **Implemented** | `infrastructure/k8s/cert-manager-issuer.yaml`, mTLS via cert-manager auto-rotation |
 | SEC-10 | SBOM generation (CycloneDX) + Trivy scanning | P2 | **Implemented** | CI `docker-build` job — Trivy image scan + CycloneDX SBOM generation |
@@ -1947,8 +1949,10 @@ graph TB
 | SEC-15 | Audit logging for security operations | P1 | **Implemented** | `audit_log.py` provides structured audit logging |
 | SEC-16 | Secret scanning in CI (gitleaks) | P2 | **Implemented** | `.gitleaks.toml` + CI `gitleaks` job |
 | SEC-17 | Input validation size limits on /ingest | P1 | **Implemented** | `main.py` enforces `MAX_INGEST_PAYLOAD_BYTES` |
+| SEC-18 | Evaluation endpoint authentication | P1 | **Implemented** | `main.py` — `/query/{query_id}/evaluation` requires auth and enforces tenant isolation (PR #268) |
+| SEC-19 | NFKC normalization before byte-length check | P1 | **Implemented** | `prompt_sanitizer.py` — normalizes Unicode before size check to prevent multi-byte injection bypasses (PR #268) |
 
-#### Scalability (10 items)
+#### Scalability (14 items)
 
 | ID | Item | Priority | Status | Evidence |
 |---|---|---|---|---|
@@ -1962,6 +1966,10 @@ graph TB
 | SCA-08 | Graph schema versioning (migration scripts + SchemaVersion node) | P1 | **Implemented** | `schema_evolution.py` has `SchemaVersion`, `MigrationRunner`, Neo4j + Redis stores |
 | SCA-09 | Load testing suite (k6) | P1 | **Implemented** | `tests/load/ingestion.js`, `tests/load/query.js`, `tests/load/soak.js` (k6) |
 | SCA-10 | Capacity planning documentation | P2 | **Implemented** | `docs/capacity-planning.md` |
+| SCA-11 | Per-level hop decrement in batched BFS | P0 | **Implemented** | `agentic_traversal.py` — hop decrements once per BFS level, not per node, preventing premature depth exhaustion (PR #268) |
+| SCA-12 | Vector-weighted supernode sampling | P1 | **Implemented** | `agentic_traversal.py` — `execute_batched_hop` and `_batched_supernode_expansion` accept `query_embedding` for cosine-similarity sampling instead of random truncation (PR #268) |
+| SCA-13 | Exponential backoff with jitter for distributed locks | P1 | **Implemented** | `distributed_lock.py` — retry delay uses `min(base * 2^attempt, max_delay) * (1 ± jitter)` to prevent thundering herd (PR #268) |
+| SCA-14 | Transactional outbox coupling for vector sync | P1 | **Implemented** | `node_sink.py` — `flush_with_outbox()` commits graph entities and outbox events atomically, preventing vector drift on crash (PR #268) |
 
 #### Reliability (8 items)
 
@@ -2026,7 +2034,7 @@ graph TB
 | **Enterprise** | Month 6-9 | Physical isolation. SOC2 controls. Secret management. | SOC2 Type I initiated, < 0.01% DLQ | **Complete** |
 | **Global Standard** | Month 9-12 | Multi-region. GDPR. Chaos tested. 100x scale. | 99.95% availability, DR tested | **Complete** |
 
-**Current State (March 2026):** All 55 production readiness items implemented. 4,140 Python tests (318 files, 100 modules), Go: 14 packages (28 test files). CI pipeline: 10 jobs (pylint, pytest, mypy --strict, ruff, go test -race, golangci-lint, gitleaks, Trivy, Docker build + scan, integration tests). Pylint: 10.00/10.
+**Current State (March 2026):** All 61 production readiness items implemented. 4,196 Python tests (328 files, 101 modules), Go: 14 packages (28 test files). CI pipeline: 10 jobs (pylint, pytest, mypy --strict, ruff, go test -race, golangci-lint, gitleaks, Trivy, Docker build + scan, integration tests). Pylint: 10.00/10.
 
 ---
 

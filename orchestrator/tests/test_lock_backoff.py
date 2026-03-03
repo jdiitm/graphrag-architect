@@ -47,8 +47,8 @@ class TestExponentialBackoff:
         for _ in range(10):
             sleep_calls: list[float] = []
 
-            async def _capture(delay: float) -> None:
-                sleep_calls.append(delay)
+            async def _capture(delay: float, _calls: list[float] = sleep_calls) -> None:
+                _calls.append(delay)
 
             with patch("orchestrator.app.distributed_lock.asyncio.sleep", side_effect=_capture):
                 with pytest.raises(TimeoutError):

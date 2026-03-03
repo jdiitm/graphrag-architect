@@ -29,3 +29,4 @@ Implement a Hybrid VectorCypher retrieval strategy with intelligent query routin
 - Requires maintaining both vector embeddings (Qdrant) and graph schema (Neo4j) in sync
 - Agentic Cypher loop may have higher latency for complex queries
 - MAX_QUERY_COST configuration needed to bound expensive graph traversals
+- Supernode sampling uses vector-weighted cosine similarity (when query embedding available) to retain semantically relevant edges rather than random truncation
