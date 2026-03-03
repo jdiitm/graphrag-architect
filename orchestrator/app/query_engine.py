@@ -511,6 +511,10 @@ async def _classify_async(text: str) -> Any:
     return await asyncio.to_thread(_INJECTION_CLASSIFIER.classify, text)
 
 
+def _get_synthesis_timeout() -> float:
+    return float(os.environ.get("LLM_SYNTHESIS_TIMEOUT_SECONDS", "60"))
+
+
 async def _raw_llm_synthesize(
     query: str,
     context: List[Dict[str, Any]],
@@ -564,7 +568,10 @@ async def _raw_llm_synthesize(
             ),
         ),
     ]
-    result = await provider.ainvoke_messages(messages)
+    result = await asyncio.wait_for(
+        provider.ainvoke_messages(messages),
+        timeout=_get_synthesis_timeout(),
+    )
     return result.strip()
 
 
@@ -622,9 +629,20 @@ async def _raw_llm_synthesize_stream(
         ),
     ]
     try:
-        async for chunk in provider.astream(messages):
-            if chunk:
-                yield str(chunk)
+        async with asyncio.timeout(_get_synthesis_timeout()):
+            async for chunk in provider.astream(messages):
+                if chunk:
+                    yield str(chunk)
+    except TimeoutError:
+        _query_logger.warning(
+            "Streaming LLM synthesis timed out after %ss",
+            _get_synthesis_timeout(),
+        )
+        yield json.dumps({
+            "type": "error",
+            "code": "SYNTHESIS_TIMEOUT",
+            "message": "LLM synthesis timed out. Please retry with a simpler query.",
+        })
     except LLMError:
         _query_logger.warning(
             "Streaming LLM provider failed, yielding degraded response",

@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from neo4j import READ_ACCESS, WRITE_ACCESS, AsyncDriver, AsyncManagedTransaction
 
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
+from orchestrator.app.neo4j_pool import get_query_timeout
 from orchestrator.app.config import HotTargetConfig
 from orchestrator.app.extraction_models import (
     CallsEdge,
@@ -44,6 +45,16 @@ def _validate_cypher_identifier(value: str, label: str = "identifier") -> str:
             f"Invalid Cypher identifier for {label}: {value!r}"
         )
     return value
+
+
+_DEFAULT_QUERY_TIMEOUT = 30.0
+
+
+def _safe_query_timeout() -> float:
+    try:
+        return get_query_timeout()
+    except RuntimeError:
+        return _DEFAULT_QUERY_TIMEOUT
 
 
 CypherOp = Tuple[str, Dict[str, Any]]
@@ -319,7 +330,9 @@ class GraphRepository:
             return list(await result.data())
 
         async with self._read_session() as session:
-            return list(await session.execute_read(_tx))
+            return list(await session.execute_read(
+                _tx, timeout=_safe_query_timeout(),
+            ))
 
     async def commit_topology(self, entities: List[Any]) -> None:
         if not entities:
@@ -488,8 +501,11 @@ class GraphRepository:
 
         for chunk in _chunk_list(records, self._batch_size):
             async with self._write_session() as session:
-                await session.execute_write(
-                    self._run_unwind, query=unwind_query, batch=chunk,
+                await asyncio.wait_for(
+                    session.execute_write(
+                        self._run_unwind, query=unwind_query, batch=chunk,
+                    ),
+                    timeout=_safe_query_timeout(),
                 )
 
     @staticmethod
