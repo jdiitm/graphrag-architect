@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, List, Optional, Protocol, cast, runtime_checkable
+from typing import Any, AsyncIterator, List, Optional, Protocol, cast, runtime_checkable
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -32,6 +32,8 @@ class LLMProvider(Protocol):
     async def ainvoke_structured(self, prompt: str, messages: list[Any]) -> Any: ...
 
     async def ainvoke_messages(self, messages: list[Any]) -> str: ...
+
+    def astream(self, messages: list[Any]) -> AsyncIterator[str]: ...
 
 
 class GeminiProvider:
@@ -64,6 +66,11 @@ class GeminiProvider:
             lc_messages.insert(0, SystemMessage(content=prompt))
         return await self._structured_llm.ainvoke(lc_messages)
 
+    async def astream(self, messages: list[Any]) -> AsyncIterator[str]:
+        async for chunk in self._llm.astream(messages):
+            if hasattr(chunk, "content") and chunk.content:
+                yield str(chunk.content)
+
 
 class StubProvider:
     def __init__(
@@ -82,6 +89,10 @@ class StubProvider:
 
     async def ainvoke_structured(self, prompt: str, messages: list[Any]) -> Any:
         return self._ainvoke_structured_response
+
+    async def astream(self, messages: list[Any]) -> AsyncIterator[str]:
+        if self._ainvoke_response:
+            yield self._ainvoke_response
 
 
 class ProviderWithCircuitBreaker:
@@ -149,6 +160,16 @@ class ProviderWithCircuitBreaker:
             self._record_failure(exc)
             raise
 
+    async def astream(self, messages: list[Any]) -> AsyncIterator[str]:
+        self._check_state()
+        try:
+            async for chunk in self._inner.astream(messages):
+                yield str(chunk)
+            self._record_success()
+        except Exception as exc:
+            self._record_failure(exc)
+            raise
+
 
 class FallbackChain:
     def __init__(self, providers: List[Any]) -> None:
@@ -182,6 +203,22 @@ class FallbackChain:
             except Exception as exc:
                 _logger.warning("Provider %s failed: %s", type(provider).__name__, exc)
                 last_error = exc
+        raise LLMError(f"All {len(self._providers)} providers failed") from last_error
+
+    async def astream(self, messages: list[Any]) -> AsyncIterator[str]:
+        last_error: Optional[Exception] = None
+        for provider in self._providers:
+            yielded = False
+            try:
+                async for chunk in provider.astream(messages):
+                    yielded = True
+                    yield str(chunk)
+                return
+            except Exception as exc:
+                _logger.warning("Provider %s failed: %s", type(provider).__name__, exc)
+                last_error = exc
+                if yielded:
+                    raise
         raise LLMError(f"All {len(self._providers)} providers failed") from last_error
 
 
@@ -221,6 +258,11 @@ class ClaudeProvider:
         if prompt.strip():
             lc_messages.insert(0, SystemMessage(content=prompt))
         return await self._structured_llm.ainvoke(lc_messages)
+
+    async def astream(self, messages: list[Any]) -> AsyncIterator[str]:
+        async for chunk in self._llm.astream(messages):
+            if hasattr(chunk, "content") and chunk.content:
+                yield str(chunk.content)
 
 
 def create_provider(

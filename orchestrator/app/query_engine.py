@@ -484,6 +484,7 @@ async def _raw_llm_synthesize_stream(
     query: str,
     context: List[Dict[str, Any]],
 ) -> AsyncIterator[str]:
+    provider = _build_synthesis_provider()
     sanitized = sanitize_query_input(query)
 
     if _prompt_guardrails_enabled():
@@ -512,14 +513,6 @@ async def _raw_llm_synthesize_stream(
         if context_injection.is_flagged:
             context = _strip_context_values(context, context_injection)
 
-    from langchain_google_genai import ChatGoogleGenerativeAI
-
-    config = ExtractionConfig.from_env()
-    llm = ChatGoogleGenerativeAI(
-        model=config.model_name,
-        google_api_key=config.google_api_key,
-    )
-
     context_block = format_context_for_prompt(context)
     messages = [
         SystemMessage(
@@ -541,9 +534,9 @@ async def _raw_llm_synthesize_stream(
         ),
     ]
     try:
-        async for chunk in llm.astream(messages):
-            if hasattr(chunk, "content") and chunk.content:
-                yield str(chunk.content)
+        async for chunk in provider.astream(messages):
+            if chunk:
+                yield str(chunk)
     except LLMError:
         _query_logger.warning(
             "Streaming LLM provider failed, yielding degraded response",

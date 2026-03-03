@@ -68,6 +68,26 @@ class TestFallbackChain:
         with pytest.raises(LLMError):
             await chain.ainvoke("test")
 
+    @pytest.mark.asyncio
+    async def test_stream_falls_back_on_primary_failure(self) -> None:
+        from orchestrator.app.llm_provider import FallbackChain, LLMError
+
+        async def _primary_stream(_messages):
+            raise LLMError("stream down")
+            yield "unused"
+
+        async def _fallback_stream(_messages):
+            yield "fallback-chunk"
+
+        primary = AsyncMock()
+        primary.astream = _primary_stream
+        fallback = AsyncMock()
+        fallback.astream = _fallback_stream
+        chain = FallbackChain(providers=[primary, fallback])
+
+        chunks = [chunk async for chunk in chain.astream([{"role": "user"}])]
+        assert chunks == ["fallback-chunk"]
+
 
 class TestPerProviderCircuitBreaker:
     @pytest.mark.asyncio

@@ -168,6 +168,36 @@ class TestSynthesisUsesFallbackChain:
         assert parsed["code"] == "ALL_PROVIDERS_FAILED"
 
     @pytest.mark.asyncio
+    async def test_raw_llm_synthesize_stream_calls_provider_stream(self) -> None:
+        from orchestrator.app.query_engine import _raw_llm_synthesize_stream
+
+        async def _mock_stream(_messages):
+            yield "chunk-1"
+            yield "chunk-2"
+
+        mock_provider = MagicMock()
+        mock_provider.astream = _mock_stream
+
+        with (
+            patch(
+                "orchestrator.app.query_engine._build_synthesis_provider",
+                return_value=mock_provider,
+            ),
+            patch(
+                "orchestrator.app.query_engine._prompt_guardrails_enabled",
+                return_value=False,
+            ),
+        ):
+            chunks = [
+                chunk async for chunk in _raw_llm_synthesize_stream(
+                    "What calls auth?",
+                    [{"source": "gateway", "target": "auth"}],
+                )
+            ]
+
+        assert chunks == ["chunk-1", "chunk-2"]
+
+    @pytest.mark.asyncio
     async def test_circuit_open_still_returns_degraded(self) -> None:
         from orchestrator.app.query_engine import _llm_synthesize
 
