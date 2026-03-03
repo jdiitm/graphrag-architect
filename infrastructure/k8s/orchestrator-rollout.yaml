@@ -1,0 +1,90 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: orchestrator
+  namespace: graphrag
+  labels:
+    app: orchestrator
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "graphrag-orchestrator"
+        vault.hashicorp.com/agent-inject-secret-graphrag: "secret/data/graphrag/credentials"
+        vault.hashicorp.com/agent-inject-template-graphrag: |
+          {{- with secret "secret/data/graphrag/credentials" -}}
+          export NEO4J_PASSWORD="{{ .Data.data.NEO4J_PASSWORD }}"
+          export GOOGLE_API_KEY="{{ .Data.data.GOOGLE_API_KEY }}"
+          export AUTH_TOKEN_SECRET="{{ .Data.data.AUTH_TOKEN_SECRET }}"
+          {{- end -}}
+    spec:
+      serviceAccountName: orchestrator
+      containers:
+        - name: orchestrator
+          image: graphrag-architect/orchestrator:latest
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: AUTH_REQUIRE_TOKENS
+              value: "true"
+          envFrom:
+            - configMapRef:
+                name: graphrag-config
+            - secretRef:
+                name: graphrag-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+  strategy:
+    canary:
+      canaryService: orchestrator-canary
+      stableService: orchestrator
+      steps:
+        - setWeight: 10
+        - pause:
+            duration: 5m
+        - analysis:
+            templates:
+              - templateName: orchestrator-success-rate
+        - setWeight: 50
+        - pause:
+            duration: 5m
+        - analysis:
+            templates:
+              - templateName: orchestrator-success-rate
+        - setWeight: 100
+      trafficRouting:
+        nginx:
+          stableIngress: graphrag-ingress
