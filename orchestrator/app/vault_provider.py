@@ -63,7 +63,7 @@ class VaultSecretProvider:
 
     def _vault_read(self, path: str, key: str) -> str:
         try:
-            import requests  # noqa: C0415
+            import requests
         except ImportError:
             logger.error("requests library required for Vault access")
             return os.environ.get(key, "")
@@ -90,7 +90,7 @@ class VaultSecretProvider:
             return ""
 
         try:
-            import requests  # noqa: C0415
+            import requests
         except ImportError:
             return ""
 

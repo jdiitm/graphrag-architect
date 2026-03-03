@@ -217,3 +217,20 @@ Message lifecycle traced end-to-end:
 | Kafka encryption | **Deficient** | PLAINTEXT listeners (Finding 2) |
 | Ingress TLS | **Deficient** | No TLS configuration (Finding 3) |
 | CI security scanning | **Missing** | No Trivy/Snyk/SBOM (Finding 4) |
+
+---
+
+## Remediation Status (Updated March 2026)
+
+All findings from this audit have been remediated:
+
+| Finding | Severity | Remediation | PR |
+|---|---|---|---|
+| Finding 1: Ingestion Worker K8s Probes | HIGH | Probes changed to `/healthz` | PR #234 |
+| Finding 2: Kafka PLAINTEXT Listeners | HIGH | SASL_SSL + SCRAM-SHA-512 configured | PR #234 |
+| Finding 3: Ingress Missing TLS | Moderate | TLS block + cert-manager annotation added | PR #234 |
+| Finding 4: CI Missing Security Scanning | Moderate | Trivy, gitleaks, SBOM (CycloneDX) added to CI | PR #239 |
+| Finding 5: Test RuntimeWarnings | Low | Informational — no functional impact | N/A |
+| Finding 6: Docker Compose Dev Credentials | Low | Informational — dev-only file | N/A |
+
+This report is retained as a historical artifact. For current system status, see `docs/SPEC.md` Section 19.

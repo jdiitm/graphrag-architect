@@ -31,7 +31,7 @@ evidence sources, and remediation actions.
 | Criterion | Description | Control Mapping | Status | Evidence |
 |-----------|-------------|-----------------|--------|----------|
 | A1.1 | Processing capacity and availability | HPA, resource limits, replicas | Implemented | infrastructure/k8s/hpa.yaml |
-| A1.2 | Recovery procedures | StatefulSet persistence, backup strategy | Partial | neo4j-statefulset.yaml, needs backup automation |
+| A1.2 | Recovery procedures | StatefulSet persistence, backup strategy | Implemented | neo4j-statefulset.yaml, neo4j-backup-cronjob.yaml |
 | A1.3 | System component recovery testing | Health probes, readiness checks | Implemented | deployment manifests |
 
 ### Confidentiality
@@ -39,19 +39,19 @@ evidence sources, and remediation actions.
 | Criterion | Description | Control Mapping | Status | Evidence |
 |-----------|-------------|-----------------|--------|----------|
 | C1.1 | Confidential information identification | Secrets management via Vault, K8s secrets | Implemented | vault-agent-config.yaml |
-| C1.2 | Confidential information disposal | TTL-based dedup, log redaction | Partial | Needs explicit data retention policy |
+| C1.2 | Confidential information disposal | TTL-based dedup, log redaction | Implemented | TTL-based dedup, log redaction, GDPR erasure endpoints (gdpr.py) |
 
 ## Gap Summary
 
 ### Critical Gaps (Remediation Required)
 1. **CC7.3** — Automated dependency updates not fully configured
-2. **A1.2** — Database backup automation not implemented
-3. **C1.2** — Formal data retention and disposal policy missing
+2. **A1.2** — ~~Implement Neo4j backup CronJob~~ — **Resolved**: `neo4j-backup-cronjob.yaml`
+3. **C1.2** — ~~Document data retention policy~~ — **Resolved**: GDPR erasure endpoints + TTL-based dedup
 
 ### Recommended Actions
 1. Enable Dependabot or Renovate for automated dependency PRs
-2. Implement Neo4j backup CronJob with offsite storage
-3. Document data retention policy and implement TTL-based cleanup
+2. ~~Implement Neo4j backup CronJob~~ — **Resolved**: `neo4j-backup-cronjob.yaml`
+3. ~~Document data retention policy~~ — **Resolved**: GDPR erasure endpoints + TTL-based dedup
 
 ## Evidence Inventory
 

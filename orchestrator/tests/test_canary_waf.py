@@ -1,8 +1,7 @@
 import pathlib
 
-import yaml
 import pytest
-
+import yaml
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 ROLLOUT = REPO_ROOT / "infrastructure" / "k8s" / "orchestrator-rollout.yaml"

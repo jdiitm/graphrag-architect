@@ -5,7 +5,6 @@ import pathlib
 
 import pytest
 
-
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 LOAD_DIR = REPO_ROOT / "tests" / "load"
 
