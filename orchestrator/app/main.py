@@ -51,6 +51,11 @@ from orchestrator.app.query_models import (
     create_job_store,
 )
 from orchestrator.app.query_templates import TemplateCatalog
+from orchestrator.app.tenant_admin_api import (
+    admin_router as tenant_admin_router,
+    tenant_router,
+    webhook_router,
+)
 from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.tenant_security import TenantScopeVerifier
 from orchestrator.app.graph_api import router as graph_api_router
@@ -180,6 +185,9 @@ def _warn_insecure_auth(auth: AuthConfig) -> None:
 
 app = FastAPI(title="GraphRAG Orchestrator", version="1.0.0", lifespan=lifespan)
 app.include_router(graph_api_router)
+app.include_router(tenant_router)
+app.include_router(tenant_admin_router)
+app.include_router(webhook_router)
 FastAPIInstrumentor.instrument_app(app)
 
 
