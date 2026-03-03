@@ -534,6 +534,8 @@ async def execute_batched_hop(
     limit: int = 200,
     degree_threshold: int = MAX_NODE_DEGREE,
     per_source_limit: int = 50,
+    query_embedding: Optional[List[float]] = None,
+    similarity_threshold: float = 0.5,
 ) -> List[Dict[str, Any]]:
     if not source_ids:
         return []
@@ -589,6 +591,8 @@ async def execute_batched_hop(
             acl_params=acl_params,
             timeout=timeout,
             sample_size=per_source_limit,
+            query_embedding=query_embedding,
+            similarity_threshold=similarity_threshold,
         )
         all_results.extend(supernode_results)
 
@@ -627,9 +631,28 @@ async def _batched_supernode_expansion(
     acl_params: Dict[str, Any],
     timeout: float = 30.0,
     sample_size: int = 50,
+    query_embedding: Optional[List[float]] = None,
+    similarity_threshold: float = 0.5,
 ) -> List[Dict[str, Any]]:
     if not source_ids:
         return []
+
+    if query_embedding is not None:
+        all_results: List[Dict[str, Any]] = []
+        for source_id in source_ids:
+            results = await execute_hop(
+                driver=driver,
+                source_id=source_id,
+                tenant_id=tenant_id,
+                acl_params=acl_params,
+                timeout=timeout,
+                sample_size=sample_size,
+                max_degree=0,
+                query_embedding=query_embedding,
+                similarity_threshold=similarity_threshold,
+            )
+            all_results.extend(results)
+        return all_results
 
     provider = TenantSecurityProvider()
     query = build_traversal_batched_supernode_neighbor()
