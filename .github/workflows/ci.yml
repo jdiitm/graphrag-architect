@@ -123,6 +123,7 @@ jobs:
       - name: Run Trivy filesystem scan
         uses: aquasecurity/trivy-action@0.33.1
         with:
+          version: v0.56.2
           scan-type: 'fs'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
@@ -210,6 +211,7 @@ jobs:
       - name: Trivy image scan
         uses: aquasecurity/trivy-action@0.33.1
         with:
+          version: v0.56.2
           image-ref: "${{ matrix.name }}:ci"
           format: "table"
           severity: "CRITICAL,HIGH"
