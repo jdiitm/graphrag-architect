@@ -853,6 +853,7 @@ async def _try_apoc_expansion(
     max_hops: int,
     max_visited: int,
     token_budget: TokenBudget,
+    timeout: float = 30.0,
 ) -> List[Dict[str, Any]]:
     async def _tx(tx: AsyncManagedTransaction) -> Dict[str, Any]:
         return await apoc_path_expansion(
@@ -861,7 +862,7 @@ async def _try_apoc_expansion(
         )
 
     async with driver.session() as session:
-        raw = await session.execute_read(_tx)
+        raw = await _execute_read_tx(session, _tx, timeout)
     formatted = _format_apoc_for_traversal(raw)
     return truncate_context(formatted, token_budget)
 
@@ -891,6 +892,7 @@ async def _resolve_adaptive(
                     max_hops=max_hops,
                     max_visited=max_visited,
                     token_budget=token_budget,
+                    timeout=timeout,
                 )
             except ClientError:
                 logger.warning(
@@ -942,6 +944,7 @@ async def _resolve_adaptive(
             max_hops=max_hops,
             max_visited=max_visited,
             token_budget=token_budget,
+            timeout=timeout,
         )
     except ClientError:
         logger.warning(
@@ -1026,6 +1029,7 @@ async def run_traversal(
             max_hops=effective_hops,
             max_visited=effective_max_visited,
             token_budget=effective_budget,
+            timeout=effective_timeout,
         )
 
     if config.strategy == TraversalStrategy.ADAPTIVE:

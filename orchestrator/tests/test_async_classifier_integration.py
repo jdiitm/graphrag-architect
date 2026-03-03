@@ -35,6 +35,7 @@ class TestAsyncClassifierIntegration:
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("PROMPT_GUARDRAILS_ENABLED", "true")
+        monkeypatch.setenv("CLASSIFY_CONTEXT_ENABLED", "true")
         safe_result = InjectionResult(
             score=0.0, detected_patterns=[], is_flagged=False,
         )
@@ -60,6 +61,7 @@ class TestAsyncClassifierIntegration:
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("PROMPT_GUARDRAILS_ENABLED", "true")
+        monkeypatch.setenv("CLASSIFY_CONTEXT_ENABLED", "true")
         safe_result = InjectionResult(
             score=0.0, detected_patterns=[], is_flagged=False,
         )

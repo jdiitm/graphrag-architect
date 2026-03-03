@@ -102,6 +102,7 @@ class TestPromptClassificationScope:
         )
 
         with (
+            patch.dict("os.environ", {"CLASSIFY_CONTEXT_ENABLED": "true"}),
             patch(
                 "orchestrator.app.query_engine._build_synthesis_provider",
                 return_value=mock_provider,
@@ -139,6 +140,7 @@ class TestPromptClassificationScope:
         )
 
         with (
+            patch.dict("os.environ", {"CLASSIFY_CONTEXT_ENABLED": "true"}),
             patch(
                 "orchestrator.app.query_engine._build_synthesis_provider",
                 return_value=mock_provider,
@@ -260,7 +262,7 @@ class TestDurableSpilloverErrorHandling:
         ]
         spillover_fn(events)
 
-        assert len(spillover_fn.pending) >= 1
+        assert len(spillover_fn.pending) == 1
 
     def test_spillover_outside_event_loop_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         from orchestrator.app.vector_sync_outbox import VectorSyncEvent

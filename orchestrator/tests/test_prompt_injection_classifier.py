@@ -296,6 +296,7 @@ class TestSynthesisPipelineIntegration:
             "os.environ", {
                 "PROMPT_GUARDRAILS_ENABLED": "true",
                 "INJECTION_HARD_BLOCK_ENABLED": "false",
+                "CLASSIFY_CONTEXT_ENABLED": "true",
             },
         ):
             from orchestrator.app.query_engine import _raw_llm_synthesize

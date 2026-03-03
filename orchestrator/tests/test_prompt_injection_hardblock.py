@@ -86,6 +86,7 @@ class TestPromptInjectionHardBlock:
         classify_result = _make_injection_result(flagged=True, score=0.8)
 
         with (
+            patch.dict("os.environ", {"CLASSIFY_CONTEXT_ENABLED": "true"}),
             patch(
                 "orchestrator.app.query_engine._prompt_guardrails_enabled",
                 return_value=True,

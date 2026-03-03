@@ -461,6 +461,10 @@ def _injection_hard_block_enabled() -> bool:
     return os.environ.get("INJECTION_HARD_BLOCK_ENABLED", "true").lower() != "false"
 
 
+def _context_classification_enabled() -> bool:
+    return os.environ.get("CLASSIFY_CONTEXT_ENABLED", "false").lower() == "true"
+
+
 def _serialize_context_for_classification(
     context: List[Dict[str, Any]],
 ) -> str:
@@ -511,6 +515,10 @@ async def _classify_async(text: str) -> Any:
     return await asyncio.to_thread(_INJECTION_CLASSIFIER.classify, text)
 
 
+def _get_synthesis_timeout() -> float:
+    return float(os.environ.get("LLM_SYNTHESIS_TIMEOUT_SECONDS", "60"))
+
+
 async def _raw_llm_synthesize(
     query: str,
     context: List[Dict[str, Any]],
@@ -539,10 +547,11 @@ async def _raw_llm_synthesize(
                 injection_result.detected_patterns,
             )
 
-        context_text = _serialize_context_for_classification(context)
-        context_injection = await _classify_async(context_text)
-        if context_injection.is_flagged:
-            context = _strip_context_boundary_values(context, context_injection)
+        if _context_classification_enabled():
+            context_text = _serialize_context_for_classification(context)
+            context_injection = await _classify_async(context_text)
+            if context_injection.is_flagged:
+                context = _strip_context_boundary_values(context, context_injection)
 
     context_block = format_context_for_prompt(context)
     messages = [
@@ -564,7 +573,10 @@ async def _raw_llm_synthesize(
             ),
         ),
     ]
-    result = await provider.ainvoke_messages(messages)
+    result = await asyncio.wait_for(
+        provider.ainvoke_messages(messages),
+        timeout=_get_synthesis_timeout(),
+    )
     return result.strip()
 
 
@@ -596,10 +608,11 @@ async def _raw_llm_synthesize_stream(
                 injection_result.detected_patterns,
             )
 
-        context_text = _serialize_context_for_classification(context)
-        context_injection = await _classify_async(context_text)
-        if context_injection.is_flagged:
-            context = _strip_context_boundary_values(context, context_injection)
+        if _context_classification_enabled():
+            context_text = _serialize_context_for_classification(context)
+            context_injection = await _classify_async(context_text)
+            if context_injection.is_flagged:
+                context = _strip_context_boundary_values(context, context_injection)
 
     context_block = format_context_for_prompt(context)
     messages = [
@@ -622,9 +635,20 @@ async def _raw_llm_synthesize_stream(
         ),
     ]
     try:
-        async for chunk in provider.astream(messages):
-            if chunk:
-                yield str(chunk)
+        async with asyncio.timeout(_get_synthesis_timeout()):
+            async for chunk in provider.astream(messages):
+                if chunk:
+                    yield str(chunk)
+    except TimeoutError:
+        _query_logger.warning(
+            "Streaming LLM synthesis timed out after %ss",
+            _get_synthesis_timeout(),
+        )
+        yield json.dumps({
+            "type": "error",
+            "code": "SYNTHESIS_TIMEOUT",
+            "message": "LLM synthesis timed out. Please retry with a simpler query.",
+        })
     except LLMError:
         _query_logger.warning(
             "Streaming LLM provider failed, yielding degraded response",
@@ -685,23 +709,24 @@ async def synthesize_with_concurrent_scan(
     synthesize_fn: _SynthesizeFn,
     classify_fn: _ClassifyFn,
 ) -> str:
-    context_text = _serialize_context_for_classification(context)
-    try:
-        injection_result = await classify_fn(context_text)
-        if injection_result.is_flagged:
-            raise PromptInjectionBlockedError(
-                query=query,
-                score=injection_result.score,
-                patterns=injection_result.detected_patterns,
+    if _context_classification_enabled():
+        context_text = _serialize_context_for_classification(context)
+        try:
+            injection_result = await classify_fn(context_text)
+            if injection_result.is_flagged:
+                raise PromptInjectionBlockedError(
+                    query=query,
+                    score=injection_result.score,
+                    patterns=injection_result.detected_patterns,
+                )
+        except PromptInjectionBlockedError:
+            raise
+        except Exception:
+            _query_logger.warning(
+                "Context injection classifier failed (non-fatal), "
+                "allowing synthesis to proceed",
+                exc_info=True,
             )
-    except PromptInjectionBlockedError:
-        raise
-    except Exception:
-        _query_logger.warning(
-            "Context injection classifier failed (non-fatal), "
-            "allowing synthesis to proceed",
-            exc_info=True,
-        )
     return str(await synthesize_fn(query, context))
 
 

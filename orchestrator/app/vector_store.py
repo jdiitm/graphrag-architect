@@ -155,6 +155,7 @@ class InMemoryVectorStore:
 
 
 _DEFAULT_SEARCH_TIMEOUT_SECONDS = 10.0
+_DEFAULT_WRITE_TIMEOUT_SECONDS = 30.0
 
 
 class QdrantVectorStore:
@@ -168,6 +169,7 @@ class QdrantVectorStore:
         deployment_mode: str = "dev",
         circuit_breaker: Optional[Any] = None,
         search_timeout_seconds: float = _DEFAULT_SEARCH_TIMEOUT_SECONDS,
+        write_timeout_seconds: float = _DEFAULT_WRITE_TIMEOUT_SECONDS,
         shard_by_tenant: bool = False,
     ) -> None:
         self._url = url
@@ -176,6 +178,7 @@ class QdrantVectorStore:
         self._deployment_mode = deployment_mode
         self._client: Optional[Any] = None
         self._search_timeout = search_timeout_seconds
+        self._write_timeout = write_timeout_seconds
         self._shard_by_tenant = shard_by_tenant
         self._collection_manager: Optional[Any] = None
         if circuit_breaker is not None:
@@ -248,8 +251,21 @@ class QdrantVectorStore:
         }
         if self._shard_by_tenant and tenant_id:
             kwargs["shard_key_selector"] = tenant_id
-        await client.upsert(**kwargs)
-        return len(vectors)
+
+        async def _do_upsert() -> int:
+            await asyncio.wait_for(
+                client.upsert(**kwargs),
+                timeout=self._write_timeout,
+            )
+            return len(vectors)
+
+        try:
+            result: int = await self._circuit_breaker.call(_do_upsert)
+            return result
+        except asyncio.TimeoutError as exc:
+            raise VectorDegradedError(
+                f"Qdrant upsert timed out after {self._write_timeout}s"
+            ) from exc
 
     async def search(
         self,
@@ -288,37 +304,58 @@ class QdrantVectorStore:
         client = self._get_client()
         from qdrant_client.models import PointIdsList
         id_values: list[int | str | UUID] = cast("list[int | str | UUID]", list(ids))
-        if tenant_id:
-            from qdrant_client.models import (
-                FieldCondition,
-                Filter,
-                HasIdCondition,
-                MatchValue,
-            )
-            compound = Filter(
-                must=[
-                    HasIdCondition(has_id=id_values),
-                    FieldCondition(
-                        key="tenant_id", match=MatchValue(value=tenant_id),
+
+        async def _do_delete() -> int:
+            if tenant_id:
+                from qdrant_client.models import (
+                    FieldCondition,
+                    Filter,
+                    HasIdCondition,
+                    MatchValue,
+                )
+                compound = Filter(
+                    must=[
+                        HasIdCondition(has_id=id_values),
+                        FieldCondition(
+                            key="tenant_id", match=MatchValue(value=tenant_id),
+                        ),
+                    ],
+                )
+                count_result = await asyncio.wait_for(
+                    client.count(
+                        collection_name=collection,
+                        count_filter=compound,
+                        exact=True,
                     ),
-                ],
+                    timeout=self._write_timeout,
+                )
+                delete_kwargs: Dict[str, Any] = {
+                    "collection_name": collection,
+                    "points_selector": compound,
+                }
+                if self._shard_by_tenant:
+                    delete_kwargs["shard_key_selector"] = tenant_id
+                await asyncio.wait_for(
+                    client.delete(**delete_kwargs),
+                    timeout=self._write_timeout,
+                )
+                return int(count_result.count)
+            await asyncio.wait_for(
+                client.delete(
+                    collection_name=collection,
+                    points_selector=PointIdsList(points=id_values),
+                ),
+                timeout=self._write_timeout,
             )
-            count_result = await client.count(
-                collection_name=collection, count_filter=compound, exact=True,
-            )
-            delete_kwargs: Dict[str, Any] = {
-                "collection_name": collection,
-                "points_selector": compound,
-            }
-            if self._shard_by_tenant:
-                delete_kwargs["shard_key_selector"] = tenant_id
-            await client.delete(**delete_kwargs)
-            return int(count_result.count)
-        await client.delete(
-            collection_name=collection,
-            points_selector=PointIdsList(points=id_values),
-        )
-        return len(ids)
+            return len(ids)
+
+        try:
+            result: int = await self._circuit_breaker.call(_do_delete)
+            return result
+        except asyncio.TimeoutError as exc:
+            raise VectorDegradedError(
+                f"Qdrant delete timed out after {self._write_timeout}s"
+            ) from exc
 
     async def search_with_tenant(
         self,

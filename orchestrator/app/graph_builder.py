@@ -119,6 +119,22 @@ def _shutdown_process_pool() -> None:
         _ASTPoolHolder.instance = None
 
 
+def shutdown_ast_pool() -> None:
+    _shutdown_process_pool()
+
+
+def flush_coalescing_outbox() -> int:
+    events = _COALESCING_OUTBOX.flush()
+    for event in events:
+        _VECTOR_OUTBOX.enqueue(event)
+    return len(events)
+
+
+def drain_vector_outbox_sync() -> int:
+    events = _VECTOR_OUTBOX.drain_pending()
+    return len(events)
+
+
 def _get_ast_extraction_mode() -> str:
     return ASTExtractionConfig.from_env().mode
 
@@ -177,6 +193,7 @@ _DEFAULT_COALESCING_MAX_ENTRIES = 500
 def _spillover_to_vector_outbox(
     events: List[VectorSyncEvent],
 ) -> None:
+    get_metrics_port().increment_counter("vector_sync.drift_risk_total", 1, {})
     for event in events:
         _VECTOR_OUTBOX.enqueue(event)
 
@@ -192,6 +209,7 @@ def create_durable_spillover_fn(
             loop = asyncio.get_running_loop()
             for event in events:
                 loop.create_task(store.write_event(event))
+            pending.clear()
         except RuntimeError:
             logger.warning(
                 "No running event loop for durable spillover; "
