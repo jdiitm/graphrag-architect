@@ -937,7 +937,8 @@ class DurableOutboxDrainer:
         for event in pending:
             fence_key = self._event_fence_key(event)
             tenant_id = self._event_tenant_id(event)
-            latest = self._latest_version_by_key.get(fence_key, -1)
+            scoped_fence_key = f"{tenant_id}:{fence_key}"
+            latest = self._latest_version_by_key.get(scoped_fence_key, -1)
             if isinstance(self._store, VersionFenceStore):
                 persisted = await self._store.get_version_fence(
                     fence_key, tenant_id=tenant_id,
@@ -956,7 +957,7 @@ class DurableOutboxDrainer:
                     await self._vector_store.delete(
                         event.collection, event.pruned_ids,
                     )
-                self._latest_version_by_key[fence_key] = event.version
+                self._latest_version_by_key[scoped_fence_key] = event.version
                 if isinstance(self._store, VersionFenceStore):
                     await self._store.update_version_fence(
                         fence_key, event.version, tenant_id=tenant_id,
@@ -998,4 +999,7 @@ class DurableOutboxDrainer:
             metadata = getattr(first, "metadata", {})
             if isinstance(metadata, dict):
                 return str(metadata.get("tenant_id", ""))
+        base = "service_embeddings_"
+        if event.collection.startswith(base):
+            return event.collection[len(base):]
         return ""
