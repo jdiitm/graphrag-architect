@@ -738,7 +738,7 @@ class Neo4jOutboxStore:
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", 0)),
                 version=int(data.get("version", 0)) or time.time_ns(),
-                tenant_id=str(data.get("tenant_id", "")),
+                tenant_id=str(data.get("tenant_id") or ""),
             ))
         return events
 
@@ -797,7 +797,7 @@ class Neo4jOutboxStore:
                 status="claimed",
                 retry_count=int(data.get("retry_count", 0)),
                 version=int(data.get("version", 0)) or time.time_ns(),
-                tenant_id=str(data.get("tenant_id", "")),
+                tenant_id=str(data.get("tenant_id") or ""),
             ))
         return events
 
