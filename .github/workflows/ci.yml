@@ -33,9 +33,9 @@ jobs:
           cache: pip
           cache-dependency-path: orchestrator/requirements.txt
       - name: Install dependencies
-        run: pip install -r orchestrator/requirements.txt
+        run: pip install -r orchestrator/requirements.txt pytest-cov
       - name: Run tests
-        run: python -m pytest orchestrator/tests/ -v --tb=short
+        run: python -m pytest orchestrator/tests/ -v --tb=short --cov=orchestrator/app --cov-report=term-missing --cov-fail-under=80
 
   python-mypy:
     name: Python Type Check (mypy)
@@ -82,7 +82,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v1.61.0
           working-directory: workers/ingestion
 
   go-test:
@@ -121,13 +121,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: 'fs'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@v0.18.0
         with:
           format: cyclonedx-json
           output-file: sbom.json
@@ -180,13 +180,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r orchestrator/requirements.txt
       - name: Run contract tests
-        run: python -m pytest orchestrator/tests/ -v -k "contract" --tb=short || true
+        run: python -m pytest orchestrator/tests/ -v -k "contract" --tb=short
         env:
           NEO4J_URI: bolt://localhost:7687
           NEO4J_PASSWORD: testpassword
           KAFKA_BOOTSTRAP_SERVERS: localhost:9092
       - name: Run E2E tests
-        run: python -m pytest orchestrator/tests/ -v -k "e2e" --tb=short || true
+        run: python -m pytest orchestrator/tests/ -v -k "e2e" --tb=short
         env:
           NEO4J_URI: bolt://localhost:7687
           NEO4J_PASSWORD: testpassword
@@ -207,7 +207,7 @@ jobs:
       - name: Build ${{ matrix.name }}
         run: docker build -t ${{ matrix.name }}:ci ${{ matrix.context }}
       - name: Trivy image scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: "${{ matrix.name }}:ci"
           format: "table"
@@ -215,7 +215,7 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
       - name: Generate container SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@v0.18.0
         with:
           image: "${{ matrix.name }}:ci"
           format: cyclonedx-json
