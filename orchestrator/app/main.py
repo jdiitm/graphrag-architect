@@ -133,7 +133,13 @@ def _kafka_consumer_enabled() -> bool:
     return os.environ.get("KAFKA_CONSUMER_ENABLED", "false").lower() == "true"
 
 
-async def _kafka_ingest_callback(raw_files: List[Dict[str, str]]) -> Dict[str, Any]:
+async def _kafka_ingest_callback(
+    raw_files: List[Dict[str, str]],
+    tenant_id: str,
+) -> Dict[str, Any]:
+    scoped_tenant = str(tenant_id or "").strip()
+    if not scoped_tenant:
+        return {"commit_status": "failed", "error": "missing tenant_id"}
     initial_state: Dict[str, Any] = {
         "directory_path": "",
         "raw_files": raw_files,
@@ -141,7 +147,7 @@ async def _kafka_ingest_callback(raw_files: List[Dict[str, str]]) -> Dict[str, A
         "extraction_errors": [],
         "validation_retries": 0,
         "commit_status": "",
-        "tenant_id": "default",
+        "tenant_id": scoped_tenant,
     }
     result = await _get_active_ingestion_graph().ainvoke(initial_state)
     return {

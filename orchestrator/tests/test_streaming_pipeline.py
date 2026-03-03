@@ -213,7 +213,8 @@ class TestKafkaCallbackUsesStreamingPipeline:
             ),
         ):
             result = await _kafka_ingest_callback(
-                [{"path": "svc.go", "content": "package main"}]
+                [{"path": "svc.go", "content": "package main"}],
+                "tenant-a",
             )
 
         assert result["commit_status"] == "success"

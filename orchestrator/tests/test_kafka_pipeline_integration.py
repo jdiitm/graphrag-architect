@@ -119,14 +119,15 @@ class TestKafkaConsumerIngestIntegration:
 
         invoked_states: List[Dict[str, Any]] = []
 
-        async def _fake_ingest(raw_files):
-            invoked_states.append(raw_files)
+        async def _fake_ingest(raw_files, tenant_id):
+            invoked_states.append({"raw_files": raw_files, "tenant_id": tenant_id})
             return {"commit_status": "success", "entities_extracted": 1}
 
         payload = json.dumps({
             "file_path": "k8s/deployment.yaml",
             "content": "apiVersion: apps/v1\nkind: Deployment",
             "source_type": "k8s_manifest",
+            "tenant_id": "team-a",
         }).encode()
 
         config = KafkaConsumerConfig(topic="graphrag.parsed")
@@ -135,7 +136,8 @@ class TestKafkaConsumerIngestIntegration:
 
         assert result["commit_status"] == "success"
         assert len(invoked_states) == 1
-        assert invoked_states[0][0]["path"] == "k8s/deployment.yaml"
+        assert invoked_states[0]["raw_files"][0]["path"] == "k8s/deployment.yaml"
+        assert invoked_states[0]["tenant_id"] == "team-a"
 
 
 class TestIngestEndpointDeprecation:
