@@ -51,6 +51,7 @@ from orchestrator.app.query_models import (
     create_job_store,
 )
 from orchestrator.app.query_templates import TemplateCatalog
+from orchestrator.app.gdpr import gdpr_router
 from orchestrator.app.tenant_admin_api import (
     admin_router as tenant_admin_router,
     tenant_router,
@@ -188,6 +189,7 @@ app.include_router(graph_api_router)
 app.include_router(tenant_router)
 app.include_router(tenant_admin_router)
 app.include_router(webhook_router)
+app.include_router(gdpr_router)
 FastAPIInstrumentor.instrument_app(app)
 
 
