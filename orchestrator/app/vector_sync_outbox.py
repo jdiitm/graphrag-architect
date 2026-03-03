@@ -120,6 +120,7 @@ class VectorSyncEvent(BaseModel):
     vectors: List[Any] = Field(default_factory=list)
     status: str = "pending"
     retry_count: int = 0
+    version: int = Field(default_factory=time.time_ns)
 
     @field_validator("pruned_ids")
     @classmethod
@@ -434,6 +435,7 @@ return 1
             "vectors": vectors_json,
             "status": event.status,
             "retry_count": str(event.retry_count),
+            "version": str(event.version),
             "_dedup_rkey": dedup_rkey,
         }
         flat_args: list[str] = []
@@ -470,6 +472,7 @@ return 1
                 vectors=vectors,
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", "0")),
+                version=int(data.get("version", "0")) or time.time_ns(),
             ))
         return events
 
@@ -537,6 +540,7 @@ return 1
                 vectors=vectors,
                 status="claimed",
                 retry_count=int(data.get("retry_count", "0")),
+                version=int(data.get("version", "0")) or time.time_ns(),
             ))
         return claimed
 
@@ -583,7 +587,8 @@ class Neo4jOutboxStore:
         "  pruned_ids: $pruned_ids,"
         "  vectors: $vectors,"
         "  status: $status,"
-        "  retry_count: $retry_count"
+        "  retry_count: $retry_count,"
+        "  version: $version"
         "})"
     )
     _LOAD_QUERY = (
@@ -591,7 +596,7 @@ class Neo4jOutboxStore:
         "RETURN e.event_id AS event_id, e.collection AS collection, "
         "e.operation AS operation, e.pruned_ids AS pruned_ids, "
         "e.vectors AS vectors, e.status AS status, "
-        "e.retry_count AS retry_count "
+        "e.retry_count AS retry_count, e.version AS version "
         f"ORDER BY e.retry_count ASC LIMIT {_LOAD_BATCH_LIMIT}"
     )
     _DELETE_QUERY = (
@@ -613,7 +618,7 @@ class Neo4jOutboxStore:
         "RETURN e.event_id AS event_id, e.collection AS collection, "
         "e.operation AS operation, e.pruned_ids AS pruned_ids, "
         "e.vectors AS vectors, e.status AS status, "
-        "e.retry_count AS retry_count"
+        "e.retry_count AS retry_count, e.version AS version"
     )
     _RELEASE_CLAIM_QUERY = (
         "MATCH (e:OutboxEvent {event_id: $event_id}) "
@@ -647,6 +652,7 @@ class Neo4jOutboxStore:
             "vectors": vectors_json,
             "status": event.status,
             "retry_count": event.retry_count,
+            "version": event.version,
         }
 
     async def write_in_tx(self, tx: Any, event: VectorSyncEvent) -> None:
@@ -688,6 +694,7 @@ class Neo4jOutboxStore:
                 vectors=vectors,
                 status=data.get("status", "pending"),
                 retry_count=int(data.get("retry_count", 0)),
+                version=int(data.get("version", 0)) or time.time_ns(),
             ))
         return events
 
@@ -745,6 +752,7 @@ class Neo4jOutboxStore:
                 vectors=vectors,
                 status="claimed",
                 retry_count=int(data.get("retry_count", 0)),
+                version=int(data.get("version", 0)) or time.time_ns(),
             ))
         return events
 
@@ -828,6 +836,7 @@ class DurableOutboxDrainer:
         self._max_retries = max_retries
         self._worker_id = worker_id or str(uuid.uuid4())
         self._lease_seconds = lease_seconds
+        self._latest_version_by_key: Dict[str, int] = {}
 
     async def _load_events(self) -> List[VectorSyncEvent]:
         if isinstance(self._store, ClaimableOutboxStore):
@@ -851,6 +860,12 @@ class DurableOutboxDrainer:
 
         processed = 0
         for event in pending:
+            fence_key = self._event_fence_key(event)
+            latest = self._latest_version_by_key.get(fence_key, -1)
+            if event.version < latest:
+                await self._finalize_event(event.event_id)
+                processed += 1
+                continue
             try:
                 if event.operation == "upsert":
                     await self._vector_store.upsert(
@@ -860,6 +875,7 @@ class DurableOutboxDrainer:
                     await self._vector_store.delete(
                         event.collection, event.pruned_ids,
                     )
+                self._latest_version_by_key[fence_key] = event.version
                 await self._finalize_event(event.event_id)
                 processed += 1
             except Exception as exc:
@@ -882,3 +898,10 @@ class DurableOutboxDrainer:
                     if isinstance(self._store, ClaimableOutboxStore):
                         await self._store.release_claim(event.event_id)
         return processed
+
+    @staticmethod
+    def _event_fence_key(event: VectorSyncEvent) -> str:
+        if event.operation == "upsert" and event.vectors:
+            vector_ids = sorted(str(getattr(v, "id", "")) for v in event.vectors)
+            return f"{event.collection}:upsert:{','.join(vector_ids)}"
+        return f"{event.collection}:{event.operation}:{','.join(sorted(event.pruned_ids))}"

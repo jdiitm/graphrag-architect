@@ -196,3 +196,38 @@ class TestDurableOutboxDrainer:
 
         assert first == 1
         assert second == 0
+
+    @pytest.mark.asyncio
+    async def test_version_fence_skips_stale_event(self) -> None:
+        from orchestrator.app.vector_store import VectorRecord
+
+        store = _FakeOutboxStore()
+        newer = VectorSyncEvent(
+            collection="svc",
+            operation="upsert",
+            pruned_ids=["id-1"],
+            vectors=[VectorRecord(id="id-1", vector=[0.2], metadata={})],
+            version=20,
+        )
+        older = VectorSyncEvent(
+            collection="svc",
+            operation="upsert",
+            pruned_ids=["id-1"],
+            vectors=[VectorRecord(id="id-1", vector=[0.1], metadata={})],
+            version=10,
+        )
+        await store.write_event(newer)
+        await store.write_event(older)
+
+        mock_vs = AsyncMock()
+        mock_vs.upsert = AsyncMock(return_value=1)
+        mock_vs.delete = AsyncMock(return_value=1)
+
+        drainer = DurableOutboxDrainer(
+            store=store, vector_store=mock_vs, max_retries=3,
+        )
+        processed = await drainer.process_once()
+        assert processed == 2
+        mock_vs.upsert.assert_called_once()
+        remaining = await store.load_pending()
+        assert not remaining
