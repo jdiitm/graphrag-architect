@@ -1,0 +1,17 @@
+{
+  "dev": {
+    "base_url": "http://localhost:8000",
+    "vus": 10,
+    "duration": "5m"
+  },
+  "staging": {
+    "base_url": "https://staging-api.graphrag.internal",
+    "vus": 50,
+    "duration": "15m"
+  },
+  "prod": {
+    "base_url": "https://api.graphrag.internal",
+    "vus": 100,
+    "duration": "30m"
+  }
+}
