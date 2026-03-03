@@ -177,7 +177,6 @@ func (d *Dispatcher) awaitDLQDone(ctx context.Context, result domain.Result) boo
 	case <-timer.C:
 		return false
 	}
-	return false
 }
 
 func (d *Dispatcher) processWithRetry(ctx context.Context, job domain.Job) domain.Result {
