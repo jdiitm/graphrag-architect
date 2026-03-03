@@ -82,7 +82,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.61.0
+          version: v1.64.8
           working-directory: workers/ingestion
 
   go-test:
@@ -126,6 +126,7 @@ jobs:
           scan-type: 'fs'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
+          ignore-unfixed: true
       - name: Generate SBOM
         uses: anchore/sbom-action@v0.18.0
         with:

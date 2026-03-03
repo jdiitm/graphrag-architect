@@ -30,8 +30,8 @@ from orchestrator.app.access_control import (
     CypherPermissionFilter,
     SecurityPrincipal,
 )
-from orchestrator.app.audit_log import SecurityAuditLogger
 from orchestrator.app.agentic_traversal import run_traversal
+from orchestrator.app.audit_log import SecurityAuditLogger
 from orchestrator.app.circuit_breaker import (
     CircuitBreakerConfig,
     CircuitOpenError,

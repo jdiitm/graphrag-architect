@@ -1,9 +1,9 @@
 import asyncio
 import base64
 import binascii
+import inspect
 import logging
 import os
-import inspect
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Generator, List, Optional
 
