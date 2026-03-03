@@ -442,6 +442,8 @@ class ProductionConfigValidator:
     ast_dlq_backend: str
     outbox_backend: str
     vector_sync_backend: str
+    vector_store_backend: str = "memory"
+    qdrant_shard_by_tenant: bool = False
 
     @classmethod
     def from_env(cls) -> ProductionConfigValidator:
@@ -449,6 +451,7 @@ class ProductionConfigValidator:
         redis_url = os.environ.get("REDIS_URL", "")
         neo4j_password = os.environ.get("NEO4J_PASSWORD", "")
         vector_sync_backend = VectorSyncConfig.from_env().backend
+        vector_cfg = VectorStoreConfig.from_env()
 
         ast_dlq_backend = "redis" if redis_url else "memory"
 
@@ -464,6 +467,8 @@ class ProductionConfigValidator:
             ast_dlq_backend=ast_dlq_backend,
             outbox_backend=outbox_backend,
             vector_sync_backend=vector_sync_backend,
+            vector_store_backend=vector_cfg.backend,
+            qdrant_shard_by_tenant=vector_cfg.shard_by_tenant,
         )
 
     def validate_production_invariants(self) -> None:
@@ -488,6 +493,15 @@ class ProductionConfigValidator:
             violations.append(
                 "VECTOR_SYNC_BACKEND='memory' is not permitted. "
                 "Set VECTOR_SYNC_BACKEND to 'kafka' or 'redis'."
+            )
+
+        if (
+            self.vector_store_backend == "qdrant"
+            and not self.qdrant_shard_by_tenant
+        ):
+            violations.append(
+                "QDRANT_SHARD_BY_TENANT is false. "
+                "Set QDRANT_SHARD_BY_TENANT=true in production."
             )
 
         if violations:

@@ -366,6 +366,8 @@ def create_vector_store(
     deployment_mode: str = "dev",
     shard_by_tenant: bool = False,
 ) -> Any:
+    from orchestrator.app.tenant_isolation import validate_vector_shard_enforcement
+
     _ = pool_size
     _ = driver
     if backend == "neo4j":
@@ -381,6 +383,11 @@ def create_vector_store(
             f"Production deployments require 'qdrant'. "
             f"Set VECTOR_STORE_BACKEND=qdrant."
         )
+    validate_vector_shard_enforcement(
+        deployment_mode=deployment_mode,
+        backend=backend,
+        shard_by_tenant=shard_by_tenant,
+    )
     if backend == "qdrant":
         return QdrantVectorStore(
             url=url, api_key=api_key, prefer_grpc=True,
