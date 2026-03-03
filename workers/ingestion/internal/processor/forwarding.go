@@ -3,13 +3,17 @@ package processor
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/telemetry"
 )
@@ -38,6 +42,7 @@ type ForwardingProcessor struct {
 	orchestratorURL string
 	client          *http.Client
 	authToken       string
+	signingSecret   string
 	retryBackoff    time.Duration
 	maxPayloadSize  int
 	retryTimeout    time.Duration
@@ -67,6 +72,20 @@ func WithRetryTimeout(d time.Duration) ForwardingOption {
 	return func(fp *ForwardingProcessor) {
 		fp.retryTimeout = d
 	}
+}
+
+func WithSigningSecret(secret string) ForwardingOption {
+	return func(fp *ForwardingProcessor) {
+		fp.signingSecret = secret
+	}
+}
+
+func ComputeHMACSignature(method, path string, body []byte, timestamp, nonce, secret string) string {
+	canonical := []byte(method + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n")
+	canonical = append(canonical, body...)
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(canonical)
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func NewForwardingProcessor(orchestratorURL string, client *http.Client, opts ...ForwardingOption) *ForwardingProcessor {
@@ -132,6 +151,7 @@ func (f *ForwardingProcessor) Process(ctx context.Context, job domain.Job) error
 	if f.authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+f.authToken)
 	}
+	f.applySignature(req, body)
 	telemetry.InjectTraceContext(ctx, req.Header)
 
 	var lastErr error
@@ -154,6 +174,7 @@ func (f *ForwardingProcessor) Process(ctx context.Context, job domain.Job) error
 			if f.authToken != "" {
 				req.Header.Set("Authorization", "Bearer "+f.authToken)
 			}
+			f.applySignature(req, body)
 			telemetry.InjectTraceContext(ctx, req.Header)
 		}
 
@@ -181,4 +202,16 @@ func (f *ForwardingProcessor) Process(ctx context.Context, job domain.Job) error
 	}
 
 	return fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+func (f *ForwardingProcessor) applySignature(req *http.Request, body []byte) {
+	if f.signingSecret == "" {
+		return
+	}
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	nonce := uuid.New().String()
+	sig := ComputeHMACSignature(req.Method, req.URL.Path, body, ts, nonce, f.signingSecret)
+	req.Header.Set("X-Signature", sig)
+	req.Header.Set("X-Timestamp", ts)
+	req.Header.Set("X-Nonce", nonce)
 }
