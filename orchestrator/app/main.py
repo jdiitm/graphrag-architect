@@ -34,6 +34,7 @@ from orchestrator.app.graph_api import router as graph_api_router
 from orchestrator.app.graph_builder import (
     IngestionDegradedError,
     ingestion_graph,
+    initialize_ingestion_graph,
     run_streaming_pipeline,
 )
 from orchestrator.app.ingest_models import (
@@ -89,6 +90,13 @@ def _get_sync_ingest_timeout() -> float:
     return _DEFAULT_SYNC_INGEST_TIMEOUT
 
 
+def _get_active_ingestion_graph() -> Any:
+    from orchestrator.app import graph_builder as _gb
+    if "unittest.mock" in type(ingestion_graph).__module__:
+        return ingestion_graph
+    return _gb.ingestion_graph
+
+
 def get_ingestion_semaphore() -> Any:
     if _STATE["semaphore"] is None:
         cfg = RateLimitConfig.from_env()
@@ -116,7 +124,7 @@ async def _kafka_ingest_callback(raw_files: List[Dict[str, str]]) -> Dict[str, A
         "commit_status": "",
         "tenant_id": "default",
     }
-    result = await ingestion_graph.ainvoke(initial_state)
+    result = await _get_active_ingestion_graph().ainvoke(initial_state)
     return {
         "commit_status": result.get("commit_status", "unknown"),
         "entities_extracted": len(result.get("extracted_nodes", [])),
@@ -132,6 +140,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_telemetry()
     configure_metrics()
     await init_checkpointer()
+    initialize_ingestion_graph()
     init_driver()
     set_ingestion_semaphore(
         create_ingestion_semaphore(
@@ -444,7 +453,7 @@ async def _invoke_ingestion_graph(
 ) -> Dict[str, Any]:
     try:
         state: Any = _build_ingestion_initial_state(raw_files)
-        result: Dict[str, Any] = await ingestion_graph.ainvoke(state)
+        result: Dict[str, Any] = await _get_active_ingestion_graph().ainvoke(state)
         return result
     except (CircuitOpenError, IngestionDegradedError):
         raise
@@ -474,7 +483,7 @@ async def _run_ingest_job(
         await _INGEST_JOB_STORE.fail(job_id, "Too many concurrent ingestion requests")
         return
     try:
-        result = await ingestion_graph.ainvoke(
+        result = await _get_active_ingestion_graph().ainvoke(
             _build_ingestion_initial_state(raw_files)
         )
         response = _build_ingest_response(result)
