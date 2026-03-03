@@ -68,6 +68,7 @@ from orchestrator.app.tenant_admin_api import (
 from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.tenant_security import TenantScopeVerifier
 from orchestrator.app.token_bucket import create_rate_limiter
+from orchestrator.app.ingestion_resume import cleanup_active_status_store
 from orchestrator.app.vector_sync_outbox import validate_production_sync_mode
 
 logger = logging.getLogger(__name__)
@@ -160,6 +161,51 @@ async def _kafka_ingest_callback(
     }
 
 
+async def _shutdown_subsystems() -> None:
+    from orchestrator.app.graph_builder import _BACKGROUND_TASKS
+    drained = await _BACKGROUND_TASKS.drain_all(timeout=10.0)
+    if drained:
+        logger.info("Drained %d background tasks during shutdown", drained)
+
+    active_tasks: set[asyncio.Task[Any]] = set()
+    active_tasks.update(_ACTIVE_INGEST_TASKS)
+    active_tasks.update(_ACTIVE_QUERY_TASKS)
+    if active_tasks:
+        for task in active_tasks:
+            task.cancel()
+        _, pending = await asyncio.wait(active_tasks, timeout=15.0)
+        if pending:
+            logger.warning(
+                "Shutdown: %d active tasks did not complete in time",
+                len(pending),
+            )
+
+    flushed = flush_coalescing_outbox()
+    drained_vector = drain_vector_outbox_sync()
+    if flushed or drained_vector:
+        logger.info(
+            "Shutdown: flushed %d coalescing + %d vector outbox events",
+            flushed, drained_vector,
+        )
+
+    shutdown_ast_pool()
+
+    cleaned = await cleanup_active_status_store()
+    if cleaned:
+        logger.info("Shutdown: cleaned %d expired status entries", cleaned)
+
+    if _STATE.get("kafka_consumer") is not None:
+        await _STATE["kafka_consumer"].stop()
+        if _STATE.get("kafka_task") is not None:
+            _STATE["kafka_task"].cancel()
+        _STATE["kafka_consumer"] = None
+        _STATE["kafka_task"] = None
+    shutdown_pool()
+    shutdown_thread_pool()
+    await close_driver()
+    await close_checkpointer()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ProductionConfigValidator.from_env().validate_production_invariants()
@@ -190,44 +236,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        from orchestrator.app.graph_builder import _BACKGROUND_TASKS
-        drained = await _BACKGROUND_TASKS.drain_all(timeout=10.0)
-        if drained:
-            logger.info("Drained %d background tasks during shutdown", drained)
-
-        active_tasks: set[asyncio.Task[Any]] = set()
-        active_tasks.update(_ACTIVE_INGEST_TASKS)
-        active_tasks.update(_ACTIVE_QUERY_TASKS)
-        if active_tasks:
-            for task in active_tasks:
-                task.cancel()
-            _, pending = await asyncio.wait(active_tasks, timeout=15.0)
-            if pending:
-                logger.warning(
-                    "Shutdown: %d active tasks did not complete in time",
-                    len(pending),
-                )
-
-        flushed = flush_coalescing_outbox()
-        drained_vector = drain_vector_outbox_sync()
-        if flushed or drained_vector:
-            logger.info(
-                "Shutdown: flushed %d coalescing + %d vector outbox events",
-                flushed, drained_vector,
-            )
-
-        shutdown_ast_pool()
-
-        if _STATE.get("kafka_consumer") is not None:
-            await _STATE["kafka_consumer"].stop()
-            if _STATE.get("kafka_task") is not None:
-                _STATE["kafka_task"].cancel()
-            _STATE["kafka_consumer"] = None
-            _STATE["kafka_task"] = None
-        shutdown_pool()
-        shutdown_thread_pool()
-        await close_driver()
-        await close_checkpointer()
+        await _shutdown_subsystems()
 
 
 def _validate_startup_security() -> AuthConfig:

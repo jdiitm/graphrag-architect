@@ -220,6 +220,16 @@ def _embedding_hash(
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def _cache_key(
+    query_embedding: List[float],
+    tenant_id: str,
+    acl_key: str,
+    hash_dimensions: Optional[int] = None,
+) -> str:
+    emb_hash = _embedding_hash(query_embedding, hash_dimensions=hash_dimensions)
+    return f"{emb_hash}|{tenant_id}|{acl_key}"
+
+
 _FILLER_PATTERNS: List[re.Pattern[str]] = [
     re.compile(r"\bcan you tell me\b", re.IGNORECASE),
     re.compile(r"\bcould you tell me\b", re.IGNORECASE),
@@ -346,7 +356,9 @@ class SemanticQueryCache:
             return cached, False
 
         hdim = self._config.hash_dimensions
-        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
+        key_hash = _cache_key(
+            query_embedding, tenant_id, acl_key, hash_dimensions=hdim,
+        )
 
         inflight = self.get_inflight(key_hash)
         if inflight is not None:
@@ -367,9 +379,12 @@ class SemanticQueryCache:
         query_embedding: List[float],
         failed: bool = False,
         acl_key: str = "",
+        tenant_id: str = "",
     ) -> None:
         hdim = self._config.hash_dimensions
-        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
+        key_hash = _cache_key(
+            query_embedding, tenant_id, acl_key, hash_dimensions=hdim,
+        )
         inflight = self._inflight.pop(key_hash, None)
         if inflight is not None:
             inflight.complete(failed=failed)
@@ -511,7 +526,9 @@ class SemanticQueryCache:
         topo_hash = compute_topology_hash(node_ids) if node_ids else ""
 
         hdim = self._config.hash_dimensions
-        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
+        key_hash = _cache_key(
+            query_embedding, tenant_id, acl_key, hash_dimensions=hdim,
+        )
         if key_hash in self._entries:
             self._remove_from_tenant_index(key_hash)
             self._remove_node_tags_for_key(key_hash)
@@ -850,7 +867,10 @@ class RedisSemanticQueryCache:
     ) -> Optional[Dict[str, Any]]:
         try:
             hdim = self._cache_config.hash_dimensions
-            key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
+            key_hash = _cache_key(
+                query_embedding, tenant_id, acl_key,
+                hash_dimensions=hdim,
+            )
             redis_key = f"{self._prefix}{key_hash}"
             raw = await self._redis.get(redis_key)
             if raw is None:
@@ -893,7 +913,10 @@ class RedisSemanticQueryCache:
             return redis_hit, False
 
         hdim = self._cache_config.hash_dimensions
-        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
+        key_hash = _cache_key(
+            query_embedding, tenant_id, acl_key,
+            hash_dimensions=hdim,
+        )
         inflight = self._l1.get_inflight(key_hash)
         if inflight is not None:
             succeeded = await inflight.wait()
@@ -913,8 +936,11 @@ class RedisSemanticQueryCache:
         query_embedding: List[float],
         failed: bool = False,
         acl_key: str = "",
+        tenant_id: str = "",
     ) -> None:
-        self._l1.notify_complete(query_embedding, failed=failed, acl_key=acl_key)
+        self._l1.notify_complete(
+            query_embedding, failed=failed, acl_key=acl_key, tenant_id=tenant_id,
+        )
 
     def lookup(
         self,
@@ -942,7 +968,10 @@ class RedisSemanticQueryCache:
             node_ids=node_ids, acl_key=acl_key,
         )
         hdim = self._cache_config.hash_dimensions
-        key_hash = _embedding_hash(query_embedding, hash_dimensions=hdim) + "|" + acl_key
+        key_hash = _cache_key(
+            query_embedding, tenant_id, acl_key,
+            hash_dimensions=hdim,
+        )
         payload_embedding = (
             query_embedding[:hdim] if hdim is not None else query_embedding
         )

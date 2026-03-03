@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from typing import (
@@ -304,19 +305,21 @@ def build_fulltext_fallback_cypher(
 
 
 _EMBEDDING_STATE: Dict[str, Any] = {"cfg": None, "client": None}
+_EMBEDDING_STATE_LOCK = threading.Lock()
 
 
 def _get_embedding_resources() -> Tuple[Optional[EmbeddingConfig], Any]:
-    if _EMBEDDING_STATE["cfg"] is None:
-        _EMBEDDING_STATE["cfg"] = EmbeddingConfig.from_env()
-    cfg = _EMBEDDING_STATE["cfg"]
-    if (
-        _EMBEDDING_STATE["client"] is None
-        and cfg.provider == "openai"
-        and _OPENAI_MODULE is not None
-    ):
-        _EMBEDDING_STATE["client"] = _OPENAI_MODULE.AsyncOpenAI()
-    return cfg, _EMBEDDING_STATE["client"]
+    with _EMBEDDING_STATE_LOCK:
+        if _EMBEDDING_STATE["cfg"] is None:
+            _EMBEDDING_STATE["cfg"] = EmbeddingConfig.from_env()
+        cfg = _EMBEDDING_STATE["cfg"]
+        if (
+            _EMBEDDING_STATE["client"] is None
+            and cfg.provider == "openai"
+            and _OPENAI_MODULE is not None
+        ):
+            _EMBEDDING_STATE["client"] = _OPENAI_MODULE.AsyncOpenAI()
+        return cfg, _EMBEDDING_STATE["client"]
 
 
 async def _raw_embed_query(text: str) -> Optional[List[float]]:

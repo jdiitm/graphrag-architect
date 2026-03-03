@@ -205,7 +205,7 @@ class TestHashDimensionsConfig:
 
     def test_backward_compat_key_matches_explicit_hash_call(self) -> None:
         embedding = [0.1 * i for i in range(128)]
-        expected_key = _embedding_hash(embedding, hash_dimensions=32) + "|"
+        expected_key = _embedding_hash(embedding, hash_dimensions=32) + "||"
         config = CacheConfig(hash_dimensions=32, similarity_threshold=0.9)
         cache = SemanticQueryCache(config)
         cache.store("q", embedding, {"a": 1})
