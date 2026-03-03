@@ -177,6 +177,7 @@ _DEFAULT_COALESCING_MAX_ENTRIES = 500
 def _spillover_to_vector_outbox(
     events: List[VectorSyncEvent],
 ) -> None:
+    get_metrics_port().increment_counter("vector_sync.drift_risk_total", 1, {})
     for event in events:
         _VECTOR_OUTBOX.enqueue(event)
 
@@ -198,6 +199,7 @@ def create_durable_spillover_fn(
                 "%d events buffered in pending list",
                 len(events),
             )
+        pending.clear()
 
     _spillover.pending = pending  # type: ignore[attr-defined]
     return _spillover

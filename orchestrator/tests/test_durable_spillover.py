@@ -40,8 +40,8 @@ class TestCreateDurableSpilloverFn:
         ]
         spillover_fn(events)
 
-        assert len(spillover_fn.pending) == 2, (
-            "Spillover must buffer events in the pending list"
+        assert len(spillover_fn.pending) == 0, (
+            "Spillover must clear pending list after dispatching to prevent memory leaks"
         )
         await asyncio.sleep(0)
         assert store.write_event.call_count == 2, (

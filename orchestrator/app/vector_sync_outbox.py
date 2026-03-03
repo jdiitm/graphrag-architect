@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import os
 import time
 import uuid
 from collections import OrderedDict
@@ -11,7 +12,22 @@ from typing import Any, Dict, List, Protocol, Tuple, runtime_checkable
 
 from pydantic import BaseModel, Field, field_validator
 
+from orchestrator.app.config import ConfigurationError
+
 logger = logging.getLogger(__name__)
+
+
+def validate_production_sync_mode() -> None:
+    deployment = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
+    if deployment != "production":
+        return
+    sync_mode = os.environ.get("VECTOR_SYNC_MODE", "memory").lower()
+    if sync_mode == "memory":
+        raise ConfigurationError(
+            "VECTOR_SYNC_MODE='memory' is not safe for production. "
+            "In-memory sync means pod crash = lost sync events = permanent "
+            "vector drift. Set VECTOR_SYNC_MODE to 'kafka' or 'durable'."
+        )
 
 _DEFAULT_VECTOR_SYNC_TOPIC = "graphrag.vector-sync"
 
@@ -98,7 +114,6 @@ class VectorSyncRouter:
         memory_outbox: Any = None,
         kafka_publisher: Any = None,
     ) -> VectorSyncRouter:
-        import os
         mode = os.environ.get("VECTOR_SYNC_MODE", "memory").lower()
         overflow = os.environ.get(
             "VECTOR_SYNC_OVERFLOW_STRATEGY", "buffer",
