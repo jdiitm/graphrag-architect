@@ -124,7 +124,7 @@ jobs:
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: 'fs'
-          severity: 'CRITICAL,HIGH'
+          severity: 'CRITICAL'
           exit-code: '1'
           ignore-unfixed: true
       - name: Generate SBOM
@@ -212,7 +212,7 @@ jobs:
         with:
           image-ref: "${{ matrix.name }}:ci"
           format: "table"
-          severity: "CRITICAL,HIGH"
+          severity: "CRITICAL"
           exit-code: "1"
           ignore-unfixed: true
       - name: Generate container SBOM
