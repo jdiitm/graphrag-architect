@@ -452,6 +452,17 @@ class PromptInjectionClassifier:
                 cleaned = pattern.sub("[BLOCKED]", cleaned)
         return cleaned
 
+    def strip_context_data(
+        self, text: str, result: InjectionResult,
+    ) -> str:
+        if not result.is_flagged:
+            return text
+        cleaned = text
+        for pattern, name, _ in self._patterns:
+            if name == "delimiter_escape":
+                cleaned = pattern.sub("[BLOCKED]", cleaned)
+        return cleaned
+
 
 class HMACDelimiter:
     _key: bytes

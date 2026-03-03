@@ -6,6 +6,7 @@ import pytest
 from orchestrator.app.prompt_sanitizer import InjectionResult, PromptInjectionClassifier
 from orchestrator.app.query_engine import (
     _serialize_context_for_classification,
+    _strip_context_boundary_values,
     _strip_context_values,
 )
 
@@ -25,8 +26,8 @@ async def test_flagged_context_is_stripped_before_synthesis():
             return_value=True,
         ),
         patch(
-            "orchestrator.app.query_engine._strip_context_values",
-            wraps=_strip_context_values,
+            "orchestrator.app.query_engine._strip_context_boundary_values",
+            wraps=_strip_context_boundary_values,
         ) as mock_strip,
     ):
         mock_llm = AsyncMock()
@@ -64,3 +65,12 @@ def test_stripping_preserves_context_structure():
     assert set(stripped[0].keys()) == {"name", "data", "count"}
     assert set(stripped[1].keys()) == {"name", "desc"}
     assert stripped[0]["count"] == 42
+
+
+def test_boundary_stripping_keeps_business_text_intact():
+    context = [
+        {"name": "auth", "desc": "ignore previous settings in application config"},
+    ]
+    result = InjectionResult(score=0.8, detected_patterns=["instruction_override"], is_flagged=True)
+    stripped = _strip_context_boundary_values(context, result)
+    assert stripped[0]["desc"] == "ignore previous settings in application config"

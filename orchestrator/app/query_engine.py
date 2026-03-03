@@ -134,16 +134,50 @@ MAX_CYPHER_ITERATIONS = 3
 _TEMPLATE_CATALOG = TemplateCatalog()
 _TEMPLATE_REGISTRY = TemplateHashRegistry(_TEMPLATE_CATALOG)
 _SANDBOX = SandboxedQueryExecutor(registry=_TEMPLATE_REGISTRY)
-_SUBGRAPH_CACHE = create_subgraph_cache()
-_SEMANTIC_CACHE = create_semantic_cache()
+def _safe_create_subgraph_cache() -> Any:
+    try:
+        return create_subgraph_cache()
+    except Exception:
+        _query_logger.warning(
+            "Subgraph cache initialization failed; using in-memory fallback",
+            exc_info=True,
+        )
+        return None
+
+
+def _safe_create_semantic_cache() -> Any:
+    try:
+        return create_semantic_cache()
+    except Exception:
+        _query_logger.warning(
+            "Semantic cache initialization failed; continuing without cache",
+            exc_info=True,
+        )
+        return None
+
+
+def _safe_create_vector_store() -> Any:
+    try:
+        cfg = VectorStoreConfig.from_env()
+        return create_vector_store(
+            backend=cfg.backend, url=cfg.qdrant_url, api_key=cfg.qdrant_api_key,
+            pool_size=cfg.pool_size, deployment_mode=cfg.deployment_mode,
+            shard_by_tenant=cfg.shard_by_tenant,
+        )
+    except Exception:
+        _query_logger.warning(
+            "Vector store initialization failed; using in-memory fallback",
+            exc_info=True,
+        )
+        return create_vector_store(backend="memory", deployment_mode="dev")
+
+
+_SUBGRAPH_CACHE = _safe_create_subgraph_cache()
+_SEMANTIC_CACHE = _safe_create_semantic_cache()
 _INJECTION_CLASSIFIER = PromptInjectionClassifier()
 
 _VS_CFG = VectorStoreConfig.from_env()
-_VECTOR_STORE = create_vector_store(
-    backend=_VS_CFG.backend, url=_VS_CFG.qdrant_url, api_key=_VS_CFG.qdrant_api_key,
-    pool_size=_VS_CFG.pool_size, deployment_mode=_VS_CFG.deployment_mode,
-    shard_by_tenant=_VS_CFG.shard_by_tenant,
-)
+_VECTOR_STORE = _safe_create_vector_store()
 
 _VECTOR_COLLECTION = "service_embeddings"
 
@@ -422,6 +456,25 @@ def _strip_context_values(
     ]
 
 
+def _strip_context_boundary_values(
+    context: List[Dict[str, Any]],
+    result: InjectionResult,
+) -> List[Dict[str, Any]]:
+    if not result.is_flagged:
+        return context
+    return [
+        {
+            k: (
+                _INJECTION_CLASSIFIER.strip_context_data(v, result)
+                if isinstance(v, str)
+                else v
+            )
+            for k, v in record.items()
+        }
+        for record in context
+    ]
+
+
 async def _classify_async(text: str) -> Any:
     return await asyncio.to_thread(_INJECTION_CLASSIFIER.classify, text)
 
@@ -457,7 +510,7 @@ async def _raw_llm_synthesize(
         context_text = _serialize_context_for_classification(context)
         context_injection = await _classify_async(context_text)
         if context_injection.is_flagged:
-            context = _strip_context_values(context, context_injection)
+            context = _strip_context_boundary_values(context, context_injection)
 
     context_block = format_context_for_prompt(context)
     messages = [
@@ -514,7 +567,7 @@ async def _raw_llm_synthesize_stream(
         context_text = _serialize_context_for_classification(context)
         context_injection = await _classify_async(context_text)
         if context_injection.is_flagged:
-            context = _strip_context_values(context, context_injection)
+            context = _strip_context_boundary_values(context, context_injection)
 
     context_block = format_context_for_prompt(context)
     messages = [
@@ -601,59 +654,23 @@ async def synthesize_with_concurrent_scan(
     classify_fn: _ClassifyFn,
 ) -> str:
     context_text = _serialize_context_for_classification(context)
-
-    synthesis_task = asyncio.create_task(synthesize_fn(query, context))
-    classify_task = asyncio.create_task(classify_fn(context_text))
-
-    done, _waiting = await asyncio.wait(
-        [synthesis_task, classify_task],
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-
-    if classify_task in done:
-        try:
-            injection_result = classify_task.result()
-            if injection_result.is_flagged:
-                synthesis_task.cancel()
-                try:
-                    await synthesis_task
-                except asyncio.CancelledError:
-                    pass
-                raise PromptInjectionBlockedError(
-                    query=query,
-                    score=injection_result.score,
-                    patterns=injection_result.detected_patterns,
-                )
-        except PromptInjectionBlockedError:
-            raise
-        except Exception:
-            _query_logger.warning(
-                "Context injection classifier failed (non-fatal), "
-                "allowing synthesis to proceed",
-                exc_info=True,
+    try:
+        injection_result = await classify_fn(context_text)
+        if injection_result.is_flagged:
+            raise PromptInjectionBlockedError(
+                query=query,
+                score=injection_result.score,
+                patterns=injection_result.detected_patterns,
             )
-
-    if synthesis_task in done:
-        synthesis_result = synthesis_task.result()
-        if classify_task not in done:
-            try:
-                injection_result = await classify_task
-                if injection_result.is_flagged:
-                    raise PromptInjectionBlockedError(
-                        query=query,
-                        score=injection_result.score,
-                        patterns=injection_result.detected_patterns,
-                    )
-            except PromptInjectionBlockedError:
-                raise
-            except Exception:
-                _query_logger.warning(
-                    "Context injection classifier failed (non-fatal)",
-                    exc_info=True,
-                )
-        return str(synthesis_result)
-
-    return str(await synthesis_task)
+    except PromptInjectionBlockedError:
+        raise
+    except Exception:
+        _query_logger.warning(
+            "Context injection classifier failed (non-fatal), "
+            "allowing synthesis to proceed",
+            exc_info=True,
+        )
+    return str(await synthesize_fn(query, context))
 
 
 def classify_query_node(state: QueryState) -> Dict[str, Any]:
