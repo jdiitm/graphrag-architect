@@ -666,3 +666,41 @@ func TestDLQAckTimeoutZeroUsesDefault(t *testing.T) {
 	cancel()
 	<-runDone
 }
+
+func TestDispatcherDoesNotAckWhenDLQSignalsFailure(t *testing.T) {
+	proc := &spyProcessor{
+		handler: func(context.Context, domain.Job) error {
+			return errors.New("boom")
+		},
+	}
+	cfg := dispatcher.Config{NumWorkers: 1, MaxRetries: 1, JobBuffer: 1, DLQBuffer: 1}
+	d := dispatcher.New(cfg, proc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	d.Jobs() <- domain.Job{Key: []byte("k"), Topic: "raw-documents", Partition: 0, Offset: 1}
+	var result domain.Result
+	select {
+	case result = <-d.DLQ():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for DLQ result")
+	}
+	result.Done <- false
+	close(result.Done)
+
+	select {
+	case <-d.Acks():
+		t.Fatal("ack must not be emitted when DLQ sink reports failure")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	cancel()
+	<-done
+}

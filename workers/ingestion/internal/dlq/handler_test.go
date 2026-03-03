@@ -255,7 +255,7 @@ func TestDLQHandlerRetriesSinkOnTransientError(t *testing.T) {
 		close(done)
 	}()
 
-	resultDone := make(chan struct{})
+	resultDone := make(chan bool, 1)
 	source <- domain.Result{
 		Job:      domain.Job{Key: []byte("retry-me")},
 		Err:      errors.New("fail"),
@@ -264,7 +264,10 @@ func TestDLQHandlerRetriesSinkOnTransientError(t *testing.T) {
 	}
 
 	select {
-	case <-resultDone:
+	case ok := <-resultDone:
+		if !ok {
+			t.Fatal("expected success Done signal after retry eventually succeeds")
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for Done signal")
 	}
@@ -289,7 +292,7 @@ func TestDLQHandlerClosesDoneOnSuccess(t *testing.T) {
 		close(done)
 	}()
 
-	resultDone := make(chan struct{})
+	resultDone := make(chan bool, 1)
 	source <- domain.Result{
 		Job:      domain.Job{Key: []byte("done-test")},
 		Err:      errors.New("fail"),
@@ -298,7 +301,10 @@ func TestDLQHandlerClosesDoneOnSuccess(t *testing.T) {
 	}
 
 	select {
-	case <-resultDone:
+	case ok := <-resultDone:
+		if !ok {
+			t.Fatal("expected success Done signal when primary sink succeeds")
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Done channel not closed after successful sink write")
 	}
@@ -321,7 +327,7 @@ func TestDLQHandlerDoneClosedEvenWhenSinkFailsNoFallback(t *testing.T) {
 		close(handlerDone)
 	}()
 
-	resultDone := make(chan struct{})
+	resultDone := make(chan bool, 1)
 	source <- domain.Result{
 		Job:      domain.Job{Key: []byte("exhaust-test")},
 		Err:      errors.New("fail"),
@@ -330,7 +336,10 @@ func TestDLQHandlerDoneClosedEvenWhenSinkFailsNoFallback(t *testing.T) {
 	}
 
 	select {
-	case <-resultDone:
+	case ok := <-resultDone:
+		if ok {
+			t.Fatal("expected failed Done signal when sink exhausts retries")
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Done channel must be closed even on total failure to prevent dispatcher hang and cascading Kafka rebalance")
 	}
@@ -355,7 +364,7 @@ func TestDLQHandlerDoneClosedEvenWhenFallbackFails(t *testing.T) {
 		close(handlerDone)
 	}()
 
-	resultDone := make(chan struct{})
+	resultDone := make(chan bool, 1)
 	source <- domain.Result{
 		Job:      domain.Job{Key: []byte("double-fault")},
 		Err:      errors.New("processing failed"),
@@ -364,7 +373,10 @@ func TestDLQHandlerDoneClosedEvenWhenFallbackFails(t *testing.T) {
 	}
 
 	select {
-	case <-resultDone:
+	case ok := <-resultDone:
+		if ok {
+			t.Fatal("expected failed Done signal when both primary and fallback fail")
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Done channel must be closed even on double-fault to prevent dispatcher hang and cascading Kafka rebalance")
 	}
@@ -389,7 +401,7 @@ func TestDLQHandlerFallbackOnPermanentFailure(t *testing.T) {
 		close(done)
 	}()
 
-	resultDone := make(chan struct{})
+	resultDone := make(chan bool, 1)
 	source <- domain.Result{
 		Job:      domain.Job{Key: []byte("fallback-test"), Topic: "raw-documents"},
 		Err:      errors.New("fail"),
@@ -398,7 +410,10 @@ func TestDLQHandlerFallbackOnPermanentFailure(t *testing.T) {
 	}
 
 	select {
-	case <-resultDone:
+	case ok := <-resultDone:
+		if !ok {
+			t.Fatal("expected success Done signal when fallback succeeds")
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for Done signal")
 	}

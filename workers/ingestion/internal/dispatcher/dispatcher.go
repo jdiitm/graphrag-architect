@@ -125,9 +125,14 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			}
 			if result.Err != nil {
 				_, dlqSpan := telemetry.StartDLQSpan(processCtx, result)
-				result.Done = make(chan struct{})
+				result.Done = make(chan bool, 1)
 				d.dlq <- result
-				d.awaitDLQDone(ctx, result)
+				if !d.awaitDLQDone(ctx, result) {
+					dlqSpan.End()
+					d.observer.RecordDLQRouted()
+					processSpan.End()
+					continue
+				}
 				dlqSpan.End()
 				d.observer.RecordDLQRouted()
 				d.observer.RecordJobProcessed("dlq")
@@ -145,7 +150,7 @@ func (d *Dispatcher) worker(ctx context.Context) {
 	}
 }
 
-func (d *Dispatcher) awaitDLQDone(ctx context.Context, result domain.Result) {
+func (d *Dispatcher) awaitDLQDone(ctx context.Context, result domain.Result) bool {
 	timeout := d.cfg.DLQAckTimeout
 	if timeout <= 0 {
 		timeout = DefaultDLQAckTimeout
@@ -153,10 +158,17 @@ func (d *Dispatcher) awaitDLQDone(ctx context.Context, result domain.Result) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
-	case <-result.Done:
+	case ok, open := <-result.Done:
+		if !open {
+			return true
+		}
+		return ok
 	case <-ctx.Done():
+		return false
 	case <-timer.C:
+		return false
 	}
+	return false
 }
 
 func (d *Dispatcher) processWithRetry(ctx context.Context, job domain.Job) domain.Result {

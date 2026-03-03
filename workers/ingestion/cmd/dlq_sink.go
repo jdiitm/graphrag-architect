@@ -49,6 +49,16 @@ func buildDLQRecord(r domain.Result) *kgo.Record {
 			Key: "error", Value: []byte(r.Err.Error()),
 		})
 	}
+	for key, value := range r.Job.Headers {
+		safeKey := strings.TrimSpace(key)
+		if safeKey == "" {
+			continue
+		}
+		headers = append(headers, kgo.RecordHeader{
+			Key: fmt.Sprintf("replay_%s", safeKey),
+			Value: []byte(value),
+		})
+	}
 	return &kgo.Record{
 		Key:     r.Job.Key,
 		Value:   r.Job.Value,
