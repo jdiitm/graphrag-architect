@@ -47,6 +47,18 @@ services:
       - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
       - CLUSTER_ID=MkU3OEVBNTcwNTJENDM2Qk
 
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.7.1
+    ports:
+      - "8081:8081"
+    environment:
+      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
+      - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=kafka:9092
+      - SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081
+      - SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL=BACKWARD
+    depends_on:
+      - kafka
+
   qdrant:
     image: qdrant/qdrant:v1.12.6
     ports:

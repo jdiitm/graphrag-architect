@@ -1,0 +1,34 @@
+{
+  "type": "record",
+  "name": "IngestionMessage",
+  "namespace": "com.graphrag.ingestion",
+  "doc": "Canonical schema for raw document ingestion messages on the raw-documents Kafka topic.",
+  "fields": [
+    {
+      "name": "file_path",
+      "type": "string",
+      "doc": "Repository-relative path of the ingested file."
+    },
+    {
+      "name": "content",
+      "type": "string",
+      "doc": "Raw text content of the file."
+    },
+    {
+      "name": "source_type",
+      "type": "string",
+      "doc": "Origin of the file (e.g. git, s3, upload)."
+    },
+    {
+      "name": "tenant_id",
+      "type": "string",
+      "doc": "Tenant identifier for multi-tenant isolation."
+    },
+    {
+      "name": "commit_sha",
+      "type": ["null", "string"],
+      "default": null,
+      "doc": "Git commit SHA when source_type is git; null otherwise."
+    }
+  ]
+}
