@@ -1,0 +1,30 @@
+inputSpec: ../orchestrator/openapi.yaml
+outputDir: ./generated
+
+generators:
+  python-client:
+    generatorName: python
+    output: ./generated/python
+    additionalProperties:
+      packageName: graphrag_client
+      projectName: graphrag-python-sdk
+      packageVersion: "0.1.0"
+    globalProperties:
+      skipFormModel: "true"
+
+  typescript-client:
+    generatorName: typescript-fetch
+    output: ./generated/typescript
+    additionalProperties:
+      npmName: "@graphrag/sdk"
+      npmVersion: "0.1.0"
+      supportsES6: "true"
+      typescriptThreePlus: "true"
+
+  go-client:
+    generatorName: go
+    output: ./generated/go
+    additionalProperties:
+      packageName: graphrag
+      isGoSubmodule: "true"
+      generateInterfaces: "true"
