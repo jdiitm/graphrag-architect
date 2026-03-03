@@ -18,6 +18,7 @@ async def test_flagged_context_is_stripped_before_synthesis():
     ]
 
     with (
+        patch.dict("os.environ", {"CLASSIFY_CONTEXT_ENABLED": "true"}),
         patch(
             "orchestrator.app.query_engine._build_synthesis_provider",
         ) as mock_prov,

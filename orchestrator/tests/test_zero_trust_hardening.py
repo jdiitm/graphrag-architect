@@ -102,6 +102,7 @@ class TestPromptClassificationScope:
         )
 
         with (
+            patch.dict("os.environ", {"CLASSIFY_CONTEXT_ENABLED": "true"}),
             patch(
                 "orchestrator.app.query_engine._build_synthesis_provider",
                 return_value=mock_provider,
@@ -139,6 +140,7 @@ class TestPromptClassificationScope:
         )
 
         with (
+            patch.dict("os.environ", {"CLASSIFY_CONTEXT_ENABLED": "true"}),
             patch(
                 "orchestrator.app.query_engine._build_synthesis_provider",
                 return_value=mock_provider,
