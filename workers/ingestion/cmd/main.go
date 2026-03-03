@@ -91,6 +91,11 @@ func main() {
 	consumerGroup := envOrDefault("KAFKA_CONSUMER_GROUP", "ingestion-workers")
 	numWorkers := envIntOrDefault("NUM_WORKERS", 4)
 	maxRetries := envIntOrDefault("MAX_RETRIES", 3)
+	retryBaseBackoffMs := envIntOrDefault("RETRY_BASE_BACKOFF_MS", 200)
+	retryMaxBackoffMs := envIntOrDefault("RETRY_MAX_BACKOFF_MS", 5000)
+	jobTimeoutSec := envIntOrDefault("JOB_TIMEOUT_SECONDS", 60)
+	dlqAckTimeoutSec := envIntOrDefault("DLQ_ACK_TIMEOUT_SECONDS", 30)
+	maxBatchWaitSec := envIntOrDefault("MAX_BATCH_WAIT_SECONDS", 0)
 
 	metricsAddr := envOrDefault("METRICS_ADDR", ":9090")
 
@@ -178,6 +183,10 @@ func main() {
 		MaxRetries: maxRetries,
 		JobBuffer:  numWorkers * 2,
 		DLQBuffer:  numWorkers,
+		BaseBackoff: time.Duration(retryBaseBackoffMs) * time.Millisecond,
+		MaxBackoff: time.Duration(retryMaxBackoffMs) * time.Millisecond,
+		DLQAckTimeout: time.Duration(dlqAckTimeoutSec) * time.Second,
+		JobTimeout: time.Duration(jobTimeoutSec) * time.Second,
 	}
 	disp := dispatcher.New(cfg, fp, dispatcher.WithObserver(m), dispatcher.WithDedup(dedupStore))
 
@@ -189,6 +198,12 @@ func main() {
 	consumerOpts := []consumer.ConsumerOption{
 		consumer.WithObserver(m),
 		consumer.WithAckTimeout(time.Duration(ackTimeoutSec) * time.Second),
+	}
+	if maxBatchWaitSec > 0 {
+		consumerOpts = append(
+			consumerOpts,
+			consumer.WithMaxBatchWait(time.Duration(maxBatchWaitSec)*time.Second),
+		)
 	}
 	if maxInflight > 0 {
 		consumerOpts = append(consumerOpts, consumer.WithMaxInflight(maxInflight))

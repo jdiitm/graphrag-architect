@@ -592,6 +592,45 @@ func TestDispatcherDedupAllowsDifferentKeys(t *testing.T) {
 	}
 }
 
+func TestDispatcherDedupScopesByTenantID(t *testing.T) {
+	store := dedup.NewLRUStore(100)
+	proc := &spyProcessor{}
+	cfg := dispatcher.Config{NumWorkers: 1, MaxRetries: 1, JobBuffer: 2, DLQBuffer: 1}
+	d := dispatcher.New(cfg, proc, dispatcher.WithDedup(store))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	jobA := makeJob("same-key")
+	jobA.Headers = map[string]string{"tenant_id": "tenant-a"}
+	d.Jobs() <- jobA
+	select {
+	case <-d.Acks():
+	case <-time.After(2 * time.Second):
+		t.Fatal("first tenant job ack timed out")
+	}
+
+	jobB := makeJob("same-key")
+	jobB.Headers = map[string]string{"tenant_id": "tenant-b"}
+	d.Jobs() <- jobB
+	select {
+	case <-d.Acks():
+	case <-time.After(2 * time.Second):
+		t.Fatal("second tenant job ack timed out")
+	}
+
+	cancel()
+	<-done
+
+	if proc.CallCount() != 2 {
+		t.Fatalf("expected 2 calls for same key across tenants, got %d", proc.CallCount())
+	}
+}
+
 func TestDispatcherDrainsOnClosedChannel(t *testing.T) {
 	proc := &spyProcessor{}
 	cfg := dispatcher.Config{NumWorkers: 2, MaxRetries: 1, JobBuffer: 4, DLQBuffer: 1}
@@ -665,4 +704,42 @@ func TestDLQAckTimeoutZeroUsesDefault(t *testing.T) {
 
 	cancel()
 	<-runDone
+}
+
+func TestDispatcherDoesNotAckWhenDLQSignalsFailure(t *testing.T) {
+	proc := &spyProcessor{
+		handler: func(context.Context, domain.Job) error {
+			return errors.New("boom")
+		},
+	}
+	cfg := dispatcher.Config{NumWorkers: 1, MaxRetries: 1, JobBuffer: 1, DLQBuffer: 1}
+	d := dispatcher.New(cfg, proc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	d.Jobs() <- domain.Job{Key: []byte("k"), Topic: "raw-documents", Partition: 0, Offset: 1}
+	var result domain.Result
+	select {
+	case result = <-d.DLQ():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for DLQ result")
+	}
+	result.Done <- false
+	close(result.Done)
+
+	select {
+	case <-d.Acks():
+		t.Fatal("ack must not be emitted when DLQ sink reports failure")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	cancel()
+	<-done
 }

@@ -20,6 +20,13 @@ spec:
         prometheus.io/port: "5556"
         prometheus.io/path: "/metrics"
     spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: kafka
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: kafka
           image: apache/kafka:3.9.0

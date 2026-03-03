@@ -49,7 +49,7 @@ func TestBuildDLQRecord_IncludesErrorMetadata(t *testing.T) {
 
 	requiredHeaders := []string{
 		"error", "attempts", "source_topic", "source_partition",
-		"source_offset", "failed_at",
+		"source_offset", "failed_at", "replay_traceparent",
 	}
 	for _, key := range requiredHeaders {
 		if _, ok := headerMap[key]; !ok {
@@ -74,6 +74,13 @@ func TestBuildDLQRecord_IncludesErrorMetadata(t *testing.T) {
 	if headerMap["source_offset"] != "42" {
 		t.Errorf("source_offset header: got %q, want %q",
 			headerMap["source_offset"], "42")
+	}
+	if headerMap["replay_traceparent"] != "00-abc-def-01" {
+		t.Errorf(
+			"replay_traceparent header: got %q, want %q",
+			headerMap["replay_traceparent"],
+			"00-abc-def-01",
+		)
 	}
 
 	_, err := time.Parse(time.RFC3339, headerMap["failed_at"])

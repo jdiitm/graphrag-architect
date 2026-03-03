@@ -116,6 +116,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 		batchCtx, batchCancel := c.batchContext(ctx)
 		pollCtx, pollSpan := telemetry.StartPollSpan(batchCtx, len(batch))
 
+	jobLoop:
 		for _, job := range batch {
 			if c.maxInflight > 0 {
 			backpressureWait:
@@ -126,6 +127,9 @@ func (c *Consumer) Run(ctx context.Context) error {
 					case <-c.acks:
 						c.inflightCount.Add(-1)
 					}
+				}
+				if pollCtx.Err() != nil {
+					break jobLoop
 				}
 			}
 			select {

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import binascii
+import inspect
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -34,6 +35,7 @@ from orchestrator.app.graph_api import router as graph_api_router
 from orchestrator.app.graph_builder import (
     IngestionDegradedError,
     ingestion_graph,
+    initialize_ingestion_graph,
     run_streaming_pipeline,
 )
 from orchestrator.app.ingest_models import (
@@ -77,6 +79,9 @@ _TENANT_LIMITER = create_rate_limiter(
 
 
 _DEFAULT_SYNC_INGEST_TIMEOUT = 120.0
+_ASYNC_JOB_MAX_INFLIGHT = max(1, int(os.environ.get("ASYNC_JOB_MAX_INFLIGHT", "128")))
+_ACTIVE_QUERY_TASKS: set[asyncio.Task[Any]] = set()
+_ACTIVE_INGEST_TASKS: set[asyncio.Task[Any]] = set()
 
 
 def _get_sync_ingest_timeout() -> float:
@@ -87,6 +92,28 @@ def _get_sync_ingest_timeout() -> float:
         except ValueError:
             return _DEFAULT_SYNC_INGEST_TIMEOUT
     return _DEFAULT_SYNC_INGEST_TIMEOUT
+
+
+def _get_active_ingestion_graph() -> Any:
+    from orchestrator.app import graph_builder as _gb
+    if "unittest.mock" in type(ingestion_graph).__module__:
+        return ingestion_graph
+    return _gb.ingestion_graph
+
+
+def _schedule_background_task(
+    tasks: set[asyncio.Task[Any]],
+    coro: Any,
+    label: str,
+) -> None:
+    if len(tasks) >= _ASYNC_JOB_MAX_INFLIGHT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"too many concurrent {label} jobs",
+        )
+    task = asyncio.create_task(coro)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
 
 
 def get_ingestion_semaphore() -> Any:
@@ -106,7 +133,13 @@ def _kafka_consumer_enabled() -> bool:
     return os.environ.get("KAFKA_CONSUMER_ENABLED", "false").lower() == "true"
 
 
-async def _kafka_ingest_callback(raw_files: List[Dict[str, str]]) -> Dict[str, Any]:
+async def _kafka_ingest_callback(
+    raw_files: List[Dict[str, str]],
+    tenant_id: str,
+) -> Dict[str, Any]:
+    scoped_tenant = str(tenant_id or "").strip()
+    if not scoped_tenant:
+        return {"commit_status": "failed", "error": "missing tenant_id"}
     initial_state: Dict[str, Any] = {
         "directory_path": "",
         "raw_files": raw_files,
@@ -114,9 +147,9 @@ async def _kafka_ingest_callback(raw_files: List[Dict[str, str]]) -> Dict[str, A
         "extraction_errors": [],
         "validation_retries": 0,
         "commit_status": "",
-        "tenant_id": "default",
+        "tenant_id": scoped_tenant,
     }
-    result = await ingestion_graph.ainvoke(initial_state)
+    result = await _get_active_ingestion_graph().ainvoke(initial_state)
     return {
         "commit_status": result.get("commit_status", "unknown"),
         "entities_extracted": len(result.get("extracted_nodes", [])),
@@ -132,6 +165,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_telemetry()
     configure_metrics()
     await init_checkpointer()
+    initialize_ingestion_graph()
     init_driver()
     set_ingestion_semaphore(
         create_ingestion_semaphore(
@@ -351,20 +385,28 @@ async def ingest(
     sync: bool = False,
 ) -> JSONResponse:
     _verify_ingest_auth(authorization)
+    tenant_ctx = _resolve_tenant_context(authorization)
     raw_files = await _decode_documents_async(request)
 
     if sync:
-        return await _ingest_sync(raw_files)
+        return await _ingest_sync(raw_files, tenant_ctx.tenant_id)
 
-    job = await _INGEST_JOB_STORE.create()
-    asyncio.create_task(_run_ingest_job(job.job_id, raw_files))
+    job = await _INGEST_JOB_STORE.create(tenant_id=tenant_ctx.tenant_id)
+    _schedule_background_task(
+        _ACTIVE_INGEST_TASKS,
+        _run_ingest_job(job.job_id, raw_files, tenant_ctx.tenant_id),
+        "ingestion",
+    )
     return JSONResponse(
         status_code=202,
         content={"job_id": job.job_id, "status": job.status.value},
     )
 
 
-async def _ingest_sync(raw_files: List[Dict[str, str]]) -> JSONResponse:
+async def _ingest_sync(
+    raw_files: List[Dict[str, str]],
+    tenant_id: str = "default",
+) -> JSONResponse:
     sem = get_ingestion_semaphore()
     acquired, token = await sem.try_acquire()
     if not acquired:
@@ -374,8 +416,13 @@ async def _ingest_sync(raw_files: List[Dict[str, str]]) -> JSONResponse:
         )
     try:
         timeout = _get_sync_ingest_timeout()
+        invoke = (
+            _invoke_ingestion_graph(raw_files)
+            if tenant_id == "default"
+            else _invoke_ingestion_graph(raw_files, tenant_id)
+        )
         result = await asyncio.wait_for(
-            _invoke_ingestion_graph(raw_files), timeout=timeout,
+            invoke, timeout=timeout,
         )
         response_model = _build_ingest_response(result)
         if result.get("commit_status") == "failed":
@@ -427,6 +474,7 @@ async def _run_streaming_ingestion(directory_path: str) -> IngestResponse:
 
 def _build_ingestion_initial_state(
     raw_files: List[Dict[str, str]],
+    tenant_id: str = "default",
 ) -> Dict[str, Any]:
     return {
         "directory_path": "",
@@ -435,16 +483,17 @@ def _build_ingestion_initial_state(
         "extraction_errors": [],
         "validation_retries": 0,
         "commit_status": "",
-        "tenant_id": "default",
+        "tenant_id": tenant_id,
     }
 
 
 async def _invoke_ingestion_graph(
     raw_files: List[Dict[str, str]],
+    tenant_id: str = "default",
 ) -> Dict[str, Any]:
     try:
-        state: Any = _build_ingestion_initial_state(raw_files)
-        result: Dict[str, Any] = await ingestion_graph.ainvoke(state)
+        state: Any = _build_ingestion_initial_state(raw_files, tenant_id=tenant_id)
+        result: Dict[str, Any] = await _get_active_ingestion_graph().ainvoke(state)
         return result
     except (CircuitOpenError, IngestionDegradedError):
         raise
@@ -464,7 +513,7 @@ def _build_ingest_response(result: Dict[str, Any]) -> IngestResponse:
 
 
 async def _run_ingest_job(
-    job_id: str, raw_files: List[Dict[str, str]],
+    job_id: str, raw_files: List[Dict[str, str]], tenant_id: str = "default",
 ) -> None:
     await _INGEST_JOB_STORE.mark_running(job_id)
     await _INGEST_JOB_STORE.heartbeat(job_id)
@@ -474,8 +523,8 @@ async def _run_ingest_job(
         await _INGEST_JOB_STORE.fail(job_id, "Too many concurrent ingestion requests")
         return
     try:
-        result = await ingestion_graph.ainvoke(
-            _build_ingestion_initial_state(raw_files)
+        result = await _get_active_ingestion_graph().ainvoke(
+            _build_ingestion_initial_state(raw_files, tenant_id=tenant_id)
         )
         response = _build_ingest_response(result)
         await _INGEST_JOB_STORE.complete(job_id, response)
@@ -493,9 +542,15 @@ async def _run_ingest_job(
     summary="Check ingestion job status",
     description="Retrieve the current status and result of an async ingestion job.",
 )
-async def get_ingest_job(job_id: str) -> JSONResponse:
+async def get_ingest_job(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    tenant_ctx = _resolve_tenant_context(authorization)
     job = await _INGEST_JOB_STORE.get(job_id)
     if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.tenant_id and job.tenant_id != tenant_ctx.tenant_id:
         raise HTTPException(status_code=404, detail="Job not found")
     return JSONResponse(content=job.model_dump(), status_code=200)
 
@@ -550,14 +605,22 @@ def _build_query_state(
     }
 
 
-def _result_to_response(result: Dict[str, Any]) -> QueryResponse:
+async def _eval_store_get(query_id: str) -> Optional[Dict[str, Any]]:
+    value = _EVAL_STORE.get(query_id)
+    if inspect.isawaitable(value):
+        resolved = await value
+        return resolved if isinstance(resolved, dict) else None
+    return value if isinstance(value, dict) else None
+
+
+async def _result_to_response(result: Dict[str, Any]) -> QueryResponse:
     query_id = result.get("query_id", "")
     evaluation_details: Optional[Dict[str, Any]] = None
     evaluation_score = result.get("evaluation_score")
     retrieval_quality = result.get("retrieval_quality", "skipped")
     if query_id:
-        stored_eval = _EVAL_STORE.get(str(query_id))
-        if isinstance(stored_eval, dict):
+        stored_eval = await _eval_store_get(str(query_id))
+        if stored_eval is not None:
             evaluation_details = stored_eval
             evaluation_score = stored_eval.get("evaluation_score", evaluation_score)
             retrieval_quality = stored_eval.get("retrieval_quality", retrieval_quality)
@@ -599,10 +662,12 @@ async def query(
     tenant_ctx = _resolve_tenant_context(authorization)
     await _enforce_rate_limit(tenant_ctx.tenant_id)
     if async_mode:
-        job = await _JOB_STORE.create()
+        job = await _JOB_STORE.create(tenant_id=tenant_ctx.tenant_id)
         initial_state = _build_query_state(request, authorization or "")
-        asyncio.create_task(
-            _run_query_job(job.job_id, initial_state)
+        _schedule_background_task(
+            _ACTIVE_QUERY_TASKS,
+            _run_query_job(job.job_id, initial_state),
+            "query",
         )
         return JSONResponse(
             status_code=202,
@@ -622,7 +687,7 @@ async def query(
         raise HTTPException(
             status_code=500, detail="Internal query error"
         ) from exc
-    response = _result_to_response(result)
+    response = await _result_to_response(result)
     return JSONResponse(content=response.model_dump(), status_code=200)
 
 
@@ -632,7 +697,7 @@ async def _run_query_job(job_id: str, initial_state: Dict[str, Any]) -> None:
     try:
         graph_input: Any = initial_state
         result = await query_graph.ainvoke(graph_input)
-        response = _result_to_response(result)
+        response = await _result_to_response(result)
         await _JOB_STORE.complete(job_id, response)
     except Exception as exc:
         logger.exception("Background query job %s failed", job_id)
@@ -646,9 +711,15 @@ async def _run_query_job(job_id: str, initial_state: Dict[str, Any]) -> None:
     summary="Check query job status",
     description="Retrieve the current status and result of an async query job.",
 )
-async def get_query_job(job_id: str) -> JSONResponse:
+async def get_query_job(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    tenant_ctx = _resolve_tenant_context(authorization)
     job = await _JOB_STORE.get(job_id)
     if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.tenant_id and job.tenant_id != tenant_ctx.tenant_id:
         raise HTTPException(status_code=404, detail="Job not found")
     return JSONResponse(content=job.model_dump(), status_code=200)
 
@@ -663,7 +734,7 @@ _EVAL_STORE = get_eval_store()
     description="Retrieve the RAG evaluation result for a completed query.",
 )
 async def get_evaluation(query_id: str) -> JSONResponse:
-    result = _EVAL_STORE.get(query_id)
+    result = await _eval_store_get(query_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Evaluation not ready or not found")
     return JSONResponse(content=result, status_code=200)

@@ -10,7 +10,10 @@ from orchestrator.app.config import KafkaConsumerConfig
 
 logger = logging.getLogger(__name__)
 
-IngestCallback = Callable[[List[Dict[str, str]]], Coroutine[Any, Any, Dict[str, Any]]]
+IngestCallback = Callable[
+    [List[Dict[str, str]], str],
+    Coroutine[Any, Any, Dict[str, Any]],
+]
 
 
 class KafkaConsumerProtocol(Protocol):
@@ -77,12 +80,15 @@ class AsyncKafkaConsumer:
             payload = json.loads(value)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             return {"status": "failed", "error": f"json decode error: {exc}"}
+        tenant_id = str(payload.get("tenant_id") or "").strip()
+        if not tenant_id:
+            return {"status": "failed", "error": "parsed payload missing tenant_id"}
         file_path = payload.get("file_path", "unknown")
         content = payload.get("content")
         if content is None:
             return {"status": "failed", "error": "parsed payload missing content field"}
         raw_files = [{"path": file_path, "content": content}]
-        return await self._ingest(raw_files)
+        return await self._ingest(raw_files, tenant_id)
 
     async def process_message(
         self,
@@ -101,6 +107,14 @@ class AsyncKafkaConsumer:
             file_path = "unknown"
         if value is None:
             return {"status": "failed", "error": "message value is empty"}
+        tenant_id = (
+            header_dict.get("tenant_id")
+            or header_dict.get("tenant-id")
+            or header_dict.get("x-tenant-id")
+            or ""
+        ).strip()
+        if not tenant_id:
+            return {"status": "failed", "error": "message missing tenant header"}
         try:
             decoded_bytes = base64.b64decode(value, validate=True)
             decoded_content = decoded_bytes.decode("utf-8")
@@ -108,4 +122,4 @@ class AsyncKafkaConsumer:
             logger.warning("Decode error for message (key=%r): %s", key, exc)
             return {"status": "failed", "error": f"decode error: {exc}"}
         raw_files = [{"path": file_path, "content": decoded_content}]
-        return await self._ingest(raw_files)
+        return await self._ingest(raw_files, tenant_id)

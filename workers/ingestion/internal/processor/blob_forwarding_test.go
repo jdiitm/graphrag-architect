@@ -33,6 +33,7 @@ func TestBlobForwardingProcessor_SmallContentInline(t *testing.T) {
 		Headers: map[string]string{
 			"file_path":   "main.go",
 			"source_type": "source_code",
+			"tenant_id":   "t1",
 		},
 	}
 
@@ -70,6 +71,7 @@ func TestBlobForwardingProcessor_LargeContentUploaded(t *testing.T) {
 			"file_path":   "big/file.go",
 			"source_type": "source_code",
 			"commit_sha":  "abc123",
+			"tenant_id":   "t1",
 		},
 	}
 
@@ -88,6 +90,9 @@ func TestBlobForwardingProcessor_LargeContentUploaded(t *testing.T) {
 	}
 	if payload["bucket"] != "test-bucket" {
 		t.Errorf("bucket = %v, want test-bucket", payload["bucket"])
+	}
+	if !strings.HasPrefix(blobKey, "ingestion/t1/abc123/") {
+		t.Errorf("blob key must be tenant-scoped, got %q", blobKey)
 	}
 
 	ctx := context.Background()
@@ -133,6 +138,7 @@ func TestBlobForwardingProcessor_BlobKeyInHeaders(t *testing.T) {
 			"file_path":   "f.go",
 			"source_type": "source_code",
 			"commit_sha":  "def456",
+			"tenant_id":   "tenant-z",
 		},
 	}
 
@@ -143,5 +149,8 @@ func TestBlobForwardingProcessor_BlobKeyInHeaders(t *testing.T) {
 	rec := producer.produced[0]
 	if rec.Headers["blob_key"] == "" {
 		t.Error("expected blob_key in kafka message headers")
+	}
+	if rec.Headers["tenant_id"] != "tenant-z" {
+		t.Errorf("expected tenant_id header propagation, got %q", rec.Headers["tenant_id"])
 	}
 }

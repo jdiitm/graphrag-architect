@@ -36,13 +36,13 @@ class TestAsyncKafkaConsumer:
     async def test_process_message_decodes_base64_and_invokes_ingest(self):
         calls = []
 
-        async def mock_ingest(raw_files):
-            calls.append(raw_files)
+        async def mock_ingest(raw_files, tenant_id):
+            calls.append((raw_files, tenant_id))
             return {"status": "success", "entities_extracted": 1}
 
         content = "package main\nfunc main() {}"
         value = base64.b64encode(content.encode("utf-8"))
-        headers = [("file_path", b"cmd/main.go")]
+        headers = [("file_path", b"cmd/main.go"), ("tenant_id", b"acme")]
 
         config = KafkaConsumerConfig()
         consumer = AsyncKafkaConsumer(config, mock_ingest)
@@ -50,15 +50,16 @@ class TestAsyncKafkaConsumer:
 
         assert result["status"] == "success"
         assert len(calls) == 1
-        assert calls[0][0]["path"] == "cmd/main.go"
-        assert calls[0][0]["content"] == content
+        assert calls[0][0][0]["path"] == "cmd/main.go"
+        assert calls[0][0][0]["content"] == content
+        assert calls[0][1] == "acme"
 
     @pytest.mark.asyncio
     async def test_process_message_uses_key_as_file_path_when_headers_missing(self):
         calls = []
 
-        async def mock_ingest(raw_files):
-            calls.append(raw_files)
+        async def mock_ingest(raw_files, tenant_id):
+            calls.append((raw_files, tenant_id))
             return {"status": "ok"}
 
         value = base64.b64encode(b"content")
@@ -66,14 +67,16 @@ class TestAsyncKafkaConsumer:
 
         config = KafkaConsumerConfig()
         consumer = AsyncKafkaConsumer(config, mock_ingest)
-        await consumer.process_message(key, value, None)
+        result = await consumer.process_message(key, value, [("tenant_id", b"t1")])
 
-        assert calls[0][0]["path"] == "pkg/file.go"
-        assert calls[0][0]["content"] == "content"
+        assert result["status"] == "ok"
+        assert calls[0][0][0]["path"] == "pkg/file.go"
+        assert calls[0][0][0]["content"] == "content"
+        assert calls[0][1] == "t1"
 
     @pytest.mark.asyncio
     async def test_stop_sets_shutdown_flag(self):
-        async def mock_ingest(raw_files):
+        async def mock_ingest(raw_files, tenant_id):
             return {"status": "ok"}
 
         config = KafkaConsumerConfig()
@@ -84,21 +87,38 @@ class TestAsyncKafkaConsumer:
 
     @pytest.mark.asyncio
     async def test_process_message_handles_decode_errors_gracefully(self):
-        async def mock_ingest(raw_files):
+        async def mock_ingest(raw_files, tenant_id):
             return {"status": "ok"}
 
         config = KafkaConsumerConfig()
         consumer = AsyncKafkaConsumer(config, mock_ingest)
 
-        result = await consumer.process_message(None, b"not-valid-base64!!", None)
+        result = await consumer.process_message(
+            None,
+            b"not-valid-base64!!",
+            [("tenant_id", b"tenant-a")],
+        )
         assert result["status"] == "failed"
         assert "decode error" in result["error"].lower()
         assert "ok" not in str(result)
 
     @pytest.mark.asyncio
     async def test_process_message_handles_empty_value(self):
-        async def mock_ingest(raw_files):
+        async def mock_ingest(raw_files, tenant_id):
             return {"status": "ok"}
+    @pytest.mark.asyncio
+    async def test_process_message_rejects_missing_tenant_header(self):
+        async def mock_ingest(raw_files, tenant_id):
+            return {"status": "ok"}
+
+        value = base64.b64encode(b"content")
+        config = KafkaConsumerConfig()
+        consumer = AsyncKafkaConsumer(config, mock_ingest)
+        result = await consumer.process_message(None, value, [("file_path", b"pkg/file.go")])
+
+        assert result["status"] == "failed"
+        assert "tenant" in result["error"].lower()
+
 
         config = KafkaConsumerConfig()
         consumer = AsyncKafkaConsumer(config, mock_ingest)
@@ -113,14 +133,15 @@ class TestAsyncKafkaConsumerParsedMessages:
     async def test_process_parsed_message_decodes_json_payload(self):
         calls = []
 
-        async def mock_ingest(raw_files):
-            calls.append(raw_files)
+        async def mock_ingest(raw_files, tenant_id):
+            calls.append((raw_files, tenant_id))
             return {"status": "success", "entities_extracted": 2}
 
         payload = json.dumps({
             "file_path": "k8s/auth-svc.yaml",
             "content": "apiVersion: v1\nkind: Service",
             "source_type": "k8s_manifest",
+            "tenant_id": "tenant-a",
         }).encode()
 
         config = KafkaConsumerConfig()
@@ -129,12 +150,13 @@ class TestAsyncKafkaConsumerParsedMessages:
 
         assert result["status"] == "success"
         assert len(calls) == 1
-        assert calls[0][0]["path"] == "k8s/auth-svc.yaml"
-        assert calls[0][0]["content"] == "apiVersion: v1\nkind: Service"
+        assert calls[0][0][0]["path"] == "k8s/auth-svc.yaml"
+        assert calls[0][0][0]["content"] == "apiVersion: v1\nkind: Service"
+        assert calls[0][1] == "tenant-a"
 
     @pytest.mark.asyncio
     async def test_process_parsed_message_rejects_none_value(self):
-        async def mock_ingest(raw_files):
+        async def mock_ingest(raw_files, tenant_id):
             return {"status": "ok"}
 
         config = KafkaConsumerConfig()
@@ -145,7 +167,7 @@ class TestAsyncKafkaConsumerParsedMessages:
 
     @pytest.mark.asyncio
     async def test_process_parsed_message_rejects_invalid_json(self):
-        async def mock_ingest(raw_files):
+        async def mock_ingest(raw_files, tenant_id):
             return {"status": "ok"}
 
         config = KafkaConsumerConfig()
@@ -156,10 +178,10 @@ class TestAsyncKafkaConsumerParsedMessages:
 
     @pytest.mark.asyncio
     async def test_process_parsed_message_rejects_missing_content(self):
-        async def mock_ingest(raw_files):
+        async def mock_ingest(raw_files, tenant_id):
             return {"status": "ok"}
 
-        payload = json.dumps({"file_path": "main.go"}).encode()
+        payload = json.dumps({"file_path": "main.go", "tenant_id": "tenant-a"}).encode()
         config = KafkaConsumerConfig()
         consumer = AsyncKafkaConsumer(config, mock_ingest)
         result = await consumer.process_parsed_message(payload)
@@ -170,8 +192,22 @@ class TestAsyncKafkaConsumerParsedMessages:
     async def test_process_parsed_message_defaults_file_path(self):
         calls = []
 
-        async def mock_ingest(raw_files):
-            calls.append(raw_files)
+        async def mock_ingest(raw_files, tenant_id):
+            calls.append((raw_files, tenant_id))
+            return {"status": "ok"}
+
+        payload = json.dumps({"content": "some data", "tenant_id": "tenant-z"}).encode()
+        config = KafkaConsumerConfig()
+        consumer = AsyncKafkaConsumer(config, mock_ingest)
+        result = await consumer.process_parsed_message(payload)
+
+        assert result["status"] == "ok"
+        assert calls[0][0][0]["path"] == "unknown"
+        assert calls[0][1] == "tenant-z"
+
+    @pytest.mark.asyncio
+    async def test_process_parsed_message_rejects_missing_tenant_id(self):
+        async def mock_ingest(raw_files, tenant_id):
             return {"status": "ok"}
 
         payload = json.dumps({"content": "some data"}).encode()
@@ -179,5 +215,5 @@ class TestAsyncKafkaConsumerParsedMessages:
         consumer = AsyncKafkaConsumer(config, mock_ingest)
         result = await consumer.process_parsed_message(payload)
 
-        assert result["status"] == "ok"
-        assert calls[0][0]["path"] == "unknown"
+        assert result["status"] == "failed"
+        assert "tenant_id" in result["error"]

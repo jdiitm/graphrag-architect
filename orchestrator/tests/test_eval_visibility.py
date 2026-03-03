@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 
-def test_result_to_response_enriches_with_stored_evaluation() -> None:
+
+@pytest.mark.asyncio
+async def test_result_to_response_enriches_with_stored_evaluation() -> None:
     from orchestrator.app.main import _result_to_response
 
     store = MagicMock()
@@ -14,7 +17,7 @@ def test_result_to_response_enriches_with_stored_evaluation() -> None:
         "judge_model": "llm",
     }
     with patch("orchestrator.app.main._EVAL_STORE", store):
-        response = _result_to_response({
+        response = await _result_to_response({
             "answer": "ok",
             "sources": [],
             "complexity": "entity_lookup",
@@ -30,13 +33,14 @@ def test_result_to_response_enriches_with_stored_evaluation() -> None:
     assert response.evaluation_details["judge_model"] == "llm"
 
 
-def test_result_to_response_keeps_inline_evaluation_when_store_empty() -> None:
+@pytest.mark.asyncio
+async def test_result_to_response_keeps_inline_evaluation_when_store_empty() -> None:
     from orchestrator.app.main import _result_to_response
 
     store = MagicMock()
     store.get.return_value = None
     with patch("orchestrator.app.main._EVAL_STORE", store):
-        response = _result_to_response({
+        response = await _result_to_response({
             "answer": "ok",
             "sources": [],
             "complexity": "entity_lookup",

@@ -1202,3 +1202,9 @@ def _compile_ingestion_graph() -> Any:
 
 
 ingestion_graph = _compile_ingestion_graph()
+
+
+def initialize_ingestion_graph() -> Any:
+    new_graph = _compile_ingestion_graph()
+    globals()["ingestion_graph"] = new_graph
+    return new_graph

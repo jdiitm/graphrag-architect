@@ -46,6 +46,7 @@ class QueryResponse(BaseModel):
 class QueryJobResponse(BaseModel):
     job_id: str
     status: JobStatus
+    tenant_id: str = ""
     result: Optional[QueryResponse] = None
     error: Optional[str] = None
     created_at: float
@@ -79,11 +80,12 @@ class QueryJobStore:
         self._mono: Dict[str, float] = {}
         self._ttl = ttl_seconds
 
-    async def create(self) -> QueryJobResponse:
+    async def create(self, tenant_id: str = "") -> QueryJobResponse:
         self._evict_expired()
         job = QueryJobResponse(
             job_id=str(uuid.uuid4()),
             status=JobStatus.PENDING,
+            tenant_id=tenant_id,
             created_at=time.time(),
         )
         self._jobs[job.job_id] = job
@@ -144,10 +146,11 @@ class RedisQueryJobStore:
     def _rkey(self, job_id: str) -> str:
         return f"{self._prefix}{job_id}"
 
-    async def create(self) -> QueryJobResponse:
+    async def create(self, tenant_id: str = "") -> QueryJobResponse:
         job = QueryJobResponse(
             job_id=str(uuid.uuid4()),
             status=JobStatus.PENDING,
+            tenant_id=tenant_id,
             created_at=time.time(),
         )
         try:

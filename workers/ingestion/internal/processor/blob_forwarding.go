@@ -2,8 +2,11 @@ package processor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/blobstore"
 	"github.com/jdiitm/graphrag-architect/workers/ingestion/internal/domain"
@@ -62,13 +65,33 @@ func (p *BlobForwardingProcessor) Process(ctx context.Context, job domain.Job) e
 	if !ok {
 		return fmt.Errorf("missing required header: source_type")
 	}
+	tenantID := strings.TrimSpace(job.Headers["tenant_id"])
+	if tenantID == "" {
+		return fmt.Errorf("missing required header: tenant_id")
+	}
 
 	if len(job.Value) < p.threshold {
 		inline := &KafkaForwardingProcessor{producer: p.producer, topic: p.topic}
 		return inline.Process(ctx, job)
 	}
 
-	blobKey := fmt.Sprintf("ingestion/%s/%s", job.Headers["commit_sha"], filePath)
+	digest := sha256.Sum256([]byte(filePath + ":" + string(job.Key)))
+	commitSHA := strings.TrimSpace(job.Headers["commit_sha"])
+	if commitSHA == "" {
+		commitSHA = "no-commit"
+	}
+	safePath := strings.ReplaceAll(strings.TrimSpace(filePath), "/", "_")
+	safePath = strings.ReplaceAll(safePath, "\\", "_")
+	if safePath == "" {
+		safePath = "unknown"
+	}
+	blobKey := fmt.Sprintf(
+		"ingestion/%s/%s/%s-%s",
+		tenantID,
+		commitSHA,
+		safePath,
+		hex.EncodeToString(digest[:8]),
+	)
 	if _, err := p.store.Put(ctx, blobKey, job.Value); err != nil {
 		return fmt.Errorf("blob store put: %w", err)
 	}
@@ -92,6 +115,7 @@ func (p *BlobForwardingProcessor) Process(ctx context.Context, job domain.Job) e
 	headers := map[string]string{
 		"file_path":   filePath,
 		"source_type": sourceType,
+		"tenant_id":   tenantID,
 		"blob_key":    blobKey,
 	}
 

@@ -1010,7 +1010,8 @@ class TestLLMJudgeSelection:
 
         result = _EVAL_STORE.get(query_id)
         assert result is not None
-        assert result["evaluation_score"] != -1.0 or result["retrieval_quality"] != "error"
+        assert isinstance(result["evaluation_score"], float)
+        assert result["retrieval_quality"] in {"high", "adequate", "low"}
 
     @pytest.mark.asyncio
     async def test_falls_back_to_rag_evaluator_when_disabled(self, base_query_state):

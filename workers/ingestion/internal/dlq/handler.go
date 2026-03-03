@@ -89,7 +89,10 @@ func (h *Handler) Run(ctx context.Context) {
 }
 
 func (h *Handler) processResult(ctx context.Context, result domain.Result) {
-	defer h.closeDone(result)
+	success := false
+	defer func() {
+		h.closeDone(result, success)
+	}()
 
 	var lastErr error
 	attempts := 1 + h.cfg.MaxSinkRetries
@@ -103,6 +106,7 @@ func (h *Handler) processResult(ctx context.Context, result domain.Result) {
 		}
 		lastErr = h.sink.Send(ctx, result)
 		if lastErr == nil {
+			success = true
 			return
 		}
 	}
@@ -124,12 +128,15 @@ func (h *Handler) processResult(ctx context.Context, result domain.Result) {
 				"error", err,
 				"job_key", string(result.Job.Key),
 			)
+			return
 		}
+		success = true
 	}
 }
 
-func (h *Handler) closeDone(result domain.Result) {
+func (h *Handler) closeDone(result domain.Result, success bool) {
 	if result.Done != nil {
+		result.Done <- success
 		close(result.Done)
 	}
 }

@@ -30,8 +30,8 @@ from orchestrator.app.access_control import (
     CypherPermissionFilter,
     SecurityPrincipal,
 )
-from orchestrator.app.audit_log import SecurityAuditLogger
 from orchestrator.app.agentic_traversal import run_traversal
+from orchestrator.app.audit_log import SecurityAuditLogger
 from orchestrator.app.circuit_breaker import (
     CircuitBreakerConfig,
     CircuitOpenError,
@@ -1393,6 +1393,12 @@ def get_eval_store() -> EvaluationStore | RedisEvaluationStore:
     return _EVAL_STORE
 
 
+async def _eval_store_put(query_id: str, payload: Dict[str, Any]) -> None:
+    result = _EVAL_STORE.put(query_id, payload)
+    if inspect.isawaitable(result):
+        await cast(Awaitable[Any], result)
+
+
 def _collect_context_embeddings(state: Dict[str, Any]) -> List[List[float]]:
     embeddings: List[List[float]] = []
     for source in state.get("sources", []):
@@ -1460,7 +1466,7 @@ async def _run_background_evaluation(
             tenant_id = state.get("tenant_id", "")
             query_embedding = await _embed_query(state["query"], tenant_id=tenant_id)
             if query_embedding is None:
-                _EVAL_STORE.put(query_id, {
+                await _eval_store_put(query_id, {
                     "evaluation_score": None,
                     "retrieval_quality": "no_embedding",
                     "query_id": query_id,
@@ -1471,7 +1477,7 @@ async def _run_background_evaluation(
             score, quality = await _select_and_run_evaluator(
                 eval_config, state, query_embedding, context_embeddings,
             )
-            _EVAL_STORE.put(query_id, {
+            await _eval_store_put(query_id, {
                 "evaluation_score": score,
                 "retrieval_quality": quality,
                 "query_id": query_id,
@@ -1480,7 +1486,7 @@ async def _run_background_evaluation(
             _query_logger.warning(
                 "RAG evaluation failed, continuing without score", exc_info=True,
             )
-            _EVAL_STORE.put(query_id, {
+            await _eval_store_put(query_id, {
                 "evaluation_score": None,
                 "retrieval_quality": "error",
                 "query_id": query_id,
