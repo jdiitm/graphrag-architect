@@ -35,6 +35,7 @@ class IngestResponse(BaseModel):
 class IngestJobResponse(BaseModel):
     job_id: str
     status: JobStatus
+    tenant_id: str = ""
     result: Optional[IngestResponse] = None
     error: Optional[str] = None
     created_at: float
@@ -47,11 +48,12 @@ class IngestJobStore:
         self._mono: Dict[str, float] = {}
         self._ttl = ttl_seconds
 
-    async def create(self) -> IngestJobResponse:
+    async def create(self, tenant_id: str = "") -> IngestJobResponse:
         self._evict_expired()
         job = IngestJobResponse(
             job_id=str(uuid.uuid4()),
             status=JobStatus.PENDING,
+            tenant_id=tenant_id,
             created_at=time.time(),
         )
         self._jobs[job.job_id] = job

@@ -79,6 +79,9 @@ _TENANT_LIMITER = create_rate_limiter(
 
 
 _DEFAULT_SYNC_INGEST_TIMEOUT = 120.0
+_ASYNC_JOB_MAX_INFLIGHT = max(1, int(os.environ.get("ASYNC_JOB_MAX_INFLIGHT", "128")))
+_ACTIVE_QUERY_TASKS: set[asyncio.Task[Any]] = set()
+_ACTIVE_INGEST_TASKS: set[asyncio.Task[Any]] = set()
 
 
 def _get_sync_ingest_timeout() -> float:
@@ -96,6 +99,21 @@ def _get_active_ingestion_graph() -> Any:
     if "unittest.mock" in type(ingestion_graph).__module__:
         return ingestion_graph
     return _gb.ingestion_graph
+
+
+def _schedule_background_task(
+    tasks: set[asyncio.Task[Any]],
+    coro: Any,
+    label: str,
+) -> None:
+    if len(tasks) >= _ASYNC_JOB_MAX_INFLIGHT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"too many concurrent {label} jobs",
+        )
+    task = asyncio.create_task(coro)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
 
 
 def get_ingestion_semaphore() -> Any:
@@ -361,20 +379,28 @@ async def ingest(
     sync: bool = False,
 ) -> JSONResponse:
     _verify_ingest_auth(authorization)
+    tenant_ctx = _resolve_tenant_context(authorization)
     raw_files = await _decode_documents_async(request)
 
     if sync:
-        return await _ingest_sync(raw_files)
+        return await _ingest_sync(raw_files, tenant_ctx.tenant_id)
 
-    job = await _INGEST_JOB_STORE.create()
-    asyncio.create_task(_run_ingest_job(job.job_id, raw_files))
+    job = await _INGEST_JOB_STORE.create(tenant_id=tenant_ctx.tenant_id)
+    _schedule_background_task(
+        _ACTIVE_INGEST_TASKS,
+        _run_ingest_job(job.job_id, raw_files, tenant_ctx.tenant_id),
+        "ingestion",
+    )
     return JSONResponse(
         status_code=202,
         content={"job_id": job.job_id, "status": job.status.value},
     )
 
 
-async def _ingest_sync(raw_files: List[Dict[str, str]]) -> JSONResponse:
+async def _ingest_sync(
+    raw_files: List[Dict[str, str]],
+    tenant_id: str = "default",
+) -> JSONResponse:
     sem = get_ingestion_semaphore()
     acquired, token = await sem.try_acquire()
     if not acquired:
@@ -384,8 +410,13 @@ async def _ingest_sync(raw_files: List[Dict[str, str]]) -> JSONResponse:
         )
     try:
         timeout = _get_sync_ingest_timeout()
+        invoke = (
+            _invoke_ingestion_graph(raw_files)
+            if tenant_id == "default"
+            else _invoke_ingestion_graph(raw_files, tenant_id)
+        )
         result = await asyncio.wait_for(
-            _invoke_ingestion_graph(raw_files), timeout=timeout,
+            invoke, timeout=timeout,
         )
         response_model = _build_ingest_response(result)
         if result.get("commit_status") == "failed":
@@ -437,6 +468,7 @@ async def _run_streaming_ingestion(directory_path: str) -> IngestResponse:
 
 def _build_ingestion_initial_state(
     raw_files: List[Dict[str, str]],
+    tenant_id: str = "default",
 ) -> Dict[str, Any]:
     return {
         "directory_path": "",
@@ -445,15 +477,16 @@ def _build_ingestion_initial_state(
         "extraction_errors": [],
         "validation_retries": 0,
         "commit_status": "",
-        "tenant_id": "default",
+        "tenant_id": tenant_id,
     }
 
 
 async def _invoke_ingestion_graph(
     raw_files: List[Dict[str, str]],
+    tenant_id: str = "default",
 ) -> Dict[str, Any]:
     try:
-        state: Any = _build_ingestion_initial_state(raw_files)
+        state: Any = _build_ingestion_initial_state(raw_files, tenant_id=tenant_id)
         result: Dict[str, Any] = await _get_active_ingestion_graph().ainvoke(state)
         return result
     except (CircuitOpenError, IngestionDegradedError):
@@ -474,7 +507,7 @@ def _build_ingest_response(result: Dict[str, Any]) -> IngestResponse:
 
 
 async def _run_ingest_job(
-    job_id: str, raw_files: List[Dict[str, str]],
+    job_id: str, raw_files: List[Dict[str, str]], tenant_id: str = "default",
 ) -> None:
     await _INGEST_JOB_STORE.mark_running(job_id)
     await _INGEST_JOB_STORE.heartbeat(job_id)
@@ -485,7 +518,7 @@ async def _run_ingest_job(
         return
     try:
         result = await _get_active_ingestion_graph().ainvoke(
-            _build_ingestion_initial_state(raw_files)
+            _build_ingestion_initial_state(raw_files, tenant_id=tenant_id)
         )
         response = _build_ingest_response(result)
         await _INGEST_JOB_STORE.complete(job_id, response)
@@ -503,9 +536,15 @@ async def _run_ingest_job(
     summary="Check ingestion job status",
     description="Retrieve the current status and result of an async ingestion job.",
 )
-async def get_ingest_job(job_id: str) -> JSONResponse:
+async def get_ingest_job(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    tenant_ctx = _resolve_tenant_context(authorization)
     job = await _INGEST_JOB_STORE.get(job_id)
     if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.tenant_id and job.tenant_id != tenant_ctx.tenant_id:
         raise HTTPException(status_code=404, detail="Job not found")
     return JSONResponse(content=job.model_dump(), status_code=200)
 
@@ -617,10 +656,12 @@ async def query(
     tenant_ctx = _resolve_tenant_context(authorization)
     await _enforce_rate_limit(tenant_ctx.tenant_id)
     if async_mode:
-        job = await _JOB_STORE.create()
+        job = await _JOB_STORE.create(tenant_id=tenant_ctx.tenant_id)
         initial_state = _build_query_state(request, authorization or "")
-        asyncio.create_task(
-            _run_query_job(job.job_id, initial_state)
+        _schedule_background_task(
+            _ACTIVE_QUERY_TASKS,
+            _run_query_job(job.job_id, initial_state),
+            "query",
         )
         return JSONResponse(
             status_code=202,
@@ -664,9 +705,15 @@ async def _run_query_job(job_id: str, initial_state: Dict[str, Any]) -> None:
     summary="Check query job status",
     description="Retrieve the current status and result of an async query job.",
 )
-async def get_query_job(job_id: str) -> JSONResponse:
+async def get_query_job(
+    job_id: str,
+    authorization: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    tenant_ctx = _resolve_tenant_context(authorization)
     job = await _JOB_STORE.get(job_id)
     if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.tenant_id and job.tenant_id != tenant_ctx.tenant_id:
         raise HTTPException(status_code=404, detail="Job not found")
     return JSONResponse(content=job.model_dump(), status_code=200)
 
