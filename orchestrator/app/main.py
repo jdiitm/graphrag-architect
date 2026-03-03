@@ -551,14 +551,25 @@ def _build_query_state(
 
 
 def _result_to_response(result: Dict[str, Any]) -> QueryResponse:
+    query_id = result.get("query_id", "")
+    evaluation_details: Optional[Dict[str, Any]] = None
+    evaluation_score = result.get("evaluation_score")
+    retrieval_quality = result.get("retrieval_quality", "skipped")
+    if query_id:
+        stored_eval = _EVAL_STORE.get(str(query_id))
+        if isinstance(stored_eval, dict):
+            evaluation_details = stored_eval
+            evaluation_score = stored_eval.get("evaluation_score", evaluation_score)
+            retrieval_quality = stored_eval.get("retrieval_quality", retrieval_quality)
     return QueryResponse(
         answer=result.get("answer", ""),
         sources=result.get("sources", []),
         complexity=result.get("complexity", "entity_lookup"),
         retrieval_path=result.get("retrieval_path", "vector"),
-        evaluation_score=result.get("evaluation_score"),
-        retrieval_quality=result.get("retrieval_quality", "skipped"),
-        query_id=result.get("query_id", ""),
+        evaluation_score=evaluation_score,
+        retrieval_quality=retrieval_quality,
+        query_id=query_id,
+        evaluation_details=evaluation_details,
     )
 
 
