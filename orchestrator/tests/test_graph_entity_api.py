@@ -232,7 +232,12 @@ class TestCypherEndpoint:
         with _patched_client(mock_driver) as client:
             resp = client.post(
                 "/v1/graph/cypher",
-                json={"query": "MATCH (n:Service) RETURN n.name LIMIT 10"},
+                json={
+                    "query": (
+                        "MATCH (n:Service) WHERE n.tenant_id = $tenant_id "
+                        "RETURN n.name LIMIT 10"
+                    ),
+                },
                 headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"},
             )
         assert resp.status_code == 200
