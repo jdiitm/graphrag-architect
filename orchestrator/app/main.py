@@ -53,6 +53,7 @@ from orchestrator.app.query_models import (
 from orchestrator.app.query_templates import TemplateCatalog
 from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.tenant_security import TenantScopeVerifier
+from orchestrator.app.graph_api import router as graph_api_router
 from orchestrator.app.token_bucket import create_rate_limiter
 
 logger = logging.getLogger(__name__)
@@ -178,6 +179,7 @@ def _warn_insecure_auth(auth: AuthConfig) -> None:
 
 
 app = FastAPI(title="GraphRAG Orchestrator", version="1.0.0", lifespan=lifespan)
+app.include_router(graph_api_router)
 FastAPIInstrumentor.instrument_app(app)
 
 
