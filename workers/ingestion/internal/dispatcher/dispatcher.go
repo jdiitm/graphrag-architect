@@ -100,10 +100,7 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			if !ok {
 				return
 			}
-			dedupKey := string(job.Key)
-			if dedupKey == "" {
-				dedupKey = fmt.Sprintf("%s:%d:%d", job.Topic, job.Partition, job.Offset)
-			}
+			dedupKey := dedupKeyForJob(job)
 			if d.dedup.IsDuplicate(dedupKey) {
 				d.observer.RecordJobProcessed("dedup_skipped")
 				select {
@@ -148,6 +145,18 @@ func (d *Dispatcher) worker(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func dedupKeyForJob(job domain.Job) string {
+	tenantID := job.Headers["tenant_id"]
+	base := string(job.Key)
+	if base == "" {
+		base = fmt.Sprintf("%s:%d:%d", job.Topic, job.Partition, job.Offset)
+	}
+	if tenantID == "" {
+		return base
+	}
+	return fmt.Sprintf("%s:%s", tenantID, base)
 }
 
 func (d *Dispatcher) awaitDLQDone(ctx context.Context, result domain.Result) bool {

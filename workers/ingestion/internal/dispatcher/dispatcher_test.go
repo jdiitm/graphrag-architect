@@ -592,6 +592,45 @@ func TestDispatcherDedupAllowsDifferentKeys(t *testing.T) {
 	}
 }
 
+func TestDispatcherDedupScopesByTenantID(t *testing.T) {
+	store := dedup.NewLRUStore(100)
+	proc := &spyProcessor{}
+	cfg := dispatcher.Config{NumWorkers: 1, MaxRetries: 1, JobBuffer: 2, DLQBuffer: 1}
+	d := dispatcher.New(cfg, proc, dispatcher.WithDedup(store))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.Run(ctx)
+		close(done)
+	}()
+
+	jobA := makeJob("same-key")
+	jobA.Headers = map[string]string{"tenant_id": "tenant-a"}
+	d.Jobs() <- jobA
+	select {
+	case <-d.Acks():
+	case <-time.After(2 * time.Second):
+		t.Fatal("first tenant job ack timed out")
+	}
+
+	jobB := makeJob("same-key")
+	jobB.Headers = map[string]string{"tenant_id": "tenant-b"}
+	d.Jobs() <- jobB
+	select {
+	case <-d.Acks():
+	case <-time.After(2 * time.Second):
+		t.Fatal("second tenant job ack timed out")
+	}
+
+	cancel()
+	<-done
+
+	if proc.CallCount() != 2 {
+		t.Fatalf("expected 2 calls for same key across tenants, got %d", proc.CallCount())
+	}
+}
+
 func TestDispatcherDrainsOnClosedChannel(t *testing.T) {
 	proc := &spyProcessor{}
 	cfg := dispatcher.Config{NumWorkers: 2, MaxRetries: 1, JobBuffer: 4, DLQBuffer: 1}
