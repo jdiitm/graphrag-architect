@@ -140,10 +140,7 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0.18.0
-        with:
-          format: cyclonedx-json
-          output-file: sbom.json
+        run: trivy fs --format cyclonedx --output sbom.json .
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
         with:
@@ -240,11 +237,7 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
       - name: Generate container SBOM
-        uses: anchore/sbom-action@v0.18.0
-        with:
-          image: "${{ matrix.name }}:ci"
-          format: cyclonedx-json
-          output-file: "${{ matrix.name }}-sbom.json"
+        run: trivy image --format cyclonedx --output "${{ matrix.name }}-sbom.json" "${{ matrix.name }}:ci"
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
         with:
