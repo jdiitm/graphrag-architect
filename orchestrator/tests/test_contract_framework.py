@@ -1,5 +1,5 @@
-from pydantic import BaseModel, ValidationError
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from orchestrator.tests.contract.contracts import (
     ENDPOINT_CONTRACTS,

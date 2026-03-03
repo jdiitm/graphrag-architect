@@ -10,7 +10,6 @@ from starlette.testclient import TestClient
 
 from orchestrator.app.access_control import sign_token
 
-
 _TOKEN_SECRET = "test-secret-key-for-tenant-api-xx"
 
 _ADMIN_TOKEN = sign_token(

@@ -133,7 +133,7 @@ class TestScanContentPasswordAssignments:
         pw_findings = [f for f in findings if f.pattern_name == "password_assignment"]
         assert len(pw_findings) == 1
 
-    def test_detects_PASSWORD_colon(self) -> None:
+    def test_detects_password_colon(self) -> None:
         content = 'PASSWORD: "my-database-pass"'
         findings = scan_content(content)
         pw_findings = [f for f in findings if f.pattern_name == "password_assignment"]

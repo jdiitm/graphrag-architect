@@ -1,10 +1,9 @@
 import pathlib
 
-import yaml
 import pytest
+import yaml
 
 from orchestrator.app.neo4j_pool import ReplicaAwarePool
-
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 HELM_VALUES = REPO_ROOT / "infrastructure" / "helm" / "graphrag" / "values.yaml"

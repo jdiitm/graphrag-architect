@@ -13,8 +13,8 @@ from orchestrator.tests.contract.contracts import (
     ExpectedAsyncResponse,
     ExpectedHealthResponse,
     ExpectedIngestResponse,
-    GoIngestRequest,
     GoIngestDocument,
+    GoIngestRequest,
     RetryBehavior,
 )
 

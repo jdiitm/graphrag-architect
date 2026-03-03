@@ -57,6 +57,7 @@ from orchestrator.app.neo4j_client import GraphRepository
 from orchestrator.app.neo4j_pool import get_driver
 from orchestrator.app.node_sink import IncrementalNodeSink
 from orchestrator.app.schema_validation import validate_topology
+from orchestrator.app.secret_scanner import scan_and_redact
 from orchestrator.app.telemetry_ports import get_metrics_port, get_tracing_port
 from orchestrator.app.vector_store import create_vector_store
 from orchestrator.app.vector_sync_outbox import (
@@ -68,7 +69,6 @@ from orchestrator.app.vector_sync_outbox import (
     VectorSyncEvent,
     VectorSyncOutbox,
 )
-from orchestrator.app.secret_scanner import scan_and_redact
 from orchestrator.app.workspace_loader import load_directory_chunked, load_directory_stream
 
 _VECTOR_COLLECTION = "service_embeddings"

@@ -29,6 +29,8 @@ from orchestrator.app.config import (
 )
 from orchestrator.app.distributed_lock import create_ingestion_semaphore
 from orchestrator.app.executor import shutdown_pool, shutdown_thread_pool
+from orchestrator.app.gdpr import gdpr_router
+from orchestrator.app.graph_api import router as graph_api_router
 from orchestrator.app.graph_builder import (
     IngestionDegradedError,
     ingestion_graph,
@@ -51,15 +53,15 @@ from orchestrator.app.query_models import (
     create_job_store,
 )
 from orchestrator.app.query_templates import TemplateCatalog
-from orchestrator.app.gdpr import gdpr_router
 from orchestrator.app.tenant_admin_api import (
     admin_router as tenant_admin_router,
+)
+from orchestrator.app.tenant_admin_api import (
     tenant_router,
     webhook_router,
 )
 from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.tenant_security import TenantScopeVerifier
-from orchestrator.app.graph_api import router as graph_api_router
 from orchestrator.app.token_bucket import create_rate_limiter
 
 logger = logging.getLogger(__name__)

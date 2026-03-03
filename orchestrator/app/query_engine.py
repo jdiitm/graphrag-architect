@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import inspect
 import json
 import logging
@@ -100,7 +101,7 @@ from orchestrator.app.vector_store import SearchResult, VectorDegradedError, cre
 
 _OPENAI_MODULE: Any = None
 try:
-    import openai as _OPENAI_MODULE
+    _OPENAI_MODULE = importlib.import_module("openai")
 except ImportError:
     pass
 

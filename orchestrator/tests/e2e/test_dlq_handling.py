@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 try:
     from testcontainers.neo4j import Neo4jContainer
@@ -44,8 +45,8 @@ async def test_ingest_triggers_dlq_on_neo4j_failure(orchestrator_client):
 
 
 async def test_circuit_breaker_opens(orchestrator_client):
-    from orchestrator.tests.e2e.conftest import build_ingest_payload
     from orchestrator.app.circuit_breaker import CircuitOpenError
+    from orchestrator.tests.e2e.conftest import build_ingest_payload
 
     payload = build_ingest_payload(
         [{"path": "svc/app.py", "content": "class BreakerTest:\n    pass\n"}],
