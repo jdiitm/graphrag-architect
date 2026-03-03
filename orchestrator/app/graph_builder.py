@@ -119,9 +119,10 @@ def _get_process_pool() -> concurrent.futures.ProcessPoolExecutor:
 
 
 def _shutdown_process_pool() -> None:
-    if _ASTPoolHolder.instance is not None:
-        _ASTPoolHolder.instance.shutdown(wait=False)
-        _ASTPoolHolder.instance = None
+    with _ast_pool_lock:
+        if _ASTPoolHolder.instance is not None:
+            _ASTPoolHolder.instance.shutdown(wait=False)
+            _ASTPoolHolder.instance = None
 
 
 def shutdown_ast_pool() -> None:
@@ -304,7 +305,8 @@ _container_lock = threading.Lock()
 
 
 def set_container(container: AppContainer | None) -> None:
-    _ContainerHolder.value = container
+    with _container_lock:
+        _ContainerHolder.value = container
 
 
 def get_container() -> AppContainer:
@@ -329,21 +331,25 @@ class _MutationPublisherHolder:
     value: Optional[KafkaMutationPublisher] = None
 
 
+_mutation_publisher_lock = threading.Lock()
+
+
 def _get_mutation_publisher() -> Optional[KafkaMutationPublisher]:
-    if _MutationPublisherHolder.value is None:
-        brokers = os.environ.get("KAFKA_BROKERS", "")
-        if not brokers:
-            return None
-        topic = os.environ.get(
-            "VECTOR_SYNC_KAFKA_TOPIC", "graph.mutations",
-        )
-        from orchestrator.app.mutation_publisher import LoggingMutationTransport
-        transport = LoggingMutationTransport()
-        _MutationPublisherHolder.value = KafkaMutationPublisher(
-            transport=transport,
-            topic=topic,
-        )
-    return _MutationPublisherHolder.value
+    with _mutation_publisher_lock:
+        if _MutationPublisherHolder.value is None:
+            brokers = os.environ.get("KAFKA_BROKERS", "")
+            if not brokers:
+                return None
+            topic = os.environ.get(
+                "VECTOR_SYNC_KAFKA_TOPIC", "graph.mutations",
+            )
+            from orchestrator.app.mutation_publisher import LoggingMutationTransport
+            transport = LoggingMutationTransport()
+            _MutationPublisherHolder.value = KafkaMutationPublisher(
+                transport=transport,
+                topic=topic,
+            )
+        return _MutationPublisherHolder.value
 
 
 def get_vector_store() -> Any:
@@ -387,14 +393,19 @@ class _IngestionLockHolder:
     value: Any = None
 
 
+_ingestion_lock_lock = threading.Lock()
+
+
 def get_ingestion_lock() -> Any:
-    if _IngestionLockHolder.value is None:
-        _IngestionLockHolder.value = create_ingestion_lock()
-    return _IngestionLockHolder.value
+    with _ingestion_lock_lock:
+        if _IngestionLockHolder.value is None:
+            _IngestionLockHolder.value = create_ingestion_lock()
+        return _IngestionLockHolder.value
 
 
 def set_ingestion_lock(lock: Any) -> None:
-    _IngestionLockHolder.value = lock
+    with _ingestion_lock_lock:
+        _IngestionLockHolder.value = lock
 
 
 @asynccontextmanager
@@ -554,11 +565,15 @@ class _GRPCASTClientHolder:
     instance: Optional[GRPCASTClient] = None
 
 
+_grpc_ast_lock = threading.Lock()
+
+
 def _get_grpc_ast_client() -> GRPCASTClient:
-    if _GRPCASTClientHolder.instance is None:
-        cfg = GRPCASTConfig.from_env()
-        _GRPCASTClientHolder.instance = GRPCASTClient(config=cfg)
-    return _GRPCASTClientHolder.instance
+    with _grpc_ast_lock:
+        if _GRPCASTClientHolder.instance is None:
+            cfg = GRPCASTConfig.from_env()
+            _GRPCASTClientHolder.instance = GRPCASTClient(config=cfg)
+        return _GRPCASTClientHolder.instance
 
 
 def _grpc_ast_endpoint_configured() -> bool:

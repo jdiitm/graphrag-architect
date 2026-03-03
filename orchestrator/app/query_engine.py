@@ -1050,7 +1050,9 @@ def _store_in_semantic_cache(
         complexity=complexity,
         acl_key=acl_key,
     )
-    _SEMANTIC_CACHE.notify_complete(query_embedding, acl_key=acl_key)
+    _SEMANTIC_CACHE.notify_complete(
+        query_embedding, acl_key=acl_key, tenant_id=tenant_id,
+    )
 
 
 async def cypher_retrieve(state: QueryState) -> Dict[str, Any]:
@@ -1083,6 +1085,7 @@ async def cypher_retrieve(state: QueryState) -> Dict[str, Any]:
                             _SEMANTIC_CACHE.notify_complete(
                                 query_embedding, failed=True,
                                 acl_key=acl_cache_key,
+                                tenant_id=tenant_id,
                             )
                         return {
                             "cypher_query": "",
@@ -1120,6 +1123,7 @@ async def cypher_retrieve(state: QueryState) -> Dict[str, Any]:
                     _SEMANTIC_CACHE.notify_complete(
                         query_embedding, failed=True,
                         acl_key=acl_cache_key,
+                        tenant_id=tenant_id,
                     )
                 raise
         finally:

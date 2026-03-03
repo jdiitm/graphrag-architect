@@ -226,7 +226,9 @@ def _cache_key(
     acl_key: str,
     hash_dimensions: Optional[int] = None,
 ) -> str:
-    emb_hash = _embedding_hash(query_embedding, hash_dimensions=hash_dimensions)
+    emb_hash = _embedding_hash(
+        query_embedding, hash_dimensions=hash_dimensions,
+    )
     return f"{emb_hash}|{tenant_id}|{acl_key}"
 
 
@@ -914,8 +916,7 @@ class RedisSemanticQueryCache:
 
         hdim = self._cache_config.hash_dimensions
         key_hash = _cache_key(
-            query_embedding, tenant_id, acl_key,
-            hash_dimensions=hdim,
+            query_embedding, tenant_id, acl_key, hash_dimensions=hdim,
         )
         inflight = self._l1.get_inflight(key_hash)
         if inflight is not None:
@@ -939,7 +940,8 @@ class RedisSemanticQueryCache:
         tenant_id: str = "",
     ) -> None:
         self._l1.notify_complete(
-            query_embedding, failed=failed, acl_key=acl_key, tenant_id=tenant_id,
+            query_embedding, failed=failed,
+            acl_key=acl_key, tenant_id=tenant_id,
         )
 
     def lookup(

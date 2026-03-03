@@ -144,7 +144,7 @@ class TestSemanticCacheQueryEngineIntegration:
         ) as mock_notify:
             await cypher_retrieve(state)
 
-        mock_notify.assert_called_once_with(embedding, acl_key="admin")
+        mock_notify.assert_called_once_with(embedding, acl_key="admin", tenant_id="")
         _SEMANTIC_CACHE.invalidate_all()
 
     @pytest.mark.asyncio
@@ -185,7 +185,9 @@ class TestSemanticCacheQueryEngineIntegration:
             with pytest.raises(RuntimeError, match="db down"):
                 await cypher_retrieve(state)
 
-        mock_notify.assert_called_once_with(embedding, failed=True, acl_key="admin")
+        mock_notify.assert_called_once_with(
+            embedding, failed=True, acl_key="admin", tenant_id="",
+        )
         _SEMANTIC_CACHE.invalidate_all()
 
     @pytest.mark.asyncio
