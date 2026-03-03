@@ -36,6 +36,14 @@ neo4j:
   neo4j:
     edition: enterprise
     password: changeme
+  cluster:
+    core_count: 3
+    read_replica_count: 2
+  composite_databases:
+    - name: graphrag-composite
+      constituents:
+        - graphrag-tenant-default
+        - graphrag-tenant-premium
 
 kafka:
   enabled: true
