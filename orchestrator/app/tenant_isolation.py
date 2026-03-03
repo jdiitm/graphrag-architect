@@ -114,6 +114,9 @@ class TenantAuditLogger(Protocol):
         tenant_id: str,
         query_hash: str,
         result_count: int,
+        raw_user_query: str = "",
+        cypher_query: str = "",
+        node_ids_returned: Optional[List[str]] = None,
     ) -> None: ...
 
 
@@ -126,11 +129,17 @@ class StructuredTenantAuditLogger:
         tenant_id: str,
         query_hash: str,
         result_count: int,
+        raw_user_query: str = "",
+        cypher_query: str = "",
+        node_ids_returned: Optional[List[str]] = None,
     ) -> None:
         entry = json.dumps({
             "tenant_id": tenant_id,
             "query_hash": query_hash,
             "result_count": result_count,
+            "raw_user_query": raw_user_query,
+            "cypher_query": cypher_query,
+            "node_ids_returned": node_ids_returned or [],
             "timestamp": time.time(),
         })
         self._logger.info(entry)

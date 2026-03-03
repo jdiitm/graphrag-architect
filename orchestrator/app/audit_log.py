@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 _audit_logger = logging.getLogger("graphrag.security.audit")
+_REDACT_KEYS = ("token", "secret", "password", "api_key", "key")
 
 
 class AuditAction(Enum):
@@ -79,7 +80,12 @@ class SecurityAuditLogger:
         complexity: str = "",
         result_count: int = 0,
         duration_ms: float = 0.0,
+        raw_user_query: str = "",
+        cypher_query: str = "",
+        cypher_params: Optional[Dict[str, Any]] = None,
+        node_ids_returned: Optional[List[str]] = None,
     ) -> None:
+        redacted_params = _redact_sensitive(cypher_params or {})
         self.log(AuditEvent(
             action=AuditAction.QUERY_EXECUTE,
             tenant_id=tenant_id,
@@ -89,6 +95,10 @@ class SecurityAuditLogger:
                 "complexity": complexity,
                 "result_count": result_count,
                 "duration_ms": round(duration_ms, 2),
+                "raw_user_query": raw_user_query,
+                "cypher_query": cypher_query,
+                "cypher_params": redacted_params,
+                "node_ids_returned": node_ids_returned or [],
             },
         ))
 
@@ -123,3 +133,14 @@ class SecurityAuditLogger:
 
     def clear_buffer(self) -> None:
         self._buffer.clear()
+
+
+def _redact_sensitive(data: Dict[str, Any]) -> Dict[str, Any]:
+    redacted: Dict[str, Any] = {}
+    for key, value in data.items():
+        k = key.lower()
+        if any(marker in k for marker in _REDACT_KEYS):
+            redacted[key] = "[REDACTED]"
+        else:
+            redacted[key] = value
+    return redacted

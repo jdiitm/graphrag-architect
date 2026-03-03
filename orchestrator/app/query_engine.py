@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import importlib
 import inspect
 import json
@@ -28,6 +29,7 @@ from orchestrator.app.access_control import (
     CypherPermissionFilter,
     SecurityPrincipal,
 )
+from orchestrator.app.audit_log import SecurityAuditLogger
 from orchestrator.app.agentic_traversal import run_traversal
 from orchestrator.app.circuit_breaker import (
     CircuitBreakerConfig,
@@ -118,6 +120,7 @@ async def _execute_read_tx(
 
 
 _query_logger = logging.getLogger(__name__)
+_SEC_AUDIT = SecurityAuditLogger()
 
 _ROUTE_MAP = {
     QueryComplexity.ENTITY_LOOKUP: "vector",
@@ -1124,10 +1127,45 @@ async def synthesize_answer(state: QueryState) -> Dict[str, Any]:
     with get_tracing_port().start_span("query.synthesize"):
         start = time.monotonic()
         result = await _do_synthesize(state)
+        duration_ms = (time.monotonic() - start) * 1000
+        _log_query_audit(state, result, duration_ms)
         get_metrics_port().record_duration(
-            "query.duration_ms", (time.monotonic() - start) * 1000, {"node": "synthesize"}
+            "query.duration_ms", duration_ms, {"node": "synthesize"}
         )
         return result
+
+
+def _log_query_audit(
+    state: QueryState,
+    result: Dict[str, Any],
+    duration_ms: float,
+) -> None:
+    query = str(state.get("query", ""))
+    query_hash = hashlib.sha256(query.encode("utf-8")).hexdigest()
+    sources = result.get("sources", [])
+    node_ids = _extract_node_ids(sources if isinstance(sources, list) else [])
+    _SEC_AUDIT.log_query(
+        tenant_id=str(state.get("tenant_id", "")),
+        principal=str(state.get("tenant_id", "")),
+        query_hash=query_hash,
+        complexity=str(state.get("complexity", "")),
+        result_count=len(sources) if isinstance(sources, list) else 0,
+        duration_ms=duration_ms,
+        raw_user_query=query,
+        cypher_query=str(state.get("cypher_query", "")),
+        cypher_params={},
+        node_ids_returned=node_ids,
+    )
+
+
+def _extract_node_ids(records: List[Dict[str, Any]]) -> List[str]:
+    node_ids: List[str] = []
+    for record in records:
+        for key in ("id", "source", "target", "target_id"):
+            value = record.get(key)
+            if isinstance(value, str) and value and value not in node_ids:
+                node_ids.append(value)
+    return node_ids
 
 
 _DEFAULT_RERANKER = BM25Reranker()
