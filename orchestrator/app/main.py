@@ -3,6 +3,7 @@ import base64
 import binascii
 import logging
 import os
+import inspect
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Generator, List, Optional
 
@@ -559,14 +560,22 @@ def _build_query_state(
     }
 
 
-def _result_to_response(result: Dict[str, Any]) -> QueryResponse:
+async def _eval_store_get(query_id: str) -> Optional[Dict[str, Any]]:
+    value = _EVAL_STORE.get(query_id)
+    if inspect.isawaitable(value):
+        resolved = await value
+        return resolved if isinstance(resolved, dict) else None
+    return value if isinstance(value, dict) else None
+
+
+async def _result_to_response(result: Dict[str, Any]) -> QueryResponse:
     query_id = result.get("query_id", "")
     evaluation_details: Optional[Dict[str, Any]] = None
     evaluation_score = result.get("evaluation_score")
     retrieval_quality = result.get("retrieval_quality", "skipped")
     if query_id:
-        stored_eval = _EVAL_STORE.get(str(query_id))
-        if isinstance(stored_eval, dict):
+        stored_eval = await _eval_store_get(str(query_id))
+        if stored_eval is not None:
             evaluation_details = stored_eval
             evaluation_score = stored_eval.get("evaluation_score", evaluation_score)
             retrieval_quality = stored_eval.get("retrieval_quality", retrieval_quality)
@@ -631,7 +640,7 @@ async def query(
         raise HTTPException(
             status_code=500, detail="Internal query error"
         ) from exc
-    response = _result_to_response(result)
+    response = await _result_to_response(result)
     return JSONResponse(content=response.model_dump(), status_code=200)
 
 
@@ -641,7 +650,7 @@ async def _run_query_job(job_id: str, initial_state: Dict[str, Any]) -> None:
     try:
         graph_input: Any = initial_state
         result = await query_graph.ainvoke(graph_input)
-        response = _result_to_response(result)
+        response = await _result_to_response(result)
         await _JOB_STORE.complete(job_id, response)
     except Exception as exc:
         logger.exception("Background query job %s failed", job_id)
@@ -672,7 +681,7 @@ _EVAL_STORE = get_eval_store()
     description="Retrieve the RAG evaluation result for a completed query.",
 )
 async def get_evaluation(query_id: str) -> JSONResponse:
-    result = _EVAL_STORE.get(query_id)
+    result = await _eval_store_get(query_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Evaluation not ready or not found")
     return JSONResponse(content=result, status_code=200)
