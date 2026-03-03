@@ -128,12 +128,17 @@ class RedisRateLimiter:
         key_prefix: str = "graphrag:ratelimit:",
         password: str = "",
         db: int = 0,
+        fail_strategy: str = "",
     ) -> None:
         require_redis("RedisRateLimiter")
         self._redis = create_async_redis(redis_url, password=password, db=db)
         self._capacity = capacity
         self._window = window_seconds
         self._prefix = key_prefix
+        resolved_strategy = fail_strategy or os.environ.get(
+            "RATE_LIMIT_FAIL_STRATEGY", "closed",
+        )
+        self._fail_open = resolved_strategy.lower() == "open"
 
     async def try_acquire(self, tenant_id: str) -> bool:
         key = f"{self._prefix}{tenant_id}"
@@ -153,8 +158,11 @@ class RedisRateLimiter:
                 return False
             return True
         except Exception:
-            logger.warning("Redis rate limiter failed, allowing request")
-            return True
+            if self._fail_open:
+                logger.warning("Redis rate limiter failed, allowing request (fail-open)")
+                return True
+            logger.warning("Redis rate limiter failed, denying request (fail-closed)")
+            return False
 
 
 @dataclass(frozen=True)

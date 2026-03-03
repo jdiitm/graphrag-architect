@@ -65,10 +65,14 @@ _CLAUSE_KEYWORDS = frozenset({
 })
 
 
+MAX_CALL_NESTING_DEPTH = 10
+
+
 class CypherParser:
     def __init__(self, cypher: str) -> None:
         self._tokens = tokenize_cypher(cypher)
         self._pos = 0
+        self._call_depth = 0
 
     def _current(self) -> Optional[CypherToken]:
         if self._pos < len(self._tokens):
@@ -204,11 +208,18 @@ class CypherParser:
         tok = self._current()
 
         if tok and tok.token_type == TokenType.PUNCTUATION and tok.value == "{":
+            self._call_depth += 1
+            if self._call_depth > MAX_CALL_NESTING_DEPTH:
+                raise ValueError(
+                    f"CALL subquery nesting depth ({self._call_depth}) "
+                    f"exceeds maximum ({MAX_CALL_NESTING_DEPTH})"
+                )
             self._advance()
             body = self._parse_clauses(top_level=False)
             if (self._pos < len(self._tokens)
                     and self._tokens[self._pos].value == "}"):
                 self._advance()
+            self._call_depth -= 1
             return CallSubquery(
                 tokens=[call_token] + ws, body=body,
             )

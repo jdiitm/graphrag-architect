@@ -200,6 +200,40 @@ class RedisConfig:
 
 
 @dataclass(frozen=True)
+class RedisCacheConfig:
+    url: str = ""
+    password: str = ""
+    db: int = 0
+    key_prefix: str = "graphrag:cache:"
+
+    @classmethod
+    def from_env(cls) -> RedisCacheConfig:
+        return cls(
+            url=os.environ.get("REDIS_CACHE_URL", os.environ.get("REDIS_URL", "")),
+            password=os.environ.get("REDIS_CACHE_PASSWORD", os.environ.get("REDIS_PASSWORD", "")),
+            db=int(os.environ.get("REDIS_CACHE_DB", os.environ.get("REDIS_DB", "0"))),
+            key_prefix=os.environ.get("REDIS_CACHE_KEY_PREFIX", "graphrag:cache:"),
+        )
+
+
+@dataclass(frozen=True)
+class RedisOutboxConfig:
+    url: str = ""
+    password: str = ""
+    db: int = 0
+    key_prefix: str = "graphrag:outbox:"
+
+    @classmethod
+    def from_env(cls) -> RedisOutboxConfig:
+        return cls(
+            url=os.environ.get("REDIS_OUTBOX_URL", os.environ.get("REDIS_URL", "")),
+            password=os.environ.get("REDIS_OUTBOX_PASSWORD", os.environ.get("REDIS_PASSWORD", "")),
+            db=int(os.environ.get("REDIS_OUTBOX_DB", os.environ.get("REDIS_DB", "0"))),
+            key_prefix=os.environ.get("REDIS_OUTBOX_KEY_PREFIX", "graphrag:outbox:"),
+        )
+
+
+@dataclass(frozen=True)
 class RAGEvalConfig:
     low_relevance_threshold: float = 0.3
     enable_evaluation: bool = True

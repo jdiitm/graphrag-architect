@@ -272,7 +272,15 @@ class _Lexer:
         return self.tokens
 
 
+MAX_CYPHER_INPUT_LENGTH = 65_536
+
+
 def tokenize_cypher(cypher: str) -> List[CypherToken]:
+    if len(cypher) > MAX_CYPHER_INPUT_LENGTH:
+        raise ValueError(
+            f"Cypher input length ({len(cypher)}) exceeds maximum "
+            f"allowed size ({MAX_CYPHER_INPUT_LENGTH} bytes)"
+        )
     return _Lexer(cypher).run()
 
 

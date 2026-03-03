@@ -10,7 +10,7 @@ import secrets
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
-from typing import FrozenSet, List, Set, Tuple
+from typing import Dict, FrozenSet, List, Set, Tuple
 
 _DEFAULT_MAX_QUERY_CHARS = 4_000
 _DEFAULT_MAX_SOURCE_CHARS = 1_000_000
@@ -245,6 +245,36 @@ _FIREWALL_RULES: List[
 ]
 
 
+_CONFUSABLE_TO_ASCII: Dict[str, str] = {
+    "\u0430": "a", "\u0410": "A",
+    "\u0435": "e", "\u0415": "E",
+    "\u0456": "i", "\u0406": "I",
+    "\u043e": "o", "\u041e": "O",
+    "\u0440": "p", "\u0420": "P",
+    "\u0441": "c", "\u0421": "C",
+    "\u0443": "y", "\u0423": "Y",
+    "\u0445": "x", "\u0425": "X",
+    "\u044a": "b",
+    "\u0455": "s", "\u0405": "S",
+    "\u0458": "j", "\u0408": "J",
+    "\u04bb": "h",
+    "\u0501": "d",
+    "\u0510": "q",
+    "\u03b1": "a", "\u0391": "A",
+    "\u03b5": "e", "\u0395": "E",
+    "\u03bf": "o", "\u039f": "O",
+    "\u0131": "i",
+    "\ua4f8": "H",
+}
+
+_CONFUSABLE_TRANS = str.maketrans(_CONFUSABLE_TO_ASCII)
+
+
+def _normalize_confusables(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text)
+    return text.translate(_CONFUSABLE_TRANS)
+
+
 class ContentFirewall:
     _patterns: List[
         Tuple[re.Pattern[str], ThreatCategory, str]
@@ -258,6 +288,7 @@ class ContentFirewall:
         self._max_input_bytes = max_input_bytes
 
     def scan(self, content: str) -> ScanResult:
+        content = _normalize_confusables(content)
         content_bytes = len(content.encode("utf-8", errors="replace"))
         if content_bytes > self._max_input_bytes:
             raise SanitizationBudgetExceeded(
@@ -416,7 +447,7 @@ class PromptInjectionClassifier:
         self._max_input_bytes = max_input_bytes
 
     def classify(self, text: str) -> InjectionResult:
-        text = unicodedata.normalize("NFKC", text)
+        text = _normalize_confusables(text)
         text_bytes = len(text.encode("utf-8", errors="replace"))
         if text_bytes > self._max_input_bytes:
             raise SanitizationBudgetExceeded(
