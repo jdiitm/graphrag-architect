@@ -82,6 +82,22 @@ class IncrementalNodeSink:
             self._flush_count += 1
             self._buffer.clear()
 
+    async def flush_with_outbox(
+        self, outbox_events: List[Any],
+    ) -> None:
+        if not self._buffer:
+            return
+        sorted_buffer = sorted(self._buffer, key=_entity_sort_key)
+        committer = self._committer
+        if hasattr(committer, "commit_topology_with_outbox"):
+            await committer.commit_topology_with_outbox(
+                sorted_buffer, outbox_events=outbox_events,
+            )
+        else:
+            await committer.commit_topology(sorted_buffer)
+        self._flush_count += 1
+        self._buffer.clear()
+
     async def _commit_partitioned(self, batch: List[Any]) -> None:
         partitions: Dict[str, List[Any]] = defaultdict(list)
         for entity in batch:

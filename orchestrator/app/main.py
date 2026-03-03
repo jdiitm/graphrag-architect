@@ -733,8 +733,15 @@ _EVAL_STORE = get_eval_store()
     summary="Get query evaluation",
     description="Retrieve the RAG evaluation result for a completed query.",
 )
-async def get_evaluation(query_id: str) -> JSONResponse:
+async def get_evaluation(
+    query_id: str,
+    authorization: Optional[str] = Header(default=None),
+) -> JSONResponse:
+    tenant_ctx = _resolve_tenant_context(authorization)
     result = await _eval_store_get(query_id)
     if result is None:
+        raise HTTPException(status_code=404, detail="Evaluation not ready or not found")
+    result_tenant = result.get("tenant_id", "")
+    if result_tenant and result_tenant != tenant_ctx.tenant_id:
         raise HTTPException(status_code=404, detail="Evaluation not ready or not found")
     return JSONResponse(content=result, status_code=200)

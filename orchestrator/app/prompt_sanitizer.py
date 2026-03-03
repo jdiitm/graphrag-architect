@@ -416,13 +416,13 @@ class PromptInjectionClassifier:
         self._max_input_bytes = max_input_bytes
 
     def classify(self, text: str) -> InjectionResult:
+        text = unicodedata.normalize("NFKC", text)
         text_bytes = len(text.encode("utf-8", errors="replace"))
         if text_bytes > self._max_input_bytes:
             raise SanitizationBudgetExceeded(
                 f"Text ({text_bytes} bytes) exceeds classifier input "
                 f"limit ({self._max_input_bytes} bytes)"
             )
-        text = unicodedata.normalize("NFKC", text)
         total_score = 0.0
         detected: List[str] = []
         for pattern, name, weight in self._patterns:
