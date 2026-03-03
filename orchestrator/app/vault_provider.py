@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -121,3 +122,9 @@ class VaultSecretProvider:
         old_version = old_metadata.get("version")
         new_version = new_metadata.get("version")
         return bool(old_version != new_version)
+
+
+async def async_fetch_secret(
+    provider: VaultSecretProvider, path: str, key: str,
+) -> str:
+    return await asyncio.to_thread(provider.fetch_secret, path, key)

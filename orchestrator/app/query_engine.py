@@ -465,12 +465,26 @@ def _context_classification_enabled() -> bool:
     return os.environ.get("CLASSIFY_CONTEXT_ENABLED", "false").lower() == "true"
 
 
+_CONTEXT_CLASSIFICATION_MAX_CHARS = 20_000
+
+
 def _serialize_context_for_classification(
     context: List[Dict[str, Any]],
 ) -> str:
-    return " ".join(
-        str(v) for item in context for v in item.values()
-    )
+    parts: list[str] = []
+    total = 0
+    for item in context:
+        for v in item.values():
+            chunk = str(v)
+            remaining = _CONTEXT_CLASSIFICATION_MAX_CHARS - total
+            if remaining <= 0:
+                return " ".join(parts)
+            if len(chunk) > remaining:
+                parts.append(chunk[:remaining])
+                return " ".join(parts)
+            parts.append(chunk)
+            total += len(chunk) + 1
+    return " ".join(parts)
 
 
 def _strip_context_values(

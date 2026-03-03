@@ -129,6 +129,21 @@ class QueryJobStore:
             self._mono.pop(jid, None)
 
 
+_LUA_CAS_TRANSITION = """
+local key = KEYS[1]
+local expected_status = ARGV[1]
+local new_json = ARGV[2]
+local ttl = tonumber(ARGV[3])
+local raw = redis.call('GET', key)
+if not raw then return 0 end
+local ok, obj = pcall(cjson.decode, raw)
+if not ok then return 0 end
+if obj['status'] ~= expected_status then return 0 end
+redis.call('SETEX', key, ttl, new_json)
+return 1
+"""
+
+
 class RedisQueryJobStore:
     def __init__(
         self,
@@ -171,17 +186,31 @@ class RedisQueryJobStore:
             logger.warning("Redis job-store get failed")
         return None
 
+    async def _cas_transition(
+        self,
+        job_id: str,
+        expected_status: str,
+        new_job_json: str,
+    ) -> bool:
+        try:
+            result = await self._redis.eval(
+                _LUA_CAS_TRANSITION, 1,
+                self._rkey(job_id), expected_status, new_job_json,
+                str(self._ttl),
+            )
+            return bool(result)
+        except Exception:
+            logger.warning("Redis job-store CAS transition failed for %s", job_id)
+            return False
+
     async def mark_running(self, job_id: str) -> None:
         job = await self.get(job_id)
         if job is None:
             return
         job.status = JobStatus.RUNNING
-        try:
-            await self._redis.setex(
-                self._rkey(job_id), self._ttl, job.model_dump_json(),
-            )
-        except Exception:
-            logger.warning("Redis job-store mark_running failed")
+        await self._cas_transition(
+            job_id, JobStatus.PENDING.value, job.model_dump_json(),
+        )
 
     async def complete(self, job_id: str, result: QueryResponse) -> None:
         job = await self.get(job_id)
@@ -190,12 +219,9 @@ class RedisQueryJobStore:
         job.status = JobStatus.COMPLETED
         job.result = result
         job.completed_at = time.time()
-        try:
-            await self._redis.setex(
-                self._rkey(job_id), self._ttl, job.model_dump_json(),
-            )
-        except Exception:
-            logger.warning("Redis job-store complete failed")
+        await self._cas_transition(
+            job_id, JobStatus.RUNNING.value, job.model_dump_json(),
+        )
 
     async def fail(self, job_id: str, error: str) -> None:
         job = await self.get(job_id)
@@ -204,12 +230,9 @@ class RedisQueryJobStore:
         job.status = JobStatus.FAILED
         job.error = error
         job.completed_at = time.time()
-        try:
-            await self._redis.setex(
-                self._rkey(job_id), self._ttl, job.model_dump_json(),
-            )
-        except Exception:
-            logger.warning("Redis job-store fail failed")
+        await self._cas_transition(
+            job_id, JobStatus.RUNNING.value, job.model_dump_json(),
+        )
 
 
 def create_job_store(ttl_seconds: float = 300.0) -> Any:
