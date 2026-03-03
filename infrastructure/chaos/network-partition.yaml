@@ -1,0 +1,79 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: network-partition
+  namespace: graphrag
+  labels:
+    experiment: network-partition
+    component: orchestrator
+    severity: critical
+spec:
+  entry: network-partition-workflow
+  templates:
+    - name: network-partition-workflow
+      templateType: Serial
+      children:
+        - steady-state-validation
+        - inject-partition
+        - verify-recovery
+
+    - name: steady-state-validation
+      templateType: Task
+      task:
+        container:
+          name: steady-state-check
+          image: curlimages/curl:8.5.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+                http://orchestrator.graphrag.svc.cluster.local:8000/health)
+              if [ "$STATUS" = "200" ]; then
+                echo "STEADY_STATE: orchestrator can reach neo4j (healthy)"
+                exit 0
+              fi
+              echo "STEADY_STATE_FAILED: health check returned $STATUS"
+              exit 1
+
+    - name: inject-partition
+      templateType: NetworkChaos
+      deadline: 120s
+      networkChaos:
+        action: partition
+        mode: all
+        selector:
+          namespaces:
+            - graphrag
+          labelSelectors:
+            app: orchestrator
+        direction: both
+        target:
+          mode: all
+          selector:
+            namespaces:
+              - graphrag
+            labelSelectors:
+              app: neo4j
+
+    - name: verify-recovery
+      templateType: Task
+      task:
+        container:
+          name: recovery-check
+          image: curlimages/curl:8.5.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              for i in $(seq 1 30); do
+                STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+                  http://orchestrator.graphrag.svc.cluster.local:8000/health 2>/dev/null)
+                if [ "$STATUS" = "200" ]; then
+                  echo "VERIFY: connectivity restored after ${i}0s"
+                  exit 0
+                fi
+                sleep 10
+              done
+              echo "VERIFY_FAILED: orchestrator still unhealthy after 300s"
+              exit 1

@@ -1,0 +1,72 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: orchestrator-pod-kill
+  namespace: graphrag
+  labels:
+    experiment: orchestrator-pod-kill
+    component: orchestrator
+    severity: high
+spec:
+  entry: orchestrator-pod-kill-workflow
+  templates:
+    - name: orchestrator-pod-kill-workflow
+      templateType: Serial
+      children:
+        - steady-state-validation
+        - inject-pod-kill
+        - verify-recovery
+
+    - name: steady-state-validation
+      templateType: Task
+      task:
+        container:
+          name: steady-state-check
+          image: curlimages/curl:8.5.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+                http://orchestrator.graphrag.svc.cluster.local:8000/health)
+              if [ "$STATUS" = "200" ]; then
+                echo "STEADY_STATE: orchestrator healthy (HTTP 200)"
+                exit 0
+              fi
+              echo "STEADY_STATE_FAILED: health check returned $STATUS"
+              exit 1
+
+    - name: inject-pod-kill
+      templateType: PodChaos
+      deadline: 60s
+      podChaos:
+        action: pod-kill
+        mode: one
+        selector:
+          namespaces:
+            - graphrag
+          labelSelectors:
+            app: orchestrator
+        gracePeriod: 0
+
+    - name: verify-recovery
+      templateType: Task
+      task:
+        container:
+          name: recovery-check
+          image: curlimages/curl:8.5.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              for i in $(seq 1 30); do
+                STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+                  http://orchestrator.graphrag.svc.cluster.local:8000/health 2>/dev/null)
+                if [ "$STATUS" = "200" ]; then
+                  echo "VERIFY: orchestrator recovered after ${i}0s"
+                  exit 0
+                fi
+                sleep 10
+              done
+              echo "VERIFY_FAILED: orchestrator not healthy after 300s"
+              exit 1
