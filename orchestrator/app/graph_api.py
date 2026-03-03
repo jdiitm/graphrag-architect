@@ -15,6 +15,7 @@ from orchestrator.app.audit_log import AuditAction, AuditEvent, SecurityAuditLog
 from orchestrator.app.config import AuthConfig
 from orchestrator.app.cypher_validator import CypherValidationError, validate_cypher_readonly
 from orchestrator.app.neo4j_pool import get_driver
+from orchestrator.app.secret_scanner import redact_content
 
 logger = logging.getLogger(__name__)
 _audit = SecurityAuditLogger()
@@ -120,6 +121,20 @@ def _resolve_principal(
 def _require_admin(principal: SecurityPrincipal) -> None:
     if not principal.is_admin:
         raise HTTPException(status_code=403, detail="admin role required")
+
+
+_TENANT_PARAM_TOKEN = "$tenant_id"
+
+
+def enforce_cypher_tenant_scope(query: str, tenant_id: str) -> None:
+    if tenant_id == "*":
+        return
+    if not tenant_id or _TENANT_PARAM_TOKEN not in query:
+        raise ValueError(
+            "Cypher query must reference $tenant_id parameter for "
+            "tenant-scoped execution. Unscoped admin queries risk "
+            "cross-tenant data leakage."
+        )
 
 
 def _tenant_clause(alias: str = "n") -> str:
@@ -415,12 +430,17 @@ async def execute_cypher(
 
     tenant_id = principal.team
 
+    try:
+        enforce_cypher_tenant_scope(request.query, tenant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     _audit.log(AuditEvent(
         action=AuditAction.QUERY_EXECUTE,
         tenant_id=tenant_id,
         principal=f"{principal.team}/{principal.role}",
         resource="cypher:direct",
-        detail=request.query[:200],
+        detail=redact_content(request.query[:200]),
     ))
 
     driver = get_driver()

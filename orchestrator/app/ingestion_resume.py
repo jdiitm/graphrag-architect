@@ -4,6 +4,23 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Protocol
 
+_STATUS_STORE_HOLDER: Dict[str, Optional["IngestionStatusStore"]] = {"active": None}
+
+
+def set_active_status_store(store: "IngestionStatusStore") -> None:
+    _STATUS_STORE_HOLDER["active"] = store
+
+
+def get_active_status_store() -> Optional["IngestionStatusStore"]:
+    return _STATUS_STORE_HOLDER["active"]
+
+
+async def cleanup_active_status_store(max_age_seconds: int = 86400) -> int:
+    store = _STATUS_STORE_HOLDER["active"]
+    if store is None:
+        return 0
+    return await store.cleanup(max_age_seconds)
+
 
 @dataclass
 class IngestionStatus:

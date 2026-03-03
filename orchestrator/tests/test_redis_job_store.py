@@ -55,8 +55,10 @@ def test_mark_running(redis_store, mock_redis):
     async def _run():
         job = await redis_store.create()
         mock_redis.get.return_value = job.model_dump_json()
+        mock_redis.eval = AsyncMock(return_value=1)
         await redis_store.mark_running(job.job_id)
-        assert mock_redis.setex.call_count >= 2
+        mock_redis.eval.assert_called_once()
+        assert mock_redis.eval.call_args[0][3] == "pending"
 
     loop.run_until_complete(_run())
     loop.close()
@@ -67,14 +69,16 @@ def test_complete_stores_result(redis_store, mock_redis):
 
     async def _run():
         job = await redis_store.create()
+        job.status = JobStatus.RUNNING
+        mock_redis.get.return_value = job.model_dump_json()
+        mock_redis.eval = AsyncMock(return_value=1)
         result = QueryResponse(
             answer="test", sources=[], complexity="entity_lookup",
             retrieval_path="vector",
         )
-        mock_redis.get.return_value = job.model_dump_json()
         await redis_store.complete(job.job_id, result)
-        call_args = mock_redis.setex.call_args
-        stored = json.loads(call_args[0][2])
+        mock_redis.eval.assert_called_once()
+        stored = json.loads(mock_redis.eval.call_args[0][4])
         assert stored["status"] == "completed"
 
     loop.run_until_complete(_run())
@@ -86,10 +90,12 @@ def test_fail_stores_error(redis_store, mock_redis):
 
     async def _run():
         job = await redis_store.create()
+        job.status = JobStatus.RUNNING
         mock_redis.get.return_value = job.model_dump_json()
+        mock_redis.eval = AsyncMock(return_value=1)
         await redis_store.fail(job.job_id, "boom")
-        call_args = mock_redis.setex.call_args
-        stored = json.loads(call_args[0][2])
+        mock_redis.eval.assert_called_once()
+        stored = json.loads(mock_redis.eval.call_args[0][4])
         assert stored["status"] == "failed"
         assert stored["error"] == "boom"
 

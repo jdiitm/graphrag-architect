@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from orchestrator.app.secret_scanner import redact_content as _redact_content_secrets
+
 _audit_logger = logging.getLogger("graphrag.security.audit")
 _REDACT_KEYS = ("token", "secret", "password", "api_key", "key")
 
@@ -43,15 +45,19 @@ class SecurityAuditLogger:
         self._buffer: List[AuditEvent] = []
 
     def log(self, event: AuditEvent) -> None:
+        redacted_meta = {
+            k: _redact_content_secrets(str(v)) if isinstance(v, str) else v
+            for k, v in event.metadata.items()
+        }
         entry = {
             "action": event.action.value,
             "tenant_id": event.tenant_id,
             "principal": event.principal,
             "resource": event.resource,
-            "detail": event.detail,
+            "detail": _redact_content_secrets(event.detail),
             "outcome": event.outcome,
             "timestamp": event.timestamp,
-            **event.metadata,
+            **redacted_meta,
         }
         self._logger.info(json.dumps(entry, default=str))
         self._buffer.append(event)

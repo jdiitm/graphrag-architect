@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from typing import (
@@ -304,19 +305,21 @@ def build_fulltext_fallback_cypher(
 
 
 _EMBEDDING_STATE: Dict[str, Any] = {"cfg": None, "client": None}
+_EMBEDDING_STATE_LOCK = threading.Lock()
 
 
 def _get_embedding_resources() -> Tuple[Optional[EmbeddingConfig], Any]:
-    if _EMBEDDING_STATE["cfg"] is None:
-        _EMBEDDING_STATE["cfg"] = EmbeddingConfig.from_env()
-    cfg = _EMBEDDING_STATE["cfg"]
-    if (
-        _EMBEDDING_STATE["client"] is None
-        and cfg.provider == "openai"
-        and _OPENAI_MODULE is not None
-    ):
-        _EMBEDDING_STATE["client"] = _OPENAI_MODULE.AsyncOpenAI()
-    return cfg, _EMBEDDING_STATE["client"]
+    with _EMBEDDING_STATE_LOCK:
+        if _EMBEDDING_STATE["cfg"] is None:
+            _EMBEDDING_STATE["cfg"] = EmbeddingConfig.from_env()
+        cfg = _EMBEDDING_STATE["cfg"]
+        if (
+            _EMBEDDING_STATE["client"] is None
+            and cfg.provider == "openai"
+            and _OPENAI_MODULE is not None
+        ):
+            _EMBEDDING_STATE["client"] = _OPENAI_MODULE.AsyncOpenAI()
+        return cfg, _EMBEDDING_STATE["client"]
 
 
 async def _raw_embed_query(text: str) -> Optional[List[float]]:
@@ -465,12 +468,26 @@ def _context_classification_enabled() -> bool:
     return os.environ.get("CLASSIFY_CONTEXT_ENABLED", "false").lower() == "true"
 
 
+_CONTEXT_CLASSIFICATION_MAX_CHARS = 20_000
+
+
 def _serialize_context_for_classification(
     context: List[Dict[str, Any]],
 ) -> str:
-    return " ".join(
-        str(v) for item in context for v in item.values()
-    )
+    parts: list[str] = []
+    total = 0
+    for item in context:
+        for v in item.values():
+            chunk = str(v)
+            remaining = _CONTEXT_CLASSIFICATION_MAX_CHARS - total
+            if remaining <= 0:
+                return " ".join(parts)
+            if len(chunk) > remaining:
+                parts.append(chunk[:remaining])
+                return " ".join(parts)
+            parts.append(chunk)
+            total += len(chunk) + 1
+    return " ".join(parts)
 
 
 def _strip_context_values(
@@ -1033,7 +1050,9 @@ def _store_in_semantic_cache(
         complexity=complexity,
         acl_key=acl_key,
     )
-    _SEMANTIC_CACHE.notify_complete(query_embedding, acl_key=acl_key)
+    _SEMANTIC_CACHE.notify_complete(
+        query_embedding, acl_key=acl_key, tenant_id=tenant_id,
+    )
 
 
 async def cypher_retrieve(state: QueryState) -> Dict[str, Any]:
@@ -1066,6 +1085,7 @@ async def cypher_retrieve(state: QueryState) -> Dict[str, Any]:
                             _SEMANTIC_CACHE.notify_complete(
                                 query_embedding, failed=True,
                                 acl_key=acl_cache_key,
+                                tenant_id=tenant_id,
                             )
                         return {
                             "cypher_query": "",
@@ -1103,6 +1123,7 @@ async def cypher_retrieve(state: QueryState) -> Dict[str, Any]:
                     _SEMANTIC_CACHE.notify_complete(
                         query_embedding, failed=True,
                         acl_key=acl_cache_key,
+                        tenant_id=tenant_id,
                     )
                 raise
         finally:

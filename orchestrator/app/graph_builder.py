@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import logging
 import os
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -105,18 +106,23 @@ class _ASTPoolHolder:
     instance: Optional[concurrent.futures.ProcessPoolExecutor] = None
 
 
+_ast_pool_lock = threading.Lock()
+
+
 def _get_process_pool() -> concurrent.futures.ProcessPoolExecutor:
-    if _ASTPoolHolder.instance is None:
-        _ASTPoolHolder.instance = concurrent.futures.ProcessPoolExecutor(
-            max_workers=_PROCESS_POOL_MAX_WORKERS,
-        )
-    return _ASTPoolHolder.instance
+    with _ast_pool_lock:
+        if _ASTPoolHolder.instance is None:
+            _ASTPoolHolder.instance = concurrent.futures.ProcessPoolExecutor(
+                max_workers=_PROCESS_POOL_MAX_WORKERS,
+            )
+        return _ASTPoolHolder.instance
 
 
 def _shutdown_process_pool() -> None:
-    if _ASTPoolHolder.instance is not None:
-        _ASTPoolHolder.instance.shutdown(wait=False)
-        _ASTPoolHolder.instance = None
+    with _ast_pool_lock:
+        if _ASTPoolHolder.instance is not None:
+            _ASTPoolHolder.instance.shutdown(wait=False)
+            _ASTPoolHolder.instance = None
 
 
 def shutdown_ast_pool() -> None:
@@ -295,14 +301,19 @@ class _ContainerHolder:
     value: AppContainer | None = None
 
 
+_container_lock = threading.Lock()
+
+
 def set_container(container: AppContainer | None) -> None:
-    _ContainerHolder.value = container
+    with _container_lock:
+        _ContainerHolder.value = container
 
 
 def get_container() -> AppContainer:
-    if _ContainerHolder.value is None:
-        _ContainerHolder.value = AppContainer.from_env()
-    return _ContainerHolder.value
+    with _container_lock:
+        if _ContainerHolder.value is None:
+            _ContainerHolder.value = AppContainer.from_env()
+        return _ContainerHolder.value
 
 
 def _build_extractor() -> ServiceExtractor:
@@ -313,71 +324,88 @@ class _VectorStoreHolder:
     value: Any = None
 
 
+_vector_store_lock = threading.Lock()
+
+
 class _MutationPublisherHolder:
     value: Optional[KafkaMutationPublisher] = None
 
 
+_mutation_publisher_lock = threading.Lock()
+
+
 def _get_mutation_publisher() -> Optional[KafkaMutationPublisher]:
-    if _MutationPublisherHolder.value is None:
-        brokers = os.environ.get("KAFKA_BROKERS", "")
-        if not brokers:
-            return None
-        topic = os.environ.get(
-            "VECTOR_SYNC_KAFKA_TOPIC", "graph.mutations",
-        )
-        from orchestrator.app.mutation_publisher import LoggingMutationTransport
-        transport = LoggingMutationTransport()
-        _MutationPublisherHolder.value = KafkaMutationPublisher(
-            transport=transport,
-            topic=topic,
-        )
-    return _MutationPublisherHolder.value
+    with _mutation_publisher_lock:
+        if _MutationPublisherHolder.value is None:
+            brokers = os.environ.get("KAFKA_BROKERS", "")
+            if not brokers:
+                return None
+            topic = os.environ.get(
+                "VECTOR_SYNC_KAFKA_TOPIC", "graph.mutations",
+            )
+            from orchestrator.app.mutation_publisher import LoggingMutationTransport
+            transport = LoggingMutationTransport()
+            _MutationPublisherHolder.value = KafkaMutationPublisher(
+                transport=transport,
+                topic=topic,
+            )
+        return _MutationPublisherHolder.value
 
 
 def get_vector_store() -> Any:
-    if _VectorStoreHolder.value is None:
-        vs_cfg = VectorStoreConfig.from_env()
-        _VectorStoreHolder.value = create_vector_store(
-            backend=vs_cfg.backend,
-            url=vs_cfg.qdrant_url,
-            api_key=vs_cfg.qdrant_api_key,
-            pool_size=vs_cfg.pool_size,
-            deployment_mode=vs_cfg.deployment_mode,
-            shard_by_tenant=vs_cfg.shard_by_tenant,
-        )
-    return _VectorStoreHolder.value
+    with _vector_store_lock:
+        if _VectorStoreHolder.value is None:
+            vs_cfg = VectorStoreConfig.from_env()
+            _VectorStoreHolder.value = create_vector_store(
+                backend=vs_cfg.backend,
+                url=vs_cfg.qdrant_url,
+                api_key=vs_cfg.qdrant_api_key,
+                pool_size=vs_cfg.pool_size,
+                deployment_mode=vs_cfg.deployment_mode,
+                shard_by_tenant=vs_cfg.shard_by_tenant,
+            )
+        return _VectorStoreHolder.value
 
 
 class _RedisHolder:
     value: Any = None
 
 
+_redis_lock = threading.Lock()
+
+
 def _get_redis_conn() -> Any:
-    if _RedisHolder.value is not None:
+    with _redis_lock:
+        if _RedisHolder.value is not None:
+            return _RedisHolder.value
+        from orchestrator.app.config import RedisConfig
+        redis_cfg = RedisConfig.from_env()
+        if not redis_cfg.url:
+            return None
+        from orchestrator.app.redis_client import create_async_redis
+        _RedisHolder.value = create_async_redis(
+            redis_cfg.url, password=redis_cfg.password, db=redis_cfg.db,
+        )
         return _RedisHolder.value
-    from orchestrator.app.config import RedisConfig
-    redis_cfg = RedisConfig.from_env()
-    if not redis_cfg.url:
-        return None
-    from orchestrator.app.redis_client import create_async_redis
-    _RedisHolder.value = create_async_redis(
-        redis_cfg.url, password=redis_cfg.password, db=redis_cfg.db,
-    )
-    return _RedisHolder.value
 
 
 class _IngestionLockHolder:
     value: Any = None
 
 
+_ingestion_lock_lock = threading.Lock()
+
+
 def get_ingestion_lock() -> Any:
-    if _IngestionLockHolder.value is None:
-        _IngestionLockHolder.value = create_ingestion_lock()
-    return _IngestionLockHolder.value
+    with _ingestion_lock_lock:
+        if _IngestionLockHolder.value is None:
+            _IngestionLockHolder.value = create_ingestion_lock()
+        return _IngestionLockHolder.value
 
 
 def set_ingestion_lock(lock: Any) -> None:
-    _IngestionLockHolder.value = lock
+    with _ingestion_lock_lock:
+        _IngestionLockHolder.value = lock
 
 
 @asynccontextmanager
@@ -537,11 +565,15 @@ class _GRPCASTClientHolder:
     instance: Optional[GRPCASTClient] = None
 
 
+_grpc_ast_lock = threading.Lock()
+
+
 def _get_grpc_ast_client() -> GRPCASTClient:
-    if _GRPCASTClientHolder.instance is None:
-        cfg = GRPCASTConfig.from_env()
-        _GRPCASTClientHolder.instance = GRPCASTClient(config=cfg)
-    return _GRPCASTClientHolder.instance
+    with _grpc_ast_lock:
+        if _GRPCASTClientHolder.instance is None:
+            cfg = GRPCASTConfig.from_env()
+            _GRPCASTClientHolder.instance = GRPCASTClient(config=cfg)
+        return _GRPCASTClientHolder.instance
 
 
 def _grpc_ast_endpoint_configured() -> bool:
