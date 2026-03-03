@@ -68,6 +68,7 @@ from orchestrator.app.tenant_admin_api import (
 from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.tenant_security import TenantScopeVerifier
 from orchestrator.app.token_bucket import create_rate_limiter
+from orchestrator.app.vector_sync_outbox import validate_production_sync_mode
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,7 @@ async def _kafka_ingest_callback(
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ProductionConfigValidator.from_env().validate_production_invariants()
+    validate_production_sync_mode()
     deployment_mode = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
     TenantScopeVerifier(TemplateCatalog()).enforce_startup(deployment_mode)
     auth = _validate_startup_security()

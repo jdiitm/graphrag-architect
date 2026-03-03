@@ -262,7 +262,7 @@ class TestDurableSpilloverErrorHandling:
         ]
         spillover_fn(events)
 
-        assert len(spillover_fn.pending) == 0
+        assert len(spillover_fn.pending) == 1
 
     def test_spillover_outside_event_loop_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         from orchestrator.app.vector_sync_outbox import VectorSyncEvent

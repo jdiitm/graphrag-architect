@@ -209,13 +209,13 @@ def create_durable_spillover_fn(
             loop = asyncio.get_running_loop()
             for event in events:
                 loop.create_task(store.write_event(event))
+            pending.clear()
         except RuntimeError:
             logger.warning(
                 "No running event loop for durable spillover; "
                 "%d events buffered in pending list",
                 len(events),
             )
-        pending.clear()
 
     _spillover.pending = pending  # type: ignore[attr-defined]
     return _spillover
