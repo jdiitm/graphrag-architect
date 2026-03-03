@@ -158,6 +158,14 @@ class ClaimableOutboxStore(OutboxStore, Protocol):
     async def release_expired_claims(self) -> int: ...
 
 
+@runtime_checkable
+class VersionFenceStore(Protocol):
+    async def get_version_fence(self, fence_key: str, tenant_id: str = "") -> int: ...
+    async def update_version_fence(
+        self, fence_key: str, version: int, tenant_id: str = "",
+    ) -> None: ...
+
+
 class VectorSyncOutbox:
     def __init__(self) -> None:
         self._pending: OrderedDict[str, VectorSyncEvent] = OrderedDict()
@@ -337,6 +345,7 @@ class RedisOutboxStore:
     _KEY_PREFIX = "graphrag:vecoutbox:"
     _INDEX_KEY = "graphrag:vecoutbox:pending"
     _DEDUP_PREFIX = "graphrag:vecoutbox:dedup:"
+    _FENCE_PREFIX = "graphrag:vecoutbox:fence:"
 
     _CLAIM_LUA_SCRIPT = """
 local index_key = KEYS[1]
@@ -575,6 +584,23 @@ return 1
                 released += 1
         return released
 
+    async def get_version_fence(self, fence_key: str, tenant_id: str = "") -> int:
+        redis_key = f"{self._FENCE_PREFIX}{tenant_id}:{fence_key}"
+        raw = await self._redis.get(redis_key)
+        if raw is None:
+            return -1
+        if isinstance(raw, bytes):
+            return int(raw.decode())
+        return int(raw)
+
+    async def update_version_fence(
+        self, fence_key: str, version: int, tenant_id: str = "",
+    ) -> None:
+        redis_key = f"{self._FENCE_PREFIX}{tenant_id}:{fence_key}"
+        current = await self.get_version_fence(fence_key, tenant_id=tenant_id)
+        if version > current:
+            await self._redis.set(redis_key, str(version))
+
 
 class Neo4jOutboxStore:
     _LOAD_BATCH_LIMIT = 100
@@ -635,6 +661,15 @@ class Neo4jOutboxStore:
         "SET e.status = 'pending', e.claimed_by = NULL, "
         "    e.lease_expires_at = NULL "
         "RETURN count(e) AS released"
+    )
+    _GET_FENCE_QUERY = (
+        "MATCH (f:OutboxVersionFence {fence_key: $fence_key, tenant_id: $tenant_id}) "
+        "RETURN f.version AS version"
+    )
+    _UPSERT_FENCE_QUERY = (
+        "MERGE (f:OutboxVersionFence {fence_key: $fence_key, tenant_id: $tenant_id}) "
+        "ON CREATE SET f.version = $version "
+        "ON MATCH SET f.version = CASE WHEN f.version < $version THEN $version ELSE f.version END"
     )
 
     def __init__(self, driver: Any) -> None:
@@ -807,6 +842,46 @@ class Neo4jOutboxStore:
             return int(records[0].get("released", 0))
         return 0
 
+    async def get_version_fence(self, fence_key: str, tenant_id: str = "") -> int:
+        async with self._driver.session(default_access_mode="READ") as session:
+            records = await session.execute_read(
+                self._get_fence_tx, fence_key=fence_key, tenant_id=tenant_id,
+            )
+        if records:
+            return int(records[0].get("version", -1))
+        return -1
+
+    @staticmethod
+    async def _get_fence_tx(tx: Any, fence_key: str, tenant_id: str) -> list[Any]:
+        result = await tx.run(
+            Neo4jOutboxStore._GET_FENCE_QUERY,
+            fence_key=fence_key,
+            tenant_id=tenant_id,
+        )
+        return [record.data() async for record in result]
+
+    async def update_version_fence(
+        self, fence_key: str, version: int, tenant_id: str = "",
+    ) -> None:
+        async with self._driver.session(default_access_mode="WRITE") as session:
+            await session.execute_write(
+                self._upsert_fence_tx,
+                fence_key=fence_key,
+                version=version,
+                tenant_id=tenant_id,
+            )
+
+    @staticmethod
+    async def _upsert_fence_tx(
+        tx: Any, fence_key: str, version: int, tenant_id: str,
+    ) -> None:
+        await tx.run(
+            Neo4jOutboxStore._UPSERT_FENCE_QUERY,
+            fence_key=fence_key,
+            version=version,
+            tenant_id=tenant_id,
+        )
+
     @staticmethod
     async def _release_expired_tx(tx: Any, now: float) -> list[Any]:
         result = await tx.run(
@@ -861,7 +936,13 @@ class DurableOutboxDrainer:
         processed = 0
         for event in pending:
             fence_key = self._event_fence_key(event)
+            tenant_id = self._event_tenant_id(event)
             latest = self._latest_version_by_key.get(fence_key, -1)
+            if isinstance(self._store, VersionFenceStore):
+                persisted = await self._store.get_version_fence(
+                    fence_key, tenant_id=tenant_id,
+                )
+                latest = max(latest, persisted)
             if event.version < latest:
                 await self._finalize_event(event.event_id)
                 processed += 1
@@ -876,6 +957,10 @@ class DurableOutboxDrainer:
                         event.collection, event.pruned_ids,
                     )
                 self._latest_version_by_key[fence_key] = event.version
+                if isinstance(self._store, VersionFenceStore):
+                    await self._store.update_version_fence(
+                        fence_key, event.version, tenant_id=tenant_id,
+                    )
                 await self._finalize_event(event.event_id)
                 processed += 1
             except Exception as exc:
@@ -905,3 +990,12 @@ class DurableOutboxDrainer:
             vector_ids = sorted(str(getattr(v, "id", "")) for v in event.vectors)
             return f"{event.collection}:upsert:{','.join(vector_ids)}"
         return f"{event.collection}:{event.operation}:{','.join(sorted(event.pruned_ids))}"
+
+    @staticmethod
+    def _event_tenant_id(event: VectorSyncEvent) -> str:
+        if event.operation == "upsert" and event.vectors:
+            first = event.vectors[0]
+            metadata = getattr(first, "metadata", {})
+            if isinstance(metadata, dict):
+                return str(metadata.get("tenant_id", ""))
+        return ""

@@ -18,6 +18,7 @@ from typing import (
     Set,
     Tuple,
     TypeVar,
+    cast,
 )
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -126,6 +127,22 @@ async def _execute_read_tx(
 
 _query_logger = logging.getLogger(__name__)
 _SEC_AUDIT = SecurityAuditLogger()
+class _NoopSubgraphCache:
+    def get(self, key: str) -> Optional[List[Any]]:
+        _ = key
+        return cast(Optional[List[Any]], None)
+
+    def put(
+        self,
+        key: str,
+        value: list[Any],
+        node_ids: Optional[Set[str]] = None,
+    ) -> None:
+        _ = (key, value, node_ids)
+
+    def advance_generation(self) -> int:
+        return 0
+
 
 _ROUTE_MAP = {
     QueryComplexity.ENTITY_LOOKUP: "vector",
@@ -147,7 +164,7 @@ def _safe_create_subgraph_cache() -> Any:
             "Subgraph cache initialization failed; using in-memory fallback",
             exc_info=True,
         )
-        return None
+        return _NoopSubgraphCache()
 
 
 def _safe_create_semantic_cache() -> Any:
@@ -162,14 +179,16 @@ def _safe_create_semantic_cache() -> Any:
 
 
 def _safe_create_vector_store() -> Any:
+    cfg = VectorStoreConfig.from_env()
     try:
-        cfg = VectorStoreConfig.from_env()
         return create_vector_store(
             backend=cfg.backend, url=cfg.qdrant_url, api_key=cfg.qdrant_api_key,
             pool_size=cfg.pool_size, deployment_mode=cfg.deployment_mode,
             shard_by_tenant=cfg.shard_by_tenant,
         )
     except Exception:
+        if cfg.deployment_mode == "production":
+            raise
         _query_logger.warning(
             "Vector store initialization failed; using in-memory fallback",
             exc_info=True,
