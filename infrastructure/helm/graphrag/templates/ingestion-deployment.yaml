@@ -27,9 +27,21 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Release.Name }}-secrets
+          {{- if .Values.tls.enabled }}
+          volumeMounts:
+            - name: ingestion-tls
+              mountPath: /etc/tls
+              readOnly: true
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
               port: health
             initialDelaySeconds: 10
             periodSeconds: 15
+      {{- if .Values.tls.enabled }}
+      volumes:
+        - name: ingestion-tls
+          secret:
+            secretName: ingestion-tls
+      {{- end }}
