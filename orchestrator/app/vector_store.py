@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, cast, runtime_checkable
 from uuid import UUID
@@ -26,6 +27,20 @@ class SearchResult:
     id: str
     score: float
     metadata: Dict[str, Any]
+
+
+_COLL_SUFFIX_SANITIZER = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def resolve_collection_name(
+    base_collection: str,
+    tenant_id: str,
+    per_tenant_collection: bool,
+) -> str:
+    if not per_tenant_collection or not tenant_id:
+        return base_collection
+    safe_tenant = _COLL_SUFFIX_SANITIZER.sub("_", tenant_id)
+    return f"{base_collection}_{safe_tenant}"
 
 
 def _cosine_similarity(a: List[float], b: List[float]) -> float:

@@ -118,20 +118,23 @@ class TestUnifiedPayloadFiltering:
         assert len(results) == 2
 
 
-class TestResolveCollectionNameRemoved:
+class TestResolveCollectionNameSupport:
 
-    def test_resolve_collection_name_no_longer_exported(self) -> None:
+    def test_resolve_collection_name_is_exported(self) -> None:
         from orchestrator.app import vector_store
-        assert not hasattr(vector_store, "resolve_collection_name"), (
-            "resolve_collection_name must be removed — per-tenant Qdrant "
-            "collections cause OOM at scale. Use payload filtering."
-        )
+        assert hasattr(vector_store, "resolve_collection_name")
 
 
 class TestGraphBuilderUnifiedCollection:
 
-    def test_resolve_vector_collection_always_returns_base(self) -> None:
+    def test_resolve_vector_collection_defaults_to_base(self) -> None:
         from orchestrator.app.graph_builder import resolve_vector_collection
         assert resolve_vector_collection("acme") == "service_embeddings"
         assert resolve_vector_collection("") == "service_embeddings"
         assert resolve_vector_collection(None) == "service_embeddings"
+
+    def test_resolve_vector_collection_can_be_tenant_scoped(self, monkeypatch) -> None:
+        from orchestrator.app.graph_builder import resolve_vector_collection
+
+        monkeypatch.setenv("QDRANT_PER_TENANT_COLLECTION", "true")
+        assert resolve_vector_collection("acme") == "service_embeddings_acme"

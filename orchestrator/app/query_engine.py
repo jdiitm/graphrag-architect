@@ -99,7 +99,12 @@ from orchestrator.app.subgraph_cache import (
 )
 from orchestrator.app.telemetry_ports import get_metrics_port, get_tracing_port
 from orchestrator.app.tombstone_filter import filter_tombstoned_results
-from orchestrator.app.vector_store import SearchResult, VectorDegradedError, create_vector_store
+from orchestrator.app.vector_store import (
+    SearchResult,
+    VectorDegradedError,
+    create_vector_store,
+    resolve_collection_name,
+)
 
 _OPENAI_MODULE: Any = None
 try:
@@ -180,6 +185,14 @@ _VS_CFG = VectorStoreConfig.from_env()
 _VECTOR_STORE = _safe_create_vector_store()
 
 _VECTOR_COLLECTION = "service_embeddings"
+
+
+def _collection_for_tenant(tenant_id: str = "") -> str:
+    return resolve_collection_name(
+        base_collection=_VECTOR_COLLECTION,
+        tenant_id=tenant_id,
+        per_tenant_collection=_VS_CFG.per_tenant_collection,
+    )
 
 _GLOBAL_CB_CFG = CircuitBreakerConfig(
     failure_threshold=5, recovery_timeout=60.0, half_open_max_calls=1,
@@ -751,16 +764,17 @@ async def _fetch_candidates_with_embedding(
 ) -> List[Any]:
     limit = state.get("max_results", 10)
     tenant_id = state.get("tenant_id", "")
+    collection = _collection_for_tenant(tenant_id)
 
     if query_embedding is not None:
         if tenant_id:
             results = await _VECTOR_STORE.search_with_tenant(
-                _VECTOR_COLLECTION, query_embedding,
+                collection, query_embedding,
                 tenant_id=tenant_id, limit=limit,
             )
         else:
             results = await _VECTOR_STORE.search(
-                _VECTOR_COLLECTION, query_embedding, limit=limit,
+                collection, query_embedding, limit=limit,
             )
         candidates = _search_results_to_dicts(results)
         return await filter_tombstoned_results(driver, candidates, tenant_id)
