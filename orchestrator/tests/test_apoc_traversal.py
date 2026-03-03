@@ -73,6 +73,37 @@ class TestApocQueryTenantIsolation:
         node_query = tx.run.call_args_list[0][0][0]
         assert "$is_admin" in node_query
         assert "$acl_labels" in node_query
+        assert "labelFilter: $apoc_label_filter" in node_query
+        node_kwargs = tx.run.call_args_list[0][1]
+        assert node_kwargs["apoc_label_filter"] == "+Team_platform|+Ns_prod"
+
+    @pytest.mark.asyncio
+    async def test_admin_acl_uses_empty_apoc_label_filter(self) -> None:
+        from orchestrator.app.agentic_traversal import apoc_path_expansion
+
+        tx = _mock_tx_two_queries([], [])
+        await apoc_path_expansion(
+            tx,
+            source_id="auth-service",
+            tenant_id="t1",
+            acl_params={"is_admin": True, "acl_labels": []},
+        )
+        node_kwargs = tx.run.call_args_list[0][1]
+        assert node_kwargs["apoc_label_filter"] == ""
+
+    @pytest.mark.asyncio
+    async def test_missing_acl_labels_defaults_to_deny_all_filter(self) -> None:
+        from orchestrator.app.agentic_traversal import apoc_path_expansion
+
+        tx = _mock_tx_two_queries([], [])
+        await apoc_path_expansion(
+            tx,
+            source_id="auth-service",
+            tenant_id="t1",
+            acl_params={"is_admin": False, "acl_labels": []},
+        )
+        node_kwargs = tx.run.call_args_list[0][1]
+        assert node_kwargs["apoc_label_filter"] == "-*"
 
     @pytest.mark.asyncio
     async def test_edge_query_filters_tombstoned(self) -> None:
