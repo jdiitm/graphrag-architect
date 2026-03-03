@@ -1,0 +1,43 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: orchestrator-pdb
+  namespace: graphrag
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: orchestrator
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ingestion-worker-pdb
+  namespace: graphrag
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ingestion-worker
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kafka-pdb
+  namespace: graphrag
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: kafka
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: neo4j-pdb
+  namespace: graphrag
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: neo4j

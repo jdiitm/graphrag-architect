@@ -28,10 +28,14 @@ spec:
                 - /bin/bash
                 - -c
                 - |
+                  set -euo pipefail
+                  backup_dir="/backups/$(date -u +%Y%m%dT%H%M%SZ)"
+                  mkdir -p "${backup_dir}"
                   neo4j-admin database backup \
-                    --to-path=/backups \
+                    --to-path="${backup_dir}" \
                     --from=neo4j-0.neo4j-headless.graphrag.svc.cluster.local:6362 \
                     neo4j
+                  test -n "$(ls -A "${backup_dir}")"
               env:
                 - name: NEO4J_PASSWORD
                   valueFrom:
