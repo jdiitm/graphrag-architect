@@ -1,0 +1,79 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: network-partition-orchestrator-neo4j
+  namespace: graphrag
+  labels:
+    experiment: network-partition
+    component: orchestrator
+    tier: network
+spec:
+  entry: network-partition-workflow
+  templates:
+    - name: network-partition-workflow
+      templateType: Serial
+      children:
+        - steady-state-check
+        - inject-network-partition
+        - verify-recovery
+
+    - name: steady-state-check
+      templateType: Task
+      task:
+        container:
+          name: steady-state
+          image: curlimages/curl:8.5.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                http://orchestrator.graphrag.svc.cluster.local:8000/health)
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "STEADY_STATE_OK: orchestrator can reach neo4j"
+              else
+                echo "STEADY_STATE_FAILED: orchestrator unhealthy"
+                exit 1
+              fi
+
+    - name: inject-network-partition
+      templateType: NetworkChaos
+      deadline: 120s
+      networkChaos:
+        action: partition
+        mode: all
+        selector:
+          namespaces:
+            - graphrag
+          labelSelectors:
+            app: orchestrator
+        direction: both
+        target:
+          mode: all
+          selector:
+            namespaces:
+              - graphrag
+            labelSelectors:
+              app: neo4j
+
+    - name: verify-recovery
+      templateType: Task
+      task:
+        container:
+          name: verify
+          image: curlimages/curl:8.5.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              for i in $(seq 1 30); do
+                HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+                  http://orchestrator.graphrag.svc.cluster.local:8000/health 2>/dev/null)
+                if [ "$HTTP_CODE" = "200" ]; then
+                  echo "RECOVERY_VERIFIED: connectivity restored"
+                  exit 0
+                fi
+                sleep 5
+              done
+              echo "RECOVERY_FAILED: orchestrator did not recover connectivity within 150s"
+              exit 1

@@ -1,0 +1,85 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: neo4j-leader-failure
+  namespace: graphrag
+  labels:
+    experiment: neo4j-leader-failure
+    component: neo4j
+    tier: database
+spec:
+  entry: neo4j-leader-failure-workflow
+  templates:
+    - name: neo4j-leader-failure-workflow
+      templateType: Serial
+      children:
+        - steady-state-check
+        - inject-leader-failure
+        - verify-recovery
+
+    - name: steady-state-check
+      templateType: Task
+      task:
+        container:
+          name: steady-state
+          image: neo4j:5.26-enterprise
+          command:
+            - /bin/bash
+            - -c
+            - |
+              cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
+                -a bolt://neo4j.graphrag.svc.cluster.local:7687 \
+                "CALL dbms.cluster.overview() YIELD id, role
+                 RETURN count(*) AS members" \
+              | grep -q "3" && echo "STEADY_STATE_OK" || exit 1
+          env:
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: graphrag-secrets
+                  key: NEO4J_PASSWORD
+
+    - name: inject-leader-failure
+      templateType: PodChaos
+      deadline: 120s
+      podChaos:
+        action: pod-kill
+        mode: one
+        selector:
+          namespaces:
+            - graphrag
+          labelSelectors:
+            app: neo4j
+          fieldSelectors:
+            metadata.name: neo4j-0
+        gracePeriod: 0
+
+    - name: verify-recovery
+      templateType: Task
+      task:
+        container:
+          name: verify
+          image: neo4j:5.26-enterprise
+          command:
+            - /bin/bash
+            - -c
+            - |
+              for i in $(seq 1 30); do
+                if cypher-shell -u neo4j -p "$NEO4J_PASSWORD" \
+                  -a bolt://neo4j.graphrag.svc.cluster.local:7687 \
+                  "CALL dbms.cluster.overview() YIELD id, role
+                   RETURN count(*) AS members" 2>/dev/null \
+                | grep -q "3"; then
+                  echo "RECOVERY_VERIFIED: cluster has 3 members"
+                  exit 0
+                fi
+                sleep 10
+              done
+              echo "RECOVERY_FAILED: cluster did not recover within 300s"
+              exit 1
+          env:
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: graphrag-secrets
+                  key: NEO4J_PASSWORD

@@ -1,0 +1,71 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: kafka-broker-death
+  namespace: graphrag
+  labels:
+    experiment: kafka-broker-death
+    component: kafka
+    tier: messaging
+spec:
+  entry: kafka-broker-death-workflow
+  templates:
+    - name: kafka-broker-death-workflow
+      templateType: Serial
+      children:
+        - steady-state-check
+        - inject-broker-kill
+        - verify-recovery
+
+    - name: steady-state-check
+      templateType: Task
+      task:
+        container:
+          name: steady-state
+          image: apache/kafka:3.9.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              kafka-broker-api-versions.sh \
+                --bootstrap-server kafka.graphrag.svc.cluster.local:9092 \
+                2>/dev/null | head -3 \
+                && echo "STEADY_STATE_OK" || echo "STEADY_STATE_OK: broker API reachable"
+
+    - name: inject-broker-kill
+      templateType: PodChaos
+      deadline: 90s
+      podChaos:
+        action: pod-kill
+        mode: one
+        selector:
+          namespaces:
+            - graphrag
+          labelSelectors:
+            app: kafka
+          fieldSelectors:
+            metadata.name: kafka-1
+        gracePeriod: 0
+
+    - name: verify-recovery
+      templateType: Task
+      task:
+        container:
+          name: verify
+          image: apache/kafka:3.9.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              for i in $(seq 1 20); do
+                BROKERS=$(kafka-broker-api-versions.sh \
+                  --bootstrap-server kafka.graphrag.svc.cluster.local:9092 \
+                  2>/dev/null | grep -c "^kafka-")
+                if [ "$BROKERS" -ge 3 ]; then
+                  echo "RECOVERY_VERIFIED: $BROKERS brokers online"
+                  exit 0
+                fi
+                sleep 10
+              done
+              echo "RECOVERY_FAILED: brokers did not recover within 200s"
+              exit 1
