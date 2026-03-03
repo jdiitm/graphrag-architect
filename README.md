@@ -1,6 +1,8 @@
 # GraphRAG Architect
 
-A production-grade GraphRAG system that analyzes distributed systems by building a knowledge graph from source code, infrastructure manifests, and message broker topologies. It answers multi-hop architectural questions using hybrid Vector + Cypher retrieval over Neo4j.
+A production-grade, multi-tenant GraphRAG system that analyzes distributed systems by building a knowledge graph from source code, infrastructure manifests, and message broker topologies. It answers multi-hop architectural questions using hybrid Vector + Cypher retrieval over Neo4j.
+
+> **4,306 Python tests** | **203 Go tests** | **Pylint 10/10** | **6 P0 security gaps closed** | **22-gap adversarial audit tracked**
 
 For the full system specification — data model, functional requirements, security architecture, SLOs, and roadmap — see [docs/SPEC.md](docs/SPEC.md).
 
@@ -31,7 +33,7 @@ For the full system specification — data model, functional requirements, secur
 
 **Retrieval** — Hybrid VectorCypher approach: keyword classifier routes entity lookups to vector search, single-hop to vector + 1-hop Cypher, multi-hop to agentic iterative Cypher generation, and aggregate queries to DRIFT-inspired hybrid retrieval. LLM synthesizes natural-language answers from graph context.
 
-**Access Control** — Zanzibar-inspired permission filtering: `SecurityPrincipal` resolved from request headers, `CypherPermissionFilter` injects ACL `WHERE` clauses into all Cypher queries at query-time. HMAC request signing between Go workers and Python orchestrator. Dual-key rotation with grace period.
+**Access Control** — Zanzibar-inspired permission filtering: `SecurityPrincipal` resolved from request headers (anonymous requests receive `__anonymous__` sentinel — wildcard bypass eliminated), `CypherPermissionFilter` injects ACL `WHERE` clauses into all Cypher queries at query-time. HMAC request signing between Go workers and Python orchestrator. Dual-key rotation with grace period. Fail-closed rate limiting on Redis failure.
 
 **Observability** — OpenTelemetry distributed tracing across the full pipeline: FastAPI auto-instrumentation, manual spans on all 14 LangGraph DAG nodes, Go spans on Kafka poll/dispatch/process/DLQ/commit, trace context propagation via `traceparent` headers across Go-HTTP-Python boundary. SLO-based error budgets with Prometheus recording rules and 8 Grafana dashboards.
 
@@ -56,19 +58,21 @@ For the full system specification — data model, functional requirements, secur
 
 ```
 graphrag-architect/
-├── orchestrator/                  # Python orchestrator (101 modules, 4,196 tests)
+├── orchestrator/                  # Python orchestrator (94 modules, 4,306 tests)
 │   ├── app/                      # LangGraph DAGs, FastAPI, Neo4j, LLM extraction
 │   │   ├── main.py               # FastAPI app: /ingest, /query, /health, /metrics
 │   │   ├── graph_builder.py      # LangGraph ingestion DAG + streaming pipeline
-│   │   ├── query_engine.py       # Hybrid VectorCypher retrieval
-│   │   ├── access_control.py     # JWT auth, ACL filtering, dual-key rotation
+│   │   ├── query_engine.py       # Hybrid VectorCypher retrieval + token budget enforcement
+│   │   ├── access_control.py     # JWT auth, ACL filtering, dual-key rotation, wildcard elimination
+│   │   ├── prompt_sanitizer.py   # Prompt injection defense + Unicode confusable normalization
 │   │   ├── secret_scanner.py     # Pattern-based secret detection in extraction
-│   │   ├── slo_rules.py          # SLO definitions + Prometheus recording rules
-│   │   ├── vault_provider.py     # HashiCorp Vault secret fetching
+│   │   ├── config.py             # 25+ frozen dataclasses (RedisCacheConfig, RedisOutboxConfig, etc.)
+│   │   ├── cypher_ast.py         # Cypher AST parsing with input size + nesting depth limits
+│   │   ├── token_bucket.py       # Fail-closed rate limiting (Redis + in-memory fallback)
 │   │   ├── gdpr.py               # GDPR data export + erasure endpoints
 │   │   ├── data_residency.py     # Tenant region routing + data residency
 │   │   └── plugins/base.py       # Extensible plugin architecture
-│   ├── tests/                    # 328 test files (unit, e2e, contract, security)
+│   ├── tests/                    # 347 test files (unit, e2e, contract, security)
 │   │   ├── e2e/                  # Testcontainers-based E2E (Kafka → Go → Python → Neo4j)
 │   │   └── contract/             # HTTP API contract verification (Go ↔ Python)
 │   └── requirements.txt
@@ -149,11 +153,11 @@ export PROCESSOR_MODE="kafka"                     # kafka | ast | http
 ### 4. Run tests
 
 ```bash
-# Python tests (4,196 tests)
+# Python tests (4,306 tests)
 source .venv/bin/activate
 python -m pytest orchestrator/tests/ -v
 
-# Go tests (14 packages)
+# Go tests (203 tests across 14 packages)
 cd workers/ingestion && go test ./... -v -race
 ```
 
@@ -166,8 +170,8 @@ The GitHub Actions CI runs 10 jobs on every push and PR:
 | Python lint | pylint | `orchestrator/` |
 | Python type check | mypy --strict | `orchestrator/app/` |
 | Python lint (style) | ruff | `orchestrator/` |
-| Python tests | pytest | 4,196 tests |
-| Go tests | go test -race | 14 packages |
+| Python tests | pytest | 4,306 tests |
+| Go tests | go test -race | 203 tests (14 packages) |
 | Go lint | golangci-lint | `workers/ingestion/` |
 | Secret scanning | gitleaks | Full repo history |
 | Security scanning | Trivy + SBOM | Filesystem + dependencies |

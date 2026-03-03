@@ -10,8 +10,14 @@ generation, and hybrid VectorCypher retrieval.
 **K8s resource:** `orchestrator-deployment.yaml` — 2-5 replicas, HPA on request queue
 depth and CPU (80% target). Exposes port 8000 with Prometheus scrape on `/metrics`.
 
-**Key dependencies:** Neo4j (graph store), Kafka (async ingestion), Redis (caching, rate
-limiting, circuit breaker state), LLM providers (Gemini, Claude).
+**Key dependencies:** Neo4j (graph store), Kafka (async ingestion), Redis (caching via
+`REDIS_CACHE_URL`, outbox/state via `REDIS_OUTBOX_URL` — tiered isolation since PR #272),
+LLM providers (Gemini, Claude).
+
+**Security hardening (PR #272):** Tenant wildcard bypass eliminated (anonymous requests
+receive `__anonymous__` sentinel). Cypher input capped at 64KB. Rate limiter fails closed
+on Redis failure (configurable via `RATE_LIMIT_FAIL_STRATEGY`). Unicode confusable
+normalization in prompt firewall. Token budget enforced at LLM synthesis.
 
 ---
 

@@ -9,7 +9,8 @@
 
 The codebase demonstrates strong engineering discipline — all four quality gates pass cleanly, security mechanisms (Cypher injection defense, ACL enforcement, tenant isolation, prompt injection detection) are multi-layered and hold under adversarial defeat testing, and the data pipeline implements at-least-once delivery with proper DLQ fallback. However, two HIGH-severity infrastructure gaps exist: K8s health probes on ingestion workers bypass the purpose-built health checker, and Kafka intra-cluster traffic runs over PLAINTEXT despite the spec requiring SASL/SCRAM + TLS.
 
-Quality Gates: Pylint 10.00/10, Python 3542/3542 passed, Go 193/193 passed, Go lint: clean
+Quality Gates (at time of audit): Pylint 10.00/10, Python 3542/3542 passed, Go 193/193 passed, Go lint: clean
+Current Gates (March 2026): Pylint 10.00/10, Python 4,306/4,306 passed, Go 203/203 passed, Go lint: clean
 
 ---
 
@@ -170,7 +171,7 @@ The following mechanisms were tested adversarially and found to be correctly imp
 |---|---|---|---|
 | Cypher injection via relationship type | `query_templates.py:268` | Pass `"; DROP CONSTRAINT` as rel_type | **HOLDS** — `ALLOWED_RELATIONSHIP_TYPES` frozenset rejects before f-string formatting |
 | Cypher injection via entity names | `extraction_models.py:9-11` | Pass `foo'; MATCH (n) DELETE n--` as service ID | **HOLDS** — `_SAFE_ENTITY_NAME` regex rejects semicolons, quotes, braces |
-| ACL bypass via anonymous user | `access_control.py:84-85` | Send request with no Authorization header | **HOLDS** — Returns `role=anonymous, team=*, namespace=*`; `CypherPermissionFilter` with `default_deny_untagged=True` restricts to `Team_public` label only |
+| ACL bypass via anonymous user | `access_control.py:84-85` | Send request with no Authorization header | **HOLDS (HARDENED)** — Returns `role=anonymous, team=__anonymous__, namespace=__anonymous__`; wildcard `*` bypass eliminated in PR #272. `CypherPermissionFilter` with `default_deny_untagged=True` restricts scope. `enforce_cypher_tenant_scope` rejects `tenant_id="*"`. |
 | Token verification without secret | `access_control.py:89-93` | Send Bearer token with empty `token_secret` | **HOLDS** — Raises `InvalidTokenError("token provided but no secret configured")` |
 | Auth misconfiguration fail-closed | `query_engine.py:300-303` | Set `AUTH_REQUIRE_TOKENS=true` with empty `AUTH_TOKEN_SECRET` | **HOLDS** — Raises `AuthConfigurationError`, no query execution |
 | Write operation via query path | `cypher_validator.py:57-81` | Submit `MATCH (n) SET n.admin=true RETURN n` | **HOLDS** — Token-based parser detects `SET` keyword at brace_depth 0, raises `CypherValidationError` |
@@ -234,5 +235,13 @@ All findings from this audit have been remediated:
 | Finding 6: Docker Compose Dev Credentials | Low | Informational — dev-only file | N/A |
 
 **Additional hardening (PR #268, March 2026):** Six production-hardening fixes applied — per-level hop decrement in BFS traversal, transactional outbox coupling for vector sync, vector-weighted supernode sampling, exponential backoff with jitter for distributed locks, evaluation endpoint authentication, and NFKC normalization order fix in prompt sanitizer.
+
+**P0 security hardening (PR #272, March 2026):** Six critical security and reliability gaps closed from adversarial architectural audit (22 total gaps identified):
+- **GAP-1:** Tenant wildcard bypass eliminated — `enforce_cypher_tenant_scope` rejects `tenant_id="*"`, `SecurityPrincipal.from_header` returns `__anonymous__` sentinel
+- **GAP-2:** Cypher AST DoS prevention — `MAX_CYPHER_INPUT_LENGTH` (64KB) + `MAX_CALL_NESTING_DEPTH` (10)
+- **GAP-3:** Redis tiered isolation — `RedisCacheConfig` and `RedisOutboxConfig` with dedicated env vars
+- **GAP-4:** Token budget enforcement — `format_context_for_prompt` now called with budget at both LLM synthesis call sites
+- **GAP-5:** Rate limiter fail-closed — `RedisRateLimiter` denies on Redis failure (configurable via `RATE_LIMIT_FAIL_STRATEGY`)
+- **GAP-8:** Unicode homoglyph firewall bypass — confusable-to-ASCII normalization in `ContentFirewall.scan()` and `PromptInjectionClassifier.classify()`
 
 This report is retained as a historical artifact. For current system status, see `docs/SPEC.md` Section 19.

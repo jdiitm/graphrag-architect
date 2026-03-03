@@ -17,7 +17,7 @@ evidence sources, and remediation actions.
 | CC2.1 | Information and communication objectives | OpenAPI spec, runbooks | Implemented | docs/openapi.json, docs/runbooks/ |
 | CC3.1 | Risk assessment objectives | Trivy scanning, gitleaks, SBOM | Implemented | .github/workflows/ci.yml |
 | CC5.1 | Control activities over technology | Network policies, RBAC, Vault | Implemented | infrastructure/k8s/network-policies.yaml |
-| CC6.1 | Logical and physical access controls | JWT auth, tenant isolation, mTLS | Implemented | orchestrator/app/access_control.py |
+| CC6.1 | Logical and physical access controls | JWT auth, tenant isolation (wildcard bypass eliminated — PR #272), mTLS, fail-closed rate limiting | Implemented | orchestrator/app/access_control.py, token_bucket.py |
 | CC6.2 | System authentication | Token-based auth with rotation | Implemented | orchestrator/app/auth.py |
 | CC6.3 | Authorization of access | Role-based access, tenant boundaries | Implemented | orchestrator/app/tenant_isolation.py |
 | CC7.1 | System monitoring and detection | Prometheus alerting, Grafana dashboards | Implemented | infrastructure/grafana/, alerting.yaml |
