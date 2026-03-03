@@ -18,7 +18,16 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
         prometheus.io/path: "/metrics"
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "graphrag-ingestion-worker"
+        vault.hashicorp.com/agent-inject-secret-graphrag: "secret/data/graphrag/credentials"
+        vault.hashicorp.com/agent-inject-template-graphrag: |
+          {{- with secret "secret/data/graphrag/credentials" -}}
+          export NEO4J_PASSWORD="{{ .Data.data.NEO4J_PASSWORD }}"
+          export GOOGLE_API_KEY="{{ .Data.data.GOOGLE_API_KEY }}"
+          {{- end -}}
     spec:
+      serviceAccountName: ingestion-worker
       containers:
         - name: ingestion-worker
           image: graphrag-architect/ingestion-worker:latest
