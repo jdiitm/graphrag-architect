@@ -92,6 +92,101 @@ spec:
           requests:
             storage: 50Gi
 ---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: neo4j-secondary
+  namespace: graphrag
+  labels:
+    app: neo4j
+    role: secondary
+spec:
+  serviceName: neo4j-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app: neo4j
+      role: secondary
+  template:
+    metadata:
+      labels:
+        app: neo4j
+        role: secondary
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "7474"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: neo4j
+          image: neo4j:5.26-enterprise
+          ports:
+            - name: bolt
+              containerPort: 7687
+            - name: http
+              containerPort: 7474
+            - name: discovery
+              containerPort: 5000
+            - name: tx
+              containerPort: 6000
+            - name: routing
+              containerPort: 7688
+          env:
+            - name: NEO4J_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: graphrag-secrets
+                  key: NEO4J_PASSWORD
+            - name: NEO4J_AUTH
+              value: "neo4j/$(NEO4J_PASSWORD)"
+            - name: NEO4J_ACCEPT_LICENSE_AGREEMENT
+              value: "yes"
+            - name: NEO4J_PLUGINS
+              value: '["apoc"]'
+            - name: NEO4J_initial_server_mode__constraint
+              value: SECONDARY
+            - name: NEO4J_server_cluster_system__database__mode
+              value: SECONDARY
+            - name: NEO4J_dbms_cluster_discovery_endpoints
+              value: "neo4j-0.neo4j.graphrag.svc.cluster.local:5000,neo4j-1.neo4j.graphrag.svc.cluster.local:5000,neo4j-2.neo4j.graphrag.svc.cluster.local:5000"
+            - name: NEO4J_dbms_memory_heap_initial__size
+              value: "1g"
+            - name: NEO4J_dbms_memory_heap_max__size
+              value: "2g"
+            - name: NEO4J_dbms_memory_pagecache_size
+              value: "4g"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 4Gi
+            limits:
+              cpu: "2"
+              memory: 8Gi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 50Gi
+---
 apiVersion: v1
 kind: Service
 metadata:
