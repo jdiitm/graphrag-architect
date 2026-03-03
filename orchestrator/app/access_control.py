@@ -42,6 +42,13 @@ class ACLCoverageError(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class KeyRotationConfig:
+    current_key: str
+    previous_key: str
+    overlap_window_seconds: int = 300
+
+
 def sign_token(
     claims: Dict[str, Any],
     secret: str,
@@ -63,6 +70,23 @@ def _verify_token(token: str, secret: str) -> Dict[str, Any]:
         raise InvalidTokenError("token expired") from exc
     except jwt.InvalidTokenError as exc:
         raise InvalidTokenError(f"token invalid: {exc}") from exc
+
+
+def verify_token_with_rotation(
+    token: str, config: KeyRotationConfig
+) -> Dict[str, Any]:
+    try:
+        return _verify_token(token, config.current_key)
+    except InvalidTokenError:
+        pass
+
+    if config.previous_key:
+        try:
+            return _verify_token(token, config.previous_key)
+        except InvalidTokenError:
+            pass
+
+    raise InvalidTokenError("token rejected by all rotation keys")
 
 
 @dataclass(frozen=True)

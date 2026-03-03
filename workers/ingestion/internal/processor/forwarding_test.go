@@ -514,3 +514,65 @@ func TestForwardingProcessor_OptionalHeadersOmitted(t *testing.T) {
 		t.Errorf("commit_sha should be omitted, got %v", *payload.Documents[0].CommitSHA)
 	}
 }
+
+func TestComputeHMACSignature_Deterministic(t *testing.T) {
+	sig1 := processor.ComputeHMACSignature("POST", "/ingest", []byte(`{"docs":[]}`), "1700000000", "nonce-1", "secret")
+	sig2 := processor.ComputeHMACSignature("POST", "/ingest", []byte(`{"docs":[]}`), "1700000000", "nonce-1", "secret")
+	if sig1 != sig2 {
+		t.Errorf("HMAC signatures not deterministic: %s vs %s", sig1, sig2)
+	}
+}
+
+func TestComputeHMACSignature_DifferentInputsDifferentSigs(t *testing.T) {
+	sig1 := processor.ComputeHMACSignature("POST", "/ingest", []byte(`{"a":1}`), "1700000000", "nonce-1", "secret")
+	sig2 := processor.ComputeHMACSignature("POST", "/ingest", []byte(`{"a":2}`), "1700000000", "nonce-1", "secret")
+	if sig1 == sig2 {
+		t.Error("different bodies should produce different signatures")
+	}
+}
+
+func TestForwardingProcessor_SignatureHeaders(t *testing.T) {
+	var gotSig, gotTS, gotNonce string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSig = r.Header.Get("X-Signature")
+		gotTS = r.Header.Get("X-Timestamp")
+		gotNonce = r.Header.Get("X-Nonce")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"committed","entities_extracted":0,"errors":[]}`))
+	}))
+	defer srv.Close()
+
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client(), processor.WithSigningSecret("test-secret"))
+	err := fp.Process(context.Background(), validJob())
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if gotSig == "" {
+		t.Error("X-Signature header missing")
+	}
+	if gotTS == "" {
+		t.Error("X-Timestamp header missing")
+	}
+	if gotNonce == "" {
+		t.Error("X-Nonce header missing")
+	}
+}
+
+func TestForwardingProcessor_NoSignatureWithoutSecret(t *testing.T) {
+	var gotSig string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSig = r.Header.Get("X-Signature")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"committed","entities_extracted":0,"errors":[]}`))
+	}))
+	defer srv.Close()
+
+	fp := processor.NewForwardingProcessor(srv.URL, srv.Client())
+	err := fp.Process(context.Background(), validJob())
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if gotSig != "" {
+		t.Errorf("X-Signature should be absent without secret, got %s", gotSig)
+	}
+}
