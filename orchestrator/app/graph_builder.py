@@ -119,6 +119,22 @@ def _shutdown_process_pool() -> None:
         _ASTPoolHolder.instance = None
 
 
+def shutdown_ast_pool() -> None:
+    _shutdown_process_pool()
+
+
+def flush_coalescing_outbox() -> int:
+    events = _COALESCING_OUTBOX.flush()
+    for event in events:
+        _VECTOR_OUTBOX.enqueue(event)
+    return len(events)
+
+
+def drain_vector_outbox_sync() -> int:
+    events = _VECTOR_OUTBOX.drain_pending()
+    return len(events)
+
+
 def _get_ast_extraction_mode() -> str:
     return ASTExtractionConfig.from_env().mode
 

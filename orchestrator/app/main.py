@@ -34,9 +34,12 @@ from orchestrator.app.gdpr import gdpr_router
 from orchestrator.app.graph_api import router as graph_api_router
 from orchestrator.app.graph_builder import (
     IngestionDegradedError,
+    drain_vector_outbox_sync,
+    flush_coalescing_outbox,
     ingestion_graph,
     initialize_ingestion_graph,
     run_streaming_pipeline,
+    shutdown_ast_pool,
 )
 from orchestrator.app.ingest_models import (
     IngestJobResponse,
@@ -189,6 +192,30 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         drained = await _BACKGROUND_TASKS.drain_all(timeout=10.0)
         if drained:
             logger.info("Drained %d background tasks during shutdown", drained)
+
+        active_tasks: set[asyncio.Task[Any]] = set()
+        active_tasks.update(_ACTIVE_INGEST_TASKS)
+        active_tasks.update(_ACTIVE_QUERY_TASKS)
+        if active_tasks:
+            for task in active_tasks:
+                task.cancel()
+            _, pending = await asyncio.wait(active_tasks, timeout=15.0)
+            if pending:
+                logger.warning(
+                    "Shutdown: %d active tasks did not complete in time",
+                    len(pending),
+                )
+
+        flushed = flush_coalescing_outbox()
+        drained_vector = drain_vector_outbox_sync()
+        if flushed or drained_vector:
+            logger.info(
+                "Shutdown: flushed %d coalescing + %d vector outbox events",
+                flushed, drained_vector,
+            )
+
+        shutdown_ast_pool()
+
         if _STATE.get("kafka_consumer") is not None:
             await _STATE["kafka_consumer"].stop()
             if _STATE.get("kafka_task") is not None:
