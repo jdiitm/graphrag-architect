@@ -30,6 +30,12 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Release.Name }}-secrets
+          {{- if .Values.tls.enabled }}
+          volumeMounts:
+            - name: orchestrator-tls
+              mountPath: /etc/tls
+              readOnly: true
+          {{- end }}
           resources:
             {{- toYaml .Values.orchestrator.resources | nindent 12 }}
           livenessProbe:
@@ -44,3 +50,9 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
+      {{- if .Values.tls.enabled }}
+      volumes:
+        - name: orchestrator-tls
+          secret:
+            secretName: orchestrator-tls
+      {{- end }}

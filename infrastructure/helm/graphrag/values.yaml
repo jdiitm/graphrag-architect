@@ -63,3 +63,4 @@ tls:
   enabled: false
   certManager:
     enabled: false
+    issuerName: graphrag-ca-issuer
