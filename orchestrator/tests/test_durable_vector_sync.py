@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from orchestrator.app.vector_sync_outbox import (
+    ClaimableOutboxStore,
     DurableOutboxDrainer,
     OutboxStore,
     VectorSyncEvent,
@@ -61,14 +62,69 @@ class _FakeOutboxStore:
             self._fences[key] = version
 
 
+class _FakeClaimingStore(_FakeOutboxStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self._queue: list[VectorSyncEvent] = []
+
+    async def write_event(self, event: VectorSyncEvent) -> None:
+        await super().write_event(event)
+        self._queue.append(event)
+
+    async def claim_pending(
+        self, worker_id: str, limit: int, lease_seconds: float,
+    ) -> List[VectorSyncEvent]:
+        _ = (worker_id, lease_seconds)
+        claimed = self._queue[:limit]
+        self._queue = self._queue[limit:]
+        return claimed
+
+    async def mark_completed(self, event_id: str) -> None:
+        _ = event_id
+
+    async def release_claim(self, event_id: str) -> None:
+        _ = event_id
+
+    async def release_expired_claims(self) -> int:
+        return 0
+
+
 class TestOutboxStoreProtocol:
 
     def test_fake_store_satisfies_protocol(self) -> None:
         store = _FakeOutboxStore()
         assert isinstance(store, OutboxStore)
 
+    def test_fake_claiming_store_satisfies_claimable_protocol(self) -> None:
+        store = _FakeClaimingStore()
+        assert isinstance(store, ClaimableOutboxStore)
+
 
 class TestDurableOutboxDrainer:
+    @pytest.mark.asyncio
+    async def test_claimable_store_drains_multiple_batches_per_run(self) -> None:
+        store = _FakeClaimingStore()
+        for i in range(5):
+            await store.write_event(
+                VectorSyncEvent(collection="svc", pruned_ids=[f"id-{i}"]),
+            )
+        mock_vs = AsyncMock()
+        mock_vs.delete = AsyncMock(return_value=1)
+        drainer = DurableOutboxDrainer(
+            store=store,
+            vector_store=mock_vs,
+            max_retries=3,
+            claim_limit=2,
+            max_batches_per_drain=3,
+        )
+
+        processed = await drainer.process_once()
+
+        assert processed == 5
+        assert mock_vs.delete.call_count == 5
+        remaining = await store.load_pending()
+        assert not remaining
+
 
     @pytest.mark.asyncio
     async def test_processes_pending_from_store(self) -> None:
