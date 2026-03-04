@@ -922,8 +922,8 @@ RETURN s.name, s.language, t.name AS topic, p.event_schema
 
 | Property | Specification |
 |---|---|
-| **Chunk Processing** | `graph_builder.py` processes one chunk at a time. Memory: O(chunk_size) not O(total_files). |
-| **Pipeline** | `StreamingIngestionPipeline` reads from `load_directory_chunked()` as a generator. Each chunk: AST parse → LLM extract → validate → commit. |
+| **Chunk Processing** | `graph_builder.py` processes chunks concurrently via `asyncio.gather` with `asyncio.Semaphore` (default 5, env: `INGESTION_CONCURRENCY`). Memory: O(concurrency × chunk_size) not O(total_files). |
+| **Pipeline** | `StreamingIngestionPipeline` reads from `load_directory_stream()` as an async generator. Chunks are dispatched as concurrent tasks, gated by semaphore. Each chunk: AST parse → LLM extract → validate → commit. |
 | **Progress Tracking** | `ExtractionCheckpoint` tracks per-chunk progress for resumable ingestion. |
 | **Go AST Extraction** | CPU-bound AST parsing delegated to Go workers via `/extract-ast`. |
 | **Memory Bound** | `WORKSPACE_MAX_BYTES` (100MB) and `MAX_FILE_SIZE_BYTES` (1MB) enforced per-chunk. |
@@ -936,7 +936,7 @@ RETURN s.name, s.language, t.name AS topic, p.event_schema
 | **Traversal Agent** | LangGraph sub-graph with state: `visited_nodes`, `frontier`, `accumulated_context`, `remaining_hops`. |
 | **Step Logic** | Each step: LLM decides frontier expansion → execute 1-hop parameterized template → add results to context → decide continue or synthesize. |
 | **Hop Decrement** | `remaining_hops` decrements once per BFS level (inside `_batched_bfs`), not per individual node expansion. A batch of N nodes at the same depth consumes exactly 1 hop. |
-| **Supernode Sampling** | When a node's degree exceeds `MAX_NODE_DEGREE`, batched expansion accepts an optional `query_embedding` to perform vector-weighted sampling (cosine similarity) instead of random truncation. |
+| **Supernode Sampling** | When a node's degree exceeds `MAX_NODE_DEGREE`, batched expansion accepts an optional `query_embedding` to perform vector-weighted sampling (cosine similarity) instead of random truncation. Semantic supernode hops are dispatched in parallel via `asyncio.gather` with `asyncio.Semaphore` (default 10, env: `SUPERNODE_CONCURRENCY`). |
 | **Hard Limits** | `max_hops=5`, `max_visited=50`, `token_budget=32_000`. |
 | **Template Usage** | Each hop uses parameterized templates from FR-10 (no dynamic Cypher). |
 | **Routing** | Primary strategy for MULTI_HOP queries. |
@@ -1227,6 +1227,9 @@ All user-influenced values are parameters (`$tenant_id`, `$team`, `$namespaces`,
 | Metric | Value | Source |
 |---|---|---|
 | LLM extraction concurrency | 5 (asyncio.Semaphore) | `config.py` |
+| Ingestion chunk concurrency | 5 (env: `INGESTION_CONCURRENCY`) | `graph_builder.py` |
+| Supernode hop concurrency | 10 (env: `SUPERNODE_CONCURRENCY`) | `agentic_traversal.py` |
+| Outbox fence cache capacity | 100,000 keys (env: `OUTBOX_MAX_TRACKED_FENCES`) | `vector_sync_outbox.py` |
 | Token budget per batch | 200,000 tokens | `config.py` |
 | Kafka consumer workers | 4 goroutines | `dispatcher.go` |
 | Max query results | 100 | `query_models.py` |
@@ -1970,16 +1973,17 @@ graph TB
 | SCA-02 | Redis query caching with complexity-based TTL | P1 | **Implemented** | `semantic_cache.py` (L1/L2 + Redis), `subgraph_cache.py` (Cypher result cache) |
 | SCA-03 | Neo4j connection pool tuning (per-service) | P1 | **Implemented** | `neo4j_pool.py` has `ReplicaAwarePool`, `TenantConnectionTracker` |
 | SCA-04 | Query complexity estimation (EXPLAIN) + rejection | P1 | **Implemented** | `cypher_validator.py` has `estimate_query_cost()` |
-| SCA-05 | Streaming workspace loading (don't collect all chunks) | P0 | **Implemented** | `workspace_loader.py` + `StreamingIngestionPipeline` in `graph_builder.py` |
+| SCA-05 | Streaming workspace loading (don't collect all chunks) | P0 | **Implemented** | `workspace_loader.py` + `StreamingIngestionPipeline` in `graph_builder.py`; chunks now processed concurrently via `asyncio.gather` + `Semaphore(INGESTION_CONCURRENCY)` |
 | SCA-06 | Go consumer non-blocking ack pattern | P0 | **Implemented** | `consumer.go` uses channel-based async acks with configurable `maxInflight` backpressure |
 | SCA-07 | Kafka Schema Registry (Avro) | P2 | **Implemented** | `infrastructure/schema-registry/ingestion-message.avsc`, `schema_registry_client.py` |
 | SCA-08 | Graph schema versioning (migration scripts + SchemaVersion node) | P1 | **Implemented** | `schema_evolution.py` has `SchemaVersion`, `MigrationRunner`, Neo4j + Redis stores |
 | SCA-09 | Load testing suite (k6) | P1 | **Implemented** | `tests/load/ingestion.js`, `tests/load/query.js`, `tests/load/soak.js` (k6) |
 | SCA-10 | Capacity planning documentation | P2 | **Implemented** | `docs/capacity-planning.md` |
 | SCA-11 | Per-level hop decrement in batched BFS | P0 | **Implemented** | `agentic_traversal.py` — hop decrements once per BFS level, not per node, preventing premature depth exhaustion (PR #268) |
-| SCA-12 | Vector-weighted supernode sampling | P1 | **Implemented** | `agentic_traversal.py` — `execute_batched_hop` and `_batched_supernode_expansion` accept `query_embedding` for cosine-similarity sampling instead of random truncation (PR #268) |
+| SCA-12 | Vector-weighted supernode sampling | P1 | **Implemented** | `agentic_traversal.py` — `execute_batched_hop` and `_batched_supernode_expansion` accept `query_embedding` for cosine-similarity sampling instead of random truncation; semantic supernode hops parallelized via `asyncio.gather` + `Semaphore(SUPERNODE_CONCURRENCY)` (PR #268) |
 | SCA-13 | Exponential backoff with jitter for distributed locks | P1 | **Implemented** | `distributed_lock.py` — retry delay uses `min(base * 2^attempt, max_delay) * (1 ± jitter)` to prevent thundering herd (PR #268) |
 | SCA-14 | Transactional outbox coupling for vector sync | P1 | **Implemented** | `node_sink.py` — `flush_with_outbox()` commits graph entities and outbox events atomically, preventing vector drift on crash (PR #268) |
+| SCA-15 | Bounded LRU fence cache in DurableOutboxDrainer | P0 | **Implemented** | `vector_sync_outbox.py` — `_latest_version_by_key` uses `OrderedDict` as bounded LRU (default 100K keys, env: `OUTBOX_MAX_TRACKED_FENCES`), preventing OOM from unbounded fence tracking |
 
 #### Reliability (8 items)
 
@@ -2323,7 +2327,7 @@ context_manager.py       Token budget management, context truncation
 reranker.py              BM25 reranker
 density_reranker.py      Density-based reranking
 vector_store.py          VectorStore protocol (InMemory + Qdrant backends)
-vector_sync_outbox.py    Outbox for async vector sync to Qdrant (Redis Lua scripts)
+vector_sync_outbox.py    Outbox for async vector sync to Qdrant (Redis Lua scripts, bounded LRU fence cache)
 vector_sync_consumer.py  Vector sync consumer
 embedding_batcher.py     Embedding batch processing
 tombstone_filter.py      Filters tombstoned edges from results
