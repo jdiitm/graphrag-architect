@@ -926,6 +926,7 @@ DEFAULT_MAX_RETRIES = 5
 
 _DEFAULT_LEASE_SECONDS = 60.0
 _DEFAULT_CLAIM_LIMIT = 50
+_DEFAULT_MAX_BATCHES_PER_DRAIN = 4
 
 
 class DurableOutboxDrainer:
@@ -936,12 +937,16 @@ class DurableOutboxDrainer:
         max_retries: int = DEFAULT_MAX_RETRIES,
         worker_id: str = "",
         lease_seconds: float = _DEFAULT_LEASE_SECONDS,
+        claim_limit: int = _DEFAULT_CLAIM_LIMIT,
+        max_batches_per_drain: int = _DEFAULT_MAX_BATCHES_PER_DRAIN,
     ) -> None:
         self._store = store
         self._vector_store = vector_store
         self._max_retries = max_retries
         self._worker_id = worker_id or str(uuid.uuid4())
         self._lease_seconds = lease_seconds
+        self._claim_limit = max(1, claim_limit)
+        self._max_batches_per_drain = max(1, max_batches_per_drain)
         self._max_tracked_fences = int(os.environ.get("OUTBOX_MAX_TRACKED_FENCES", "100000"))
         self._latest_version_by_key: OrderedDict[str, int] = OrderedDict()
 
@@ -950,7 +955,7 @@ class DurableOutboxDrainer:
             await self._store.release_expired_claims()
             return await self._store.claim_pending(
                 self._worker_id,
-                limit=_DEFAULT_CLAIM_LIMIT,
+                limit=self._claim_limit,
                 lease_seconds=self._lease_seconds,
             )
         return await self._store.load_pending()
@@ -985,53 +990,64 @@ class DurableOutboxDrainer:
             self._latest_version_by_key.popitem(last=False)
 
     async def process_once(self) -> int:
-        pending = await self._load_events()
-        if not pending:
-            return 0
-
         processed = 0
-        for event in pending:
-            fence_key = self._event_fence_key(event)
-            tenant_id = self._event_tenant_id(event)
-            scoped_fence_key = f"{tenant_id}:{fence_key}"
-            latest = self._fence_lookup(scoped_fence_key)
-            if isinstance(self._store, VersionFenceStore):
-                persisted = await self._store.get_version_fence(
-                    fence_key, tenant_id=tenant_id,
-                )
-                latest = max(latest, persisted)
-            if event.version < latest:
-                await self._finalize_event(event.event_id)
-                processed += 1
-                continue
-            try:
-                await self._apply_event(event)
-                self._fence_record(scoped_fence_key, event.version)
-                if isinstance(self._store, VersionFenceStore):
-                    await self._store.update_version_fence(
-                        fence_key, event.version, tenant_id=tenant_id,
-                    )
-                await self._finalize_event(event.event_id)
-                processed += 1
-            except Exception as exc:
-                new_count = event.retry_count + 1
-                if new_count >= self._max_retries:
-                    logger.error(
-                        "Vector sync event %s exceeded max retries (%d), "
-                        "discarding: %s",
-                        event.event_id, self._max_retries, exc,
-                    )
-                    await self._store.delete_event(event.event_id)
-                else:
-                    logger.warning(
-                        "Vector sync failed for event %s (retry %d/%d): %s",
-                        event.event_id, new_count, self._max_retries, exc,
-                    )
-                    await self._store.update_retry_count(
-                        event.event_id, new_count,
-                    )
+        attempted_event_ids: set[str] = set()
+        max_batches = (
+            self._max_batches_per_drain
+            if isinstance(self._store, ClaimableOutboxStore)
+            else 1
+        )
+        for _ in range(max_batches):
+            pending = await self._load_events()
+            if not pending:
+                break
+            for event in pending:
+                if event.event_id in attempted_event_ids:
                     if isinstance(self._store, ClaimableOutboxStore):
                         await self._store.release_claim(event.event_id)
+                    continue
+                attempted_event_ids.add(event.event_id)
+                fence_key = self._event_fence_key(event)
+                tenant_id = self._event_tenant_id(event)
+                scoped_fence_key = f"{tenant_id}:{fence_key}"
+                latest = self._fence_lookup(scoped_fence_key)
+                if isinstance(self._store, VersionFenceStore):
+                    persisted = await self._store.get_version_fence(
+                        fence_key, tenant_id=tenant_id,
+                    )
+                    latest = max(latest, persisted)
+                if event.version < latest:
+                    await self._finalize_event(event.event_id)
+                    processed += 1
+                    continue
+                try:
+                    await self._apply_event(event)
+                    self._fence_record(scoped_fence_key, event.version)
+                    if isinstance(self._store, VersionFenceStore):
+                        await self._store.update_version_fence(
+                            fence_key, event.version, tenant_id=tenant_id,
+                        )
+                    await self._finalize_event(event.event_id)
+                    processed += 1
+                except Exception as exc:
+                    new_count = event.retry_count + 1
+                    if new_count >= self._max_retries:
+                        logger.error(
+                            "Vector sync event %s exceeded max retries (%d), "
+                            "discarding: %s",
+                            event.event_id, self._max_retries, exc,
+                        )
+                        await self._store.delete_event(event.event_id)
+                    else:
+                        logger.warning(
+                            "Vector sync failed for event %s (retry %d/%d): %s",
+                            event.event_id, new_count, self._max_retries, exc,
+                        )
+                        await self._store.update_retry_count(
+                            event.event_id, new_count,
+                        )
+                        if isinstance(self._store, ClaimableOutboxStore):
+                            await self._store.release_claim(event.event_id)
         return processed
 
     @staticmethod
