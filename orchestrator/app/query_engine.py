@@ -429,7 +429,7 @@ def _build_traversal_acl_params(state: QueryState) -> Dict[str, Any]:
     namespaces = [principal.namespace] if principal.namespace != "*" else []
     from orchestrator.app.query_templates import build_acl_params as _build_params
     return _build_params(
-        tenant_id="",
+        tenant_id=str(state.get("tenant_id", "")),
         is_admin=principal.is_admin,
         team=principal.team,
         namespaces=namespaces,

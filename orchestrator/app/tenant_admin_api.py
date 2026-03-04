@@ -89,14 +89,14 @@ def _resolve_principal(
     if not authorization or not authorization.strip():
         if auth.require_tokens:
             raise HTTPException(status_code=401, detail="authorization header required")
-        return SecurityPrincipal(team="*", namespace="*", role="anonymous")
+        return SecurityPrincipal.from_header(None)
     if not auth.token_secret:
         if auth.require_tokens:
             raise HTTPException(
                 status_code=503,
                 detail="server misconfigured: token verification required but no secret set",
             )
-        return SecurityPrincipal(team="*", namespace="*", role="anonymous")
+        return SecurityPrincipal.from_header(None)
     try:
         return SecurityPrincipal.from_header(authorization, token_secret=auth.token_secret)
     except InvalidTokenError as exc:
