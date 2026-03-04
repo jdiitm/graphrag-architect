@@ -313,6 +313,19 @@ class OutboxDrainer:
         self._outbox = outbox
         self._vector_store = vector_store
 
+    async def _apply_event(self, event: VectorSyncEvent) -> None:
+        kwargs: dict[str, Any] = {}
+        if event.tenant_id:
+            kwargs["tenant_id"] = event.tenant_id
+        if event.operation == "upsert":
+            await self._vector_store.upsert(
+                event.collection, event.vectors, **kwargs,
+            )
+            return
+        await self._vector_store.delete(
+            event.collection, event.pruned_ids, **kwargs,
+        )
+
     async def process_once(self) -> int:
         pending = self._outbox.drain_pending()
         if not pending:
@@ -321,24 +334,7 @@ class OutboxDrainer:
         processed = 0
         for event in pending:
             try:
-                if event.operation == "upsert":
-                    if event.tenant_id:
-                        await self._vector_store.upsert(
-                            event.collection, event.vectors, tenant_id=event.tenant_id,
-                        )
-                    else:
-                        await self._vector_store.upsert(
-                            event.collection, event.vectors,
-                        )
-                else:
-                    if event.tenant_id:
-                        await self._vector_store.delete(
-                            event.collection, event.pruned_ids, tenant_id=event.tenant_id,
-                        )
-                    else:
-                        await self._vector_store.delete(
-                            event.collection, event.pruned_ids,
-                        )
+                await self._apply_event(event)
                 self._outbox.mark_emitted(event.event_id)
                 processed += 1
             except Exception as exc:
@@ -964,6 +960,19 @@ class DurableOutboxDrainer:
             await self._store.mark_completed(event_id)
         await self._store.delete_event(event_id)
 
+    async def _apply_event(self, event: VectorSyncEvent) -> None:
+        kwargs: dict[str, Any] = {}
+        if event.tenant_id:
+            kwargs["tenant_id"] = event.tenant_id
+        if event.operation == "upsert":
+            await self._vector_store.upsert(
+                event.collection, event.vectors, **kwargs,
+            )
+            return
+        await self._vector_store.delete(
+            event.collection, event.pruned_ids, **kwargs,
+        )
+
     def _fence_lookup(self, scoped_key: str) -> int:
         version = self._latest_version_by_key.get(scoped_key, -1)
         if version != -1:
@@ -996,24 +1005,7 @@ class DurableOutboxDrainer:
                 processed += 1
                 continue
             try:
-                if event.operation == "upsert":
-                    if event.tenant_id:
-                        await self._vector_store.upsert(
-                            event.collection, event.vectors, tenant_id=event.tenant_id,
-                        )
-                    else:
-                        await self._vector_store.upsert(
-                            event.collection, event.vectors,
-                        )
-                else:
-                    if event.tenant_id:
-                        await self._vector_store.delete(
-                            event.collection, event.pruned_ids, tenant_id=event.tenant_id,
-                        )
-                    else:
-                        await self._vector_store.delete(
-                            event.collection, event.pruned_ids,
-                        )
+                await self._apply_event(event)
                 self._fence_record(scoped_fence_key, event.version)
                 if isinstance(self._store, VersionFenceStore):
                     await self._store.update_version_fence(
