@@ -7,6 +7,10 @@ from typing import Any, Optional, Protocol
 logger = logging.getLogger(__name__)
 
 
+class TenantBlobAccessError(Exception):
+    pass
+
+
 class BlobStore(Protocol):
     async def get(self, key: str) -> bytes: ...
     async def put(self, key: str, data: bytes) -> str: ...
@@ -33,6 +37,15 @@ class BlobReference:
         )
 
 
+def _validate_tenant_key(key: str, tenant_id: str) -> None:
+    expected_prefix = f"{tenant_id}/"
+    if not key.startswith(expected_prefix):
+        raise TenantBlobAccessError(
+            f"Blob key {key!r} is not scoped to tenant {tenant_id!r}; "
+            f"expected prefix {expected_prefix!r}"
+        )
+
+
 class InMemoryBlobStore:
     def __init__(self) -> None:
         self._store: dict[str, bytes] = {}
@@ -53,13 +66,18 @@ class InMemoryBlobStore:
 async def upload_files_to_blob(
     store: BlobStore,
     files: list[dict[str, str]],
+    *,
+    tenant_id: str,
     prefix: str = "",
 ) -> list[dict[str, str]]:
+    if not tenant_id:
+        raise ValueError("tenant_id is required for blob uploads")
     refs: list[dict[str, str]] = []
     for entry in files:
         path = entry["path"]
         content = entry.get("content", "")
-        blob_key = f"{prefix}/{path}" if prefix else path
+        sub_path = f"{prefix}/{path}" if prefix else path
+        blob_key = f"{tenant_id}/{sub_path}"
         await store.put(blob_key, content.encode("utf-8"))
         refs.append({"path": path, "blob_key": blob_key})
     return refs
@@ -68,6 +86,8 @@ async def upload_files_to_blob(
 async def resolve_file_content(
     store: BlobStore,
     file_refs: list[dict[str, str]],
+    *,
+    tenant_id: str,
 ) -> list[dict[str, str]]:
     resolved: list[dict[str, str]] = []
     for ref in file_refs:
@@ -75,6 +95,7 @@ async def resolve_file_content(
             resolved.append(ref)
             continue
         blob_key = ref.get("blob_key", "")
+        _validate_tenant_key(blob_key, tenant_id)
         data = await store.get(blob_key)
         resolved.append({"path": ref["path"], "content": data.decode("utf-8")})
     return resolved
@@ -84,12 +105,17 @@ class BlobFetcher:
     def __init__(self, store: BlobStore) -> None:
         self._store = store
 
-    async def fetch_content(self, ref: BlobReference) -> str:
+    async def fetch_content(
+        self, ref: BlobReference, *, tenant_id: str,
+    ) -> str:
+        _validate_tenant_key(ref.key, tenant_id)
         data = await self._store.get(ref.key)
         return data.decode("utf-8")
 
-    async def fetch_if_blob(self, payload: dict[str, Any]) -> Optional[str]:
+    async def fetch_if_blob(
+        self, payload: dict[str, Any], *, tenant_id: str,
+    ) -> Optional[str]:
         ref = BlobReference.from_kafka_message(payload)
         if ref is None:
             return None
-        return await self.fetch_content(ref)
+        return await self.fetch_content(ref, tenant_id=tenant_id)

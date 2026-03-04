@@ -57,19 +57,19 @@ class TestBlobFetcher:
     @pytest.mark.asyncio
     async def test_fetch_content_decodes_utf8(self) -> None:
         store = InMemoryBlobStore()
-        await store.put("file.go", b"package main\nfunc main() {}")
+        await store.put("test-tenant/file.go", b"package main\nfunc main() {}")
         fetcher = BlobFetcher(store)
-        ref = BlobReference(bucket="test", key="file.go")
-        content = await fetcher.fetch_content(ref)
+        ref = BlobReference(bucket="test", key="test-tenant/file.go")
+        content = await fetcher.fetch_content(ref, tenant_id="test-tenant")
         assert content == "package main\nfunc main() {}"
 
     @pytest.mark.asyncio
     async def test_fetch_if_blob_returns_content(self) -> None:
         store = InMemoryBlobStore()
-        await store.put("ingestion/main.go", b"package main")
+        await store.put("test-tenant/ingestion/main.go", b"package main")
         fetcher = BlobFetcher(store)
-        payload = {"blob_key": "ingestion/main.go"}
-        content = await fetcher.fetch_if_blob(payload)
+        payload = {"blob_key": "test-tenant/ingestion/main.go"}
+        content = await fetcher.fetch_if_blob(payload, tenant_id="test-tenant")
         assert content == "package main"
 
     @pytest.mark.asyncio
@@ -77,7 +77,7 @@ class TestBlobFetcher:
         store = InMemoryBlobStore()
         fetcher = BlobFetcher(store)
         payload = {"content": "package main"}
-        content = await fetcher.fetch_if_blob(payload)
+        content = await fetcher.fetch_if_blob(payload, tenant_id="test-tenant")
         assert content is None
 
 
@@ -92,10 +92,13 @@ class TestUploadFilesToBlob:
             {"path": "main.go", "content": "package main"},
             {"path": "utils.py", "content": "def foo(): pass"},
         ]
-        refs = await upload_files_to_blob(store, files, prefix="run-1")
+        refs = await upload_files_to_blob(
+            store, files, tenant_id="test-tenant", prefix="run-1",
+        )
         assert len(refs) == 2
         assert refs[0]["path"] == "main.go"
         assert "blob_key" in refs[0]
+        assert refs[0]["blob_key"].startswith("test-tenant/")
         assert "content" not in refs[0]
         stored = await store.get(refs[0]["blob_key"])
         assert stored == b"package main"
@@ -105,7 +108,7 @@ class TestUploadFilesToBlob:
         from orchestrator.app.blob_fetcher import upload_files_to_blob
 
         store = InMemoryBlobStore()
-        refs = await upload_files_to_blob(store, [], prefix="run-2")
+        refs = await upload_files_to_blob(store, [], tenant_id="test-tenant")
         assert refs == []
 
 
@@ -120,8 +123,12 @@ class TestResolveFileContent:
 
         store = InMemoryBlobStore()
         files = [{"path": "app.py", "content": "import os"}]
-        refs = await upload_files_to_blob(store, files, prefix="run-3")
-        resolved = await resolve_file_content(store, refs)
+        refs = await upload_files_to_blob(
+            store, files, tenant_id="test-tenant", prefix="run-3",
+        )
+        resolved = await resolve_file_content(
+            store, refs, tenant_id="test-tenant",
+        )
         assert len(resolved) == 1
         assert resolved[0]["path"] == "app.py"
         assert resolved[0]["content"] == "import os"
@@ -132,5 +139,7 @@ class TestResolveFileContent:
 
         store = InMemoryBlobStore()
         files = [{"path": "inline.go", "content": "package main"}]
-        resolved = await resolve_file_content(store, files)
+        resolved = await resolve_file_content(
+            store, files, tenant_id="any-tenant",
+        )
         assert resolved[0]["content"] == "package main"
