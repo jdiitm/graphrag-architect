@@ -1,5 +1,5 @@
 """Tests for semantic cache tenant key hardening."""
-from orchestrator.app.semantic_cache import SemanticQueryCache, CacheConfig
+from orchestrator.app.semantic_cache import CacheConfig, SemanticQueryCache
 
 
 class TestSemanticCacheTenantKey:

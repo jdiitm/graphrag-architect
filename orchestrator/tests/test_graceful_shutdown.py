@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.app.graph_builder import (
-    _ASTPoolHolder,
     _COALESCING_OUTBOX,
     _VECTOR_OUTBOX,
+    _ASTPoolHolder,
     drain_vector_outbox_sync,
     flush_coalescing_outbox,
     shutdown_ast_pool,

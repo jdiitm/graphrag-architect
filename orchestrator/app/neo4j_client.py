@@ -10,7 +10,6 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from neo4j import READ_ACCESS, WRITE_ACCESS, AsyncDriver, AsyncManagedTransaction
 
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
-from orchestrator.app.neo4j_pool import get_query_timeout
 from orchestrator.app.config import HotTargetConfig
 from orchestrator.app.extraction_models import (
     CallsEdge,
@@ -23,6 +22,7 @@ from orchestrator.app.extraction_models import (
     ServiceNode,
     compute_content_hash,
 )
+from orchestrator.app.neo4j_pool import get_query_timeout
 from orchestrator.app.ontology import (
     Ontology,
     build_default_ontology,

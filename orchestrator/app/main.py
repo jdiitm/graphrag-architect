@@ -47,6 +47,7 @@ from orchestrator.app.ingest_models import (
     IngestResponse,
     create_ingest_job_store,
 )
+from orchestrator.app.ingestion_resume import cleanup_active_status_store
 from orchestrator.app.kafka_consumer import AsyncKafkaConsumer
 from orchestrator.app.neo4j_pool import close_driver, get_driver, init_driver
 from orchestrator.app.observability import configure_metrics, configure_telemetry
@@ -68,7 +69,6 @@ from orchestrator.app.tenant_admin_api import (
 from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.tenant_security import TenantScopeVerifier
 from orchestrator.app.token_bucket import create_rate_limiter
-from orchestrator.app.ingestion_resume import cleanup_active_status_store
 from orchestrator.app.vector_sync_outbox import validate_production_sync_mode
 
 logger = logging.getLogger(__name__)
