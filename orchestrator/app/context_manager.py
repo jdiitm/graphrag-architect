@@ -613,32 +613,55 @@ def _enforce_budget_on_serialized(
     budget: TokenBudget,
     original_count: int,
 ) -> List[str]:
-    def _assembled_tokens(blocks: List[str]) -> int:
-        body = "\n".join(blocks)
-        return estimate_tokens(f"<{delimiter}>{body}</{delimiter}>")
-
-    total = _assembled_tokens(records)
-    if total <= budget.max_context_tokens:
+    if not records:
         return records
 
-    if len(records) == 1:
+    wrapper_tokens = estimate_tokens(f"<{delimiter}></{delimiter}>")
+    newline_tokens = estimate_tokens("\n")
+    selected: List[str] = []
+    running_tokens = wrapper_tokens
+
+    for record in records:
+        record_tokens = estimate_tokens(record)
+        separator_tokens = newline_tokens if selected else 0
+        projected = running_tokens + separator_tokens + record_tokens
+        if projected > budget.max_context_tokens:
+            break
+        selected.append(record)
+        running_tokens = projected
+
+    if not selected:
+        single_total = estimate_tokens(f"<{delimiter}>{records[0]}</{delimiter}>")
         raise ContextBudgetExceededError(
-            f"Single record ({total} tokens) exceeds "
+            f"Single record ({single_total} tokens) exceeds "
             f"token budget ({budget.max_context_tokens} tokens)"
         )
 
-    while len(records) > 1 and _assembled_tokens(records) > budget.max_context_tokens:
-        records.pop()
+    # Defensive exact check in case tokenizer non-linearity crosses boundaries.
+    while True:
+        body = "\n".join(selected)
+        exact_total = estimate_tokens(f"<{delimiter}>{body}</{delimiter}>")
+        if exact_total <= budget.max_context_tokens or len(selected) == 1:
+            break
+        selected.pop()
 
-    dropped = original_count - len(records)
+    if len(selected) == 1:
+        single_total = estimate_tokens(f"<{delimiter}>{selected[0]}</{delimiter}>")
+        if single_total > budget.max_context_tokens:
+            raise ContextBudgetExceededError(
+                f"Single record ({single_total} tokens) exceeds "
+                f"token budget ({budget.max_context_tokens} tokens)"
+            )
+
+    dropped = original_count - len(selected)
     _context_logger.warning(
         "format_context_for_prompt dropped %d records to fit token budget "
         "(%d tokens, limit %d)",
         dropped,
-        _assembled_tokens(records),
+        estimate_tokens(f"<{delimiter}>{'\n'.join(selected)}</{delimiter}>"),
         budget.max_context_tokens,
     )
-    return records
+    return selected
 
 
 def compress_context_map_reduce(
