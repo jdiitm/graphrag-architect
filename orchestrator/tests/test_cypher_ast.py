@@ -11,6 +11,7 @@ from orchestrator.app.cypher_ast import (
     WhereClause,
     WithClause,
     inject_acl_all_scopes,
+    inject_tenant_scope_all_matches,
     reconstruct_from_ast,
 )
 
@@ -109,3 +110,22 @@ class TestACLInjection:
             cypher, "n.team_owner = $acl_team",
         )
         assert "'MATCH WHERE'" in result
+
+
+class TestTenantScopeInjection:
+    def test_injects_tenant_scope_for_match_aliases(self) -> None:
+        cypher = "MATCH (n:Service)-[:CALLS]->(m:Service) RETURN n, m"
+        result = inject_tenant_scope_all_matches(cypher, tenant_param="tenant_id")
+        assert "n.tenant_id = $tenant_id" in result
+        assert "m.tenant_id = $tenant_id" in result
+
+    def test_injects_inside_call_subquery(self) -> None:
+        cypher = "CALL { MATCH (n:Service) RETURN n } RETURN n"
+        result = inject_tenant_scope_all_matches(cypher, tenant_param="tenant_id")
+        assert "n.tenant_id = $tenant_id" in result
+
+    def test_preserves_existing_where_with_and(self) -> None:
+        cypher = "MATCH (n:Service) WHERE n.name = 'auth' RETURN n"
+        result = inject_tenant_scope_all_matches(cypher, tenant_param="tenant_id")
+        assert "n.tenant_id = $tenant_id" in result
+        assert "AND (n.name = 'auth')" in " ".join(result.split())

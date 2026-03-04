@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
@@ -281,6 +282,56 @@ def inject_acl_all_scopes(cypher: str, acl_condition: str) -> str:
     ast = CypherParser(cypher).parse()
     _inject_into_clauses(ast.clauses, acl_condition)
     return reconstruct_from_ast(ast)
+
+
+_MATCH_ALIAS_PATTERN = re.compile(r"\(([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def inject_tenant_scope_all_matches(
+    cypher: str,
+    tenant_param: str = "tenant_id",
+) -> str:
+    ast = CypherParser(cypher).parse()
+    _inject_tenant_into_clauses(ast.clauses, tenant_param)
+    return reconstruct_from_ast(ast)
+
+
+def _inject_tenant_into_clauses(
+    clauses: List[Any], tenant_param: str,
+) -> None:
+    i = 0
+    while i < len(clauses):
+        clause = clauses[i]
+        if isinstance(clause, CallSubquery) and clause.body:
+            _inject_tenant_into_clauses(clause.body, tenant_param)
+        if isinstance(clause, UnionQuery):
+            for branch in clause.branches:
+                _inject_tenant_into_clauses(branch, tenant_param)
+        if isinstance(clause, MatchClause):
+            match_text = _tokens_text(clause.tokens)
+            aliases = sorted(set(_MATCH_ALIAS_PATTERN.findall(match_text)))
+            if aliases:
+                condition = " AND ".join(
+                    f"{alias}.{tenant_param} = ${tenant_param}" for alias in aliases
+                )
+                next_idx = i + 1
+                if (
+                    next_idx < len(clauses)
+                    and isinstance(clauses[next_idx], WhereClause)
+                ):
+                    where_text = _tokens_text(clauses[next_idx].tokens)
+                    body = _strip_where_keyword(where_text)
+                    new_text = (
+                        " WHERE " + condition
+                        + " AND (" + body.strip() + ") "
+                    )
+                    clauses[next_idx].tokens = tokenize_cypher(new_text)
+                else:
+                    where_tokens = tokenize_cypher(
+                        " WHERE " + condition + " "
+                    )
+                    clauses.insert(next_idx, WhereClause(tokens=where_tokens))
+        i += 1
 
 
 def _inject_into_clauses(clauses: List[Any], acl_condition: str) -> None:
