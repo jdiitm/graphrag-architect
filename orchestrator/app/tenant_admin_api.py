@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse
@@ -16,6 +16,10 @@ from orchestrator.app.access_control import (
 from orchestrator.app.audit_log import AuditAction, AuditEvent, SecurityAuditLogger
 from orchestrator.app.config import AuthConfig
 from orchestrator.app.neo4j_pool import get_driver
+from orchestrator.app.tenant_isolation import (
+    IsolationMode,
+    TenantEnforcingDriver,
+)
 from orchestrator.app.schema_evolution import (
     InMemoryVersionStore,
     MigrationRegistry,
@@ -124,14 +128,43 @@ def _require_tenant_access(
 _DEFAULT_DATABASE = "neo4j"
 
 
+class _EnforcedSession:
+    def __init__(
+        self, session: Any, enforcer: TenantEnforcingDriver,
+    ) -> None:
+        self._session = session
+        self._enforcer = enforcer
+
+    def _validate_args(self, args: tuple[Any, ...]) -> None:
+        if len(args) >= 2 and isinstance(args[0], str) and isinstance(args[1], dict):
+            self._enforcer.validate_query_params(args[0], args[1])
+
+    async def execute_read(
+        self, work: Callable[..., Any], *args: Any, **kwargs: Any,
+    ) -> Any:
+        self._validate_args(args)
+        return await self._session.execute_read(work, *args, **kwargs)
+
+    async def execute_write(
+        self, work: Callable[..., Any], *args: Any, **kwargs: Any,
+    ) -> Any:
+        self._validate_args(args)
+        return await self._session.execute_write(work, *args, **kwargs)
+
+
 @asynccontextmanager
 async def _tenant_scoped_session(
-    driver: Any, *, tenant_id: str, database: str = _DEFAULT_DATABASE,
+    driver: Any,
+    *,
+    tenant_id: str,
+    database: str = _DEFAULT_DATABASE,
+    isolation_mode: IsolationMode = IsolationMode.PHYSICAL,
 ) -> AsyncIterator[Any]:
     if not tenant_id:
         raise ValueError("tenant_id is required for tenant-scoped session")
+    enforcer = TenantEnforcingDriver(isolation_mode=isolation_mode)
     async with driver.session(database=database) as session:
-        yield session
+        yield _EnforcedSession(session, enforcer)
 
 
 @tenant_router.get(

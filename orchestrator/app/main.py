@@ -66,6 +66,7 @@ from orchestrator.app.tenant_admin_api import (
     tenant_router,
     webhook_router,
 )
+from orchestrator.app.request_signing import verify_request_signature
 from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.tenant_security import TenantScopeVerifier
 from orchestrator.app.token_bucket import create_rate_limiter
@@ -410,6 +411,41 @@ def prometheus_metrics() -> Response:
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
+def _is_production_mode() -> bool:
+    return os.environ.get("DEPLOYMENT_MODE", "").lower() == "production"
+
+
+def _get_request_signing_secret() -> str:
+    return os.environ.get("REQUEST_SIGNING_SECRET", "")
+
+
+def _verify_request_signing(
+    method: str,
+    path: str,
+    body: bytes,
+    timestamp: Optional[str],
+    nonce: Optional[str],
+    signature: Optional[str],
+) -> None:
+    if not _is_production_mode():
+        return
+    secret = _get_request_signing_secret()
+    if not secret:
+        return
+    if not timestamp or not nonce or not signature:
+        raise HTTPException(
+            status_code=403,
+            detail="request signature required in production mode",
+        )
+    if not verify_request_signature(
+        method, path, body, timestamp, nonce, signature, secret,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="invalid request signature",
+        )
+
+
 def _verify_ingest_auth(authorization: Optional[str]) -> None:
     auth = AuthConfig.from_env()
     if not auth.token_secret:
@@ -439,8 +475,15 @@ def _verify_ingest_auth(authorization: Optional[str]) -> None:
 async def ingest(
     request: IngestRequest,
     authorization: Optional[str] = Header(default=None),
+    x_signature: Optional[str] = Header(default=None),
+    x_timestamp: Optional[str] = Header(default=None),
+    x_nonce: Optional[str] = Header(default=None),
     sync: bool = False,
 ) -> JSONResponse:
+    _verify_request_signing(
+        "POST", "/ingest", b"",
+        x_timestamp, x_nonce, x_signature,
+    )
     _verify_ingest_auth(authorization)
     tenant_ctx = _resolve_tenant_context(authorization)
     raw_files = await _decode_documents_async(request)
@@ -818,3 +861,35 @@ async def get_evaluation(
     if result_tenant and result_tenant != tenant_ctx.tenant_id:
         raise HTTPException(status_code=404, detail="Evaluation not ready or not found")
     return JSONResponse(content=result, status_code=200)
+
+
+_INGEST_ROUTES = frozenset({"/ingest", "/ingest/{job_id}"})
+_QUERY_ROUTES = frozenset({"/query", "/query/{job_id}", "/query/{query_id}/evaluation"})
+
+
+def _get_service_profile() -> str:
+    return os.environ.get("SERVICE_PROFILE", "full").lower()
+
+
+def create_profiled_app() -> FastAPI:
+    profile = _get_service_profile()
+    profiled = FastAPI(
+        title="GraphRAG Orchestrator", version="1.0.0", lifespan=lifespan,
+    )
+
+    profiled.include_router(graph_api_router)
+    profiled.include_router(tenant_router)
+    profiled.include_router(tenant_admin_router)
+    profiled.include_router(webhook_router)
+    profiled.include_router(gdpr_router)
+
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        if profile == "query" and path in _INGEST_ROUTES:
+            continue
+        if profile == "ingest" and path in _QUERY_ROUTES:
+            continue
+        if path and path not in {r.path for r in profiled.routes if hasattr(r, "path")}:
+            profiled.routes.append(route)
+
+    return profiled
