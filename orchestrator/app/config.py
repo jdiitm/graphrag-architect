@@ -152,16 +152,25 @@ class VectorStoreConfig:
 
     @classmethod
     def from_env(cls) -> VectorStoreConfig:
-        raw_shard = os.environ.get("QDRANT_SHARD_BY_TENANT", "false")
-        raw_per_tenant = os.environ.get("QDRANT_PER_TENANT_COLLECTION", "false")
+        deployment_mode = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
+        raw_shard = os.environ.get("QDRANT_SHARD_BY_TENANT", "")
+        raw_per_tenant = os.environ.get("QDRANT_PER_TENANT_COLLECTION", "")
+        if raw_shard:
+            shard_by_tenant = raw_shard.lower() in ("true", "1", "yes")
+        else:
+            shard_by_tenant = deployment_mode == "production"
+        if raw_per_tenant:
+            per_tenant_collection = raw_per_tenant.lower() in ("true", "1", "yes")
+        else:
+            per_tenant_collection = deployment_mode == "production"
         return cls(
             backend=os.environ.get("VECTOR_STORE_BACKEND", "memory"),
             qdrant_url=os.environ.get("QDRANT_URL", ""),
             qdrant_api_key=os.environ.get("QDRANT_API_KEY", ""),
             pool_size=int(os.environ.get("QDRANT_POOL_SIZE", "4")),
-            deployment_mode=os.environ.get("DEPLOYMENT_MODE", "dev").lower(),
-            shard_by_tenant=raw_shard.lower() in ("true", "1", "yes"),
-            per_tenant_collection=raw_per_tenant.lower() in ("true", "1", "yes"),
+            deployment_mode=deployment_mode,
+            shard_by_tenant=shard_by_tenant,
+            per_tenant_collection=per_tenant_collection,
         )
 
 
@@ -481,6 +490,7 @@ class ProductionConfigValidator:
     vector_sync_backend: str
     vector_store_backend: str = "memory"
     qdrant_shard_by_tenant: bool = False
+    qdrant_per_tenant_collection: bool = False
 
     @classmethod
     def from_env(cls) -> ProductionConfigValidator:
@@ -506,6 +516,7 @@ class ProductionConfigValidator:
             vector_sync_backend=vector_sync_backend,
             vector_store_backend=vector_cfg.backend,
             qdrant_shard_by_tenant=vector_cfg.shard_by_tenant,
+            qdrant_per_tenant_collection=vector_cfg.per_tenant_collection,
         )
 
     def validate_production_invariants(self) -> None:
@@ -539,6 +550,14 @@ class ProductionConfigValidator:
             violations.append(
                 "QDRANT_SHARD_BY_TENANT is false. "
                 "Set QDRANT_SHARD_BY_TENANT=true in production."
+            )
+        if (
+            self.vector_store_backend == "qdrant"
+            and not self.qdrant_per_tenant_collection
+        ):
+            violations.append(
+                "QDRANT_PER_TENANT_COLLECTION is false. "
+                "Set QDRANT_PER_TENANT_COLLECTION=true in production."
             )
 
         if violations:

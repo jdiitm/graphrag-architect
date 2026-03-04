@@ -61,6 +61,12 @@ class TestSanitizeQueryInput:
         result = sanitize_query_input("   \n\t  ")
         assert "<user_query>" in result
 
+    def test_redacts_secret_tokens_in_query(self) -> None:
+        raw = "My leaked key is sk-abcdefghijklmnopqrstuvwxyz123456"
+        result = sanitize_query_input(raw)
+        assert "sk-abcdefghijklmnopqrstuvwxyz123456" not in result
+        assert "[REDACTED_SECRET]" in result
+
 
 class TestSanitizeSourceContent:
     def test_passthrough_clean_source(self) -> None:

@@ -225,3 +225,16 @@ class TestProductionConfigEndToEnd:
         monkeypatch.setenv("QDRANT_SHARD_BY_TENANT", "false")
         with pytest.raises(ConfigurationError, match="QDRANT_SHARD_BY_TENANT"):
             ProductionConfigValidator.from_env().validate_production_invariants()
+
+    def test_production_qdrant_without_per_tenant_collection_raises(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("DEPLOYMENT_MODE", "production")
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
+        monkeypatch.setenv("NEO4J_PASSWORD", "secret")
+        monkeypatch.setenv("VECTOR_SYNC_BACKEND", "kafka")
+        monkeypatch.setenv("VECTOR_STORE_BACKEND", "qdrant")
+        monkeypatch.setenv("QDRANT_SHARD_BY_TENANT", "true")
+        monkeypatch.setenv("QDRANT_PER_TENANT_COLLECTION", "false")
+        with pytest.raises(ConfigurationError, match="QDRANT_PER_TENANT_COLLECTION"):
+            ProductionConfigValidator.from_env().validate_production_invariants()
