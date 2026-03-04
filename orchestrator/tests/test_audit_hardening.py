@@ -142,6 +142,8 @@ class TestCacheKeyUsedInQueryEngine:
         ), patch(
             "orchestrator.app.query_engine._get_query_timeout",
             return_value=30.0,
+        ), patch(
+            "orchestrator.app.query_engine.validate_cypher_security",
         ):
             cypher = "MATCH (n:Service) RETURN n"
             long_acl = {

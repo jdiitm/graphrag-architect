@@ -951,6 +951,8 @@ async def _execute_sandboxed_read(
     cypher: str,
     acl_params: Dict[str, str],
 ) -> Optional[List[Any]]:
+    validate_cypher_security(cypher, acl_params, require_acl=False)
+
     cost = estimate_query_cost(cypher)
     max_cost = _get_max_query_cost()
     if cost > max_cost:

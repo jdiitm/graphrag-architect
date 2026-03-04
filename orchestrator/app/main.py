@@ -7,7 +7,7 @@ import os
 from contextlib import asynccontextmanager, suppress
 from typing import Any, AsyncIterator, Dict, Generator, List, Optional
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -431,7 +431,10 @@ def _verify_request_signing(
         return
     secret = _get_request_signing_secret()
     if not secret:
-        return
+        raise HTTPException(
+            status_code=503,
+            detail="server misconfigured: REQUEST_SIGNING_SECRET required in production",
+        )
     if not timestamp or not nonce or not signature:
         raise HTTPException(
             status_code=403,
@@ -474,14 +477,16 @@ def _verify_ingest_auth(authorization: Optional[str]) -> None:
 )
 async def ingest(
     request: IngestRequest,
+    raw_request: Request,
     authorization: Optional[str] = Header(default=None),
     x_signature: Optional[str] = Header(default=None),
     x_timestamp: Optional[str] = Header(default=None),
     x_nonce: Optional[str] = Header(default=None),
     sync: bool = False,
 ) -> JSONResponse:
+    raw_body = await raw_request.body()
     _verify_request_signing(
-        "POST", "/ingest", b"",
+        "POST", "/ingest", raw_body,
         x_timestamp, x_nonce, x_signature,
     )
     _verify_ingest_auth(authorization)

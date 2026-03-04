@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from orchestrator.app.tenant_isolation import (
     IsolationMode,
@@ -345,3 +346,78 @@ class TestCDATAEncoding:
 
         block = format_context_for_prompt([])
         assert block.content == ""
+
+
+class TestCypherSecurityExecutionWiring:
+
+    @pytest.mark.asyncio
+    async def test_sandboxed_read_calls_validate_cypher_security(self) -> None:
+        from orchestrator.app.query_engine import _execute_sandboxed_read
+
+        mock_driver = AsyncMock()
+
+        with patch(
+            "orchestrator.app.query_engine.validate_cypher_security",
+            side_effect=ValueError("security validation invoked"),
+        ):
+            with pytest.raises(ValueError, match="security validation invoked"):
+                await _execute_sandboxed_read(
+                    mock_driver,
+                    "MATCH (n) RETURN n",
+                    {"tenant_id": "acme"},
+                )
+
+
+class TestRequestSigningFailClosed:
+
+    def test_production_mode_no_secret_raises_503(self) -> None:
+        from orchestrator.app.main import _verify_request_signing
+
+        with patch.dict(os.environ, {
+            "DEPLOYMENT_MODE": "production",
+            "REQUEST_SIGNING_SECRET": "",
+        }):
+            with pytest.raises(HTTPException) as exc_info:
+                _verify_request_signing(
+                    "POST", "/ingest", b"payload",
+                    None, None, None,
+                )
+            assert exc_info.value.status_code == 503
+
+
+class TestRequestBodyInSignature:
+
+    @pytest.mark.asyncio
+    async def test_ingest_passes_real_body_to_signing(self) -> None:
+        from orchestrator.app.main import ingest as ingest_fn
+
+        mock_pydantic_req = MagicMock()
+        mock_pydantic_req.documents = []
+
+        mock_raw_request = AsyncMock()
+        mock_raw_request.body = AsyncMock(return_value=b'{"documents": []}')
+
+        captured_bodies: List[bytes] = []
+
+        def capturing_verify(
+            method: str, path: str, body: bytes,
+            ts: Any, nonce: Any, sig: Any,
+        ) -> None:
+            captured_bodies.append(body)
+
+        with patch("orchestrator.app.main._verify_request_signing", side_effect=capturing_verify), \
+             patch("orchestrator.app.main._verify_ingest_auth"), \
+             patch("orchestrator.app.main._resolve_tenant_context", return_value=MagicMock(tenant_id="default")), \
+             patch("orchestrator.app.main._decode_documents_async", new_callable=AsyncMock, return_value=[]):
+            await ingest_fn(
+                request=mock_pydantic_req,
+                raw_request=mock_raw_request,
+                authorization=None,
+                x_signature=None,
+                x_timestamp=None,
+                x_nonce=None,
+                sync=False,
+            )
+
+        assert len(captured_bodies) == 1
+        assert captured_bodies[0] == b'{"documents": []}'
