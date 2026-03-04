@@ -1143,6 +1143,8 @@ class StreamingIngestionPipeline:
         self._total_entities = 0
         self._commit_status = "success"
         self._skipped: List[str] = []
+        self._concurrency = int(os.environ.get("INGESTION_CONCURRENCY", "5"))
+        self._sem = asyncio.Semaphore(self._concurrency)
 
     @property
     def chunk_count(self) -> int:
@@ -1157,29 +1159,44 @@ class StreamingIngestionPipeline:
         return self._commit_status
 
     async def process_directory(self, directory_path: str) -> Dict[str, Any]:
+        tasks: List[asyncio.Task[None]] = []
         async for chunk in load_directory_stream(
             directory_path,
             chunk_size=self._chunk_size,
             max_total_bytes=self._max_bytes,
             skipped=self._skipped,
         ):
-            await self._process_single_chunk(chunk)
+            tasks.append(asyncio.create_task(self._process_single_chunk_bounded(chunk)))
+        self._collect_task_results(
+            await asyncio.gather(*tasks, return_exceptions=True)
+        )
         return self._build_result()
 
     async def process_files(self, raw_files: List[Dict[str, str]]) -> Dict[str, Any]:
+        tasks: List[asyncio.Task[None]] = []
         for i in range(0, len(raw_files), self._chunk_size):
             chunk = raw_files[i:i + self._chunk_size]
-            await self._process_single_chunk(chunk)
+            tasks.append(asyncio.create_task(self._process_single_chunk_bounded(chunk)))
+        self._collect_task_results(
+            await asyncio.gather(*tasks, return_exceptions=True)
+        )
         return self._build_result()
 
-    async def _process_single_chunk(
+    def _collect_task_results(self, results: List[Any]) -> None:
+        for result in results:
+            if isinstance(result, BaseException):
+                logger.warning("Chunk processing failed: %s", result)
+                self._commit_status = "failed"
+
+    async def _process_single_chunk_bounded(
         self, chunk: List[Dict[str, str]],
     ) -> None:
-        chunk_nodes, chunk_status, _ = await _process_chunk(chunk)
-        self._total_entities += len(chunk_nodes)
-        if chunk_status == "failed":
-            self._commit_status = "failed"
-        self._chunk_count += 1
+        async with self._sem:
+            chunk_nodes, chunk_status, _ = await _process_chunk(chunk)
+            self._total_entities += len(chunk_nodes)
+            if chunk_status == "failed":
+                self._commit_status = "failed"
+            self._chunk_count += 1
 
     def _build_result(self) -> Dict[str, Any]:
         return {

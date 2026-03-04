@@ -83,7 +83,7 @@ class TestQueryCostGateInQueryEngine:
                 mock_driver, cheap_cypher, {},
             )
 
-        assert result is not None
+        assert result == [{"name": "svc"}]
         mock_session.execute_read.assert_called_once()
 
     @pytest.mark.asyncio
@@ -105,7 +105,7 @@ class TestQueryCostGateInQueryEngine:
                 mock_driver, reasonable_cypher, {},
             )
 
-        assert result is not None or result == []
+        assert result == []
 
 
 class TestQueryCostConfigurable:

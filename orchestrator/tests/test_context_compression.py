@@ -91,7 +91,10 @@ class TestContextCompression:
             "community_id" in item or "member_count" in item
             for item in result
         )
-        assert has_bridge_info or has_community_info
+        assert has_bridge_info, (
+            "Compression must preserve bridge edge information from the "
+            "200-node linear chain"
+        )
 
     def test_llm_failure_falls_back_to_truncation(self):
         budget = TokenBudget(max_context_tokens=32_000)

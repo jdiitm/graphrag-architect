@@ -144,7 +144,8 @@ class TestTruncateContextTopologyWithCommunities:
         )
 
         result = truncate_context_topology(candidates, budget)
-        result_ids = {r.get("id", "") for r in result}
-        assert "iso-1" in result_ids or any(
-            "community_id" in r for r in result
+        has_compression = any("community_id" in r for r in result)
+        assert has_compression, (
+            "Large component must be compressed via community summaries "
+            "when budget is constrained"
         )

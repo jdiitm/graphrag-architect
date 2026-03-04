@@ -936,7 +936,8 @@ class DurableOutboxDrainer:
         self._max_retries = max_retries
         self._worker_id = worker_id or str(uuid.uuid4())
         self._lease_seconds = lease_seconds
-        self._latest_version_by_key: Dict[str, int] = {}
+        self._max_tracked_fences = int(os.environ.get("OUTBOX_MAX_TRACKED_FENCES", "100000"))
+        self._latest_version_by_key: OrderedDict[str, int] = OrderedDict()
 
     async def _load_events(self) -> List[VectorSyncEvent]:
         if isinstance(self._store, ClaimableOutboxStore):
@@ -953,6 +954,17 @@ class DurableOutboxDrainer:
             await self._store.mark_completed(event_id)
         await self._store.delete_event(event_id)
 
+    def _fence_lookup(self, scoped_key: str) -> int:
+        version = self._latest_version_by_key.get(scoped_key, -1)
+        if version != -1:
+            self._latest_version_by_key.move_to_end(scoped_key)
+        return version
+
+    def _fence_record(self, scoped_key: str, version: int) -> None:
+        self._latest_version_by_key[scoped_key] = version
+        if len(self._latest_version_by_key) > self._max_tracked_fences:
+            self._latest_version_by_key.popitem(last=False)
+
     async def process_once(self) -> int:
         pending = await self._load_events()
         if not pending:
@@ -963,7 +975,7 @@ class DurableOutboxDrainer:
             fence_key = self._event_fence_key(event)
             tenant_id = self._event_tenant_id(event)
             scoped_fence_key = f"{tenant_id}:{fence_key}"
-            latest = self._latest_version_by_key.get(scoped_fence_key, -1)
+            latest = self._fence_lookup(scoped_fence_key)
             if isinstance(self._store, VersionFenceStore):
                 persisted = await self._store.get_version_fence(
                     fence_key, tenant_id=tenant_id,
@@ -982,7 +994,7 @@ class DurableOutboxDrainer:
                     await self._vector_store.delete(
                         event.collection, event.pruned_ids,
                     )
-                self._latest_version_by_key[scoped_fence_key] = event.version
+                self._fence_record(scoped_fence_key, event.version)
                 if isinstance(self._store, VersionFenceStore):
                     await self._store.update_version_fence(
                         fence_key, event.version, tenant_id=tenant_id,

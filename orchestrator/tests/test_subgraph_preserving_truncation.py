@@ -105,17 +105,27 @@ class TestSubgraphPreservingTruncation:
         isolated = [{"id": "ISO", "score": 0.3}]
         candidates = big + small + isolated
 
-        big_cost = sum(estimate_tokens(str(c)) for c in big)
+        total_cost = sum(estimate_tokens(str(c)) for c in candidates)
         budget = TokenBudget(
-            max_context_tokens=big_cost // 2 + 500,
+            max_context_tokens=total_cost // 2,
             max_results=50,
         )
 
         result = truncate_context_topology(candidates, budget)
-        result_ids = {r.get("id", "") for r in result}
 
-        has_big_nodes = any(r_id.startswith("BIG") for r_id in result_ids)
-        assert has_big_nodes
+        assert 0 < len(result) < len(candidates), (
+            f"Truncation must reduce {len(candidates)} candidates to a "
+            f"non-empty subset under budget, got {len(result)}"
+        )
+        has_big_content = any(
+            r.get("id", "").startswith("BIG")
+            or any(m.startswith("BIG") for m in r.get("members", []))
+            for r in result
+        )
+        assert has_big_content, (
+            "High-score BIG chain must survive truncation either as "
+            "original nodes or community summaries"
+        )
 
     def test_empty_candidates_returns_empty(self) -> None:
         budget = TokenBudget(max_context_tokens=10_000, max_results=50)

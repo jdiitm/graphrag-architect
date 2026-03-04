@@ -309,9 +309,8 @@ class TestCompletionTrackerWiredIntoCommit:
             result = await commit_to_neo4j({"extracted_nodes": entities})
 
         assert result["commit_status"] == "success"
-        assert len(completion_marks) > 0 or result.get("completion_tracked"), (
-            "commit_to_neo4j must call CompletionTracker.mark_committed() "
-            "after successful Neo4j commit."
+        assert result.get("completion_tracked"), (
+            "commit_to_neo4j must signal completion tracking in the result"
         )
 
 

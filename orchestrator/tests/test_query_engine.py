@@ -588,6 +588,7 @@ class TestBuildAclFilterRequireTokens:
             _build_acl_filter(state)
 
     def test_no_error_when_require_tokens_false_and_secret_empty(self, base_query_state):
+        from orchestrator.app.access_control import CypherPermissionFilter
         from orchestrator.app.query_engine import _build_acl_filter
 
         state = {**base_query_state, "authorization": ""}
@@ -601,10 +602,10 @@ class TestBuildAclFilterRequireTokens:
         ):
             result = _build_acl_filter(state)
 
-        assert result is not None
+        assert isinstance(result, CypherPermissionFilter)
 
     def test_no_error_when_require_tokens_true_and_secret_set(self, base_query_state):
-        from orchestrator.app.access_control import sign_token
+        from orchestrator.app.access_control import CypherPermissionFilter, sign_token
         from orchestrator.app.query_engine import _build_acl_filter
 
         secret = "test-secret-key"
@@ -620,7 +621,9 @@ class TestBuildAclFilterRequireTokens:
         ):
             result = _build_acl_filter(state)
 
-        assert result is not None
+        assert isinstance(result, CypherPermissionFilter)
+        _, params = result.inject_into_cypher("MATCH (n) RETURN n", alias="n")
+        assert "Team_infra" in params["acl_labels"]
 
 
 class TestCypherSandboxWiring:

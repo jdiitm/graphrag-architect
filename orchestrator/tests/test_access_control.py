@@ -150,7 +150,9 @@ class TestCypherPermissionFilter:
         original = "MATCH (n:Service) WHERE n.language = 'Go' RETURN n"
         filtered, params = filt.inject_into_cypher(original)
         assert "n.language = 'Go'" in filtered
-        assert params
+        assert "acl_labels" in params
+        assert "Team_platform" in params["acl_labels"]
+        assert "Ns_production" in params["acl_labels"]
 
     def test_inject_into_cypher_no_where_no_return(self):
         principal = SecurityPrincipal(

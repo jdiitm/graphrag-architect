@@ -44,6 +44,7 @@ COLLECTION_MULTIPLIER = 2.0
 
 _DEFAULT_DEGREE_THRESHOLD = 200
 _DEFAULT_APOC_DEGREE_THRESHOLD = 1000
+_SUPERNODE_CONCURRENCY = int(os.environ.get("SUPERNODE_CONCURRENCY", "10"))
 
 
 class TraversalStrategy(enum.Enum):
@@ -638,20 +639,32 @@ async def _batched_supernode_expansion(
         return []
 
     if query_embedding is not None:
+        sem = asyncio.Semaphore(_SUPERNODE_CONCURRENCY)
+
+        async def _bounded_hop(sid: str) -> List[Dict[str, Any]]:
+            async with sem:
+                return await execute_hop(
+                    driver=driver,
+                    source_id=sid,
+                    tenant_id=tenant_id,
+                    acl_params=acl_params,
+                    timeout=timeout,
+                    sample_size=sample_size,
+                    max_degree=0,
+                    query_embedding=query_embedding,
+                    similarity_threshold=similarity_threshold,
+                )
+
+        results_list = await asyncio.gather(*(
+            _bounded_hop(sid) for sid in source_ids
+        ), return_exceptions=True)
+
         all_results: List[Dict[str, Any]] = []
-        for source_id in source_ids:
-            results = await execute_hop(
-                driver=driver,
-                source_id=source_id,
-                tenant_id=tenant_id,
-                acl_params=acl_params,
-                timeout=timeout,
-                sample_size=sample_size,
-                max_degree=0,
-                query_embedding=query_embedding,
-                similarity_threshold=similarity_threshold,
-            )
-            all_results.extend(results)
+        for results in results_list:
+            if isinstance(results, BaseException):
+                logger.warning("Parallel supernode expansion failed: %s", results)
+            elif results:
+                all_results.extend(results)
         return all_results
 
     provider = TenantSecurityProvider()

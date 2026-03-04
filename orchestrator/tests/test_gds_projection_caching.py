@@ -66,7 +66,7 @@ class TestGDSProjectionManager:
         created = await manager.ensure_projection("tenant-a")
         assert created is True
         cached = await fake_redis.get("gds:projection:tenant-a:exists")
-        assert cached is not None
+        assert cached == "1"
 
     @pytest.mark.asyncio
     async def test_ensure_projection_reuses_cached(
@@ -111,7 +111,7 @@ class TestGDSProjectionManager:
         cached_a = await fake_redis.get("gds:projection:tenant-a:exists")
         cached_b = await fake_redis.get("gds:projection:tenant-b:exists")
         assert cached_a is None
-        assert cached_b is not None
+        assert cached_b == "1"
 
     @pytest.mark.asyncio
     async def test_stale_projection_recreated(
