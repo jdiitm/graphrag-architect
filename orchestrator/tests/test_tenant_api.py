@@ -9,6 +9,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from orchestrator.app.access_control import sign_token
+from orchestrator.app.tenant_admin_api import _resolve_principal
 
 _TOKEN_SECRET = "test-secret-key-for-tenant-api-xx"
 
@@ -302,3 +303,27 @@ class TestTenantIsolation:
                 headers={"Authorization": f"Bearer {_VIEWER_TOKEN}"},
             )
             assert resp_other.status_code == 403
+
+
+class TestPrincipalResolutionConsistency:
+    def test_resolve_principal_uses_non_wildcard_anonymous_without_header(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"AUTH_REQUIRE_TOKENS": "false", "AUTH_TOKEN_SECRET": ""},
+            clear=False,
+        ):
+            principal = _resolve_principal(None)
+        assert principal.team == "__anonymous__"
+        assert principal.namespace == "__anonymous__"
+        assert principal.role == "anonymous"
+
+    def test_resolve_principal_uses_non_wildcard_anonymous_without_secret(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"AUTH_REQUIRE_TOKENS": "false", "AUTH_TOKEN_SECRET": ""},
+            clear=False,
+        ):
+            principal = _resolve_principal("Bearer some-token")
+        assert principal.team == "__anonymous__"
+        assert principal.namespace == "__anonymous__"
+        assert principal.role == "anonymous"
