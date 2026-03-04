@@ -33,6 +33,8 @@ from orchestrator.app.access_control import (
 )
 from orchestrator.app.agentic_traversal import run_traversal
 from orchestrator.app.audit_log import SecurityAuditLogger
+from orchestrator.app.call_isolation import validate_call_subquery_acl
+from orchestrator.app.tenant_security import TenantSecurityProvider
 from orchestrator.app.circuit_breaker import (
     CircuitBreakerConfig,
     CircuitOpenError,
@@ -157,6 +159,19 @@ MAX_CYPHER_ITERATIONS = 3
 _TEMPLATE_CATALOG = TemplateCatalog()
 _TEMPLATE_REGISTRY = TemplateHashRegistry(_TEMPLATE_CATALOG)
 _SANDBOX = SandboxedQueryExecutor(registry=_TEMPLATE_REGISTRY)
+_TENANT_SECURITY = TenantSecurityProvider()
+
+
+def validate_cypher_security(
+    cypher: str,
+    params: Dict[str, Any],
+    require_acl: bool = True,
+) -> None:
+    _TENANT_SECURITY.validate_query(cypher, params, require_acl=require_acl)
+    if "CALL" in cypher.upper():
+        validate_call_subquery_acl(cypher)
+
+
 def _safe_create_subgraph_cache() -> Any:
     try:
         return create_subgraph_cache()
@@ -936,6 +951,8 @@ async def _execute_sandboxed_read(
     cypher: str,
     acl_params: Dict[str, str],
 ) -> Optional[List[Any]]:
+    validate_cypher_security(cypher, acl_params, require_acl=False)
+
     cost = estimate_query_cost(cypher)
     max_cost = _get_max_query_cost()
     if cost > max_cost:
@@ -1362,12 +1379,29 @@ async def _async_rerank_candidates(
     return ranked
 
 
+_DEGRADED_RESPONSE_MESSAGE = (
+    "Vector retrieval is temporarily unavailable. "
+    "Results may be incomplete or absent."
+)
+
+
 async def _do_synthesize(state: QueryState) -> Dict[str, Any]:
     context: List[Dict[str, Any]] = []
     if state.get("candidates"):
         context.extend(state["candidates"])
     if state.get("cypher_results"):
         context.extend(state["cypher_results"])
+
+    if not context and state.get("retrieval_degraded"):
+        return {
+            "answer": json.dumps({
+                "type": "degraded",
+                "message": _DEGRADED_RESPONSE_MESSAGE,
+                "candidates_available": False,
+            }),
+            "sources": [],
+            "retrieval_degraded": True,
+        }
 
     if not context:
         return {

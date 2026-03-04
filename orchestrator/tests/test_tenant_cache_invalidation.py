@@ -138,6 +138,9 @@ class TestGranularCacheInvalidation:
                 "orchestrator.app.query_engine._get_query_timeout",
                 return_value=30.0,
             ),
+            patch(
+                "orchestrator.app.query_engine.validate_cypher_security",
+            ),
         ):
             await _execute_sandboxed_read(mock_driver, cypher, acl_params)
 

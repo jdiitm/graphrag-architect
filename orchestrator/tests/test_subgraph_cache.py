@@ -125,6 +125,8 @@ class TestSubgraphCacheWiredIntoQueryEngine:
         with patch(
             "orchestrator.app.query_engine._get_query_timeout",
             return_value=30.0,
+        ), patch(
+            "orchestrator.app.query_engine.validate_cypher_security",
         ):
             result1 = await _execute_sandboxed_read(mock_driver, cypher, params)
             result2 = await _execute_sandboxed_read(mock_driver, cypher, params)

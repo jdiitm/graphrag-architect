@@ -579,6 +579,10 @@ def _serialize_record(
     return "\n".join(parts)
 
 
+def _cdata_escape(text: str) -> str:
+    return text.replace("]]>", "]]]]><![CDATA[>")
+
+
 def format_context_for_prompt(
     context: List[Dict[str, Any]],
     max_chars_per_value: int = 500,
@@ -601,8 +605,9 @@ def format_context_for_prompt(
         )
 
     body = "\n".join(serialized_records)
+    escaped_body = _cdata_escape(body)
     return ContextBlock(
-        content=f"<{delimiter}>{body}</{delimiter}>",
+        content=f"<{delimiter}><![CDATA[{escaped_body}]]></{delimiter}>",
         delimiter=delimiter,
     )
 
@@ -616,7 +621,7 @@ def _enforce_budget_on_serialized(
     if not records:
         return records
 
-    wrapper_tokens = estimate_tokens(f"<{delimiter}></{delimiter}>")
+    wrapper_tokens = estimate_tokens(f"<{delimiter}><![CDATA[]]></{delimiter}>")
     newline_tokens = estimate_tokens("\n")
     selected: List[str] = []
     running_tokens = wrapper_tokens
@@ -631,7 +636,9 @@ def _enforce_budget_on_serialized(
         running_tokens = projected
 
     if not selected:
-        single_total = estimate_tokens(f"<{delimiter}>{records[0]}</{delimiter}>")
+        single_total = estimate_tokens(
+            f"<{delimiter}><![CDATA[{_cdata_escape(records[0])}]]></{delimiter}>"
+        )
         raise ContextBudgetExceededError(
             f"Single record ({single_total} tokens) exceeds "
             f"token budget ({budget.max_context_tokens} tokens)"
@@ -640,13 +647,17 @@ def _enforce_budget_on_serialized(
     # Defensive exact check in case tokenizer non-linearity crosses boundaries.
     while True:
         body = "\n".join(selected)
-        exact_total = estimate_tokens(f"<{delimiter}>{body}</{delimiter}>")
+        exact_total = estimate_tokens(
+            f"<{delimiter}><![CDATA[{_cdata_escape(body)}]]></{delimiter}>"
+        )
         if exact_total <= budget.max_context_tokens or len(selected) == 1:
             break
         selected.pop()
 
     if len(selected) == 1:
-        single_total = estimate_tokens(f"<{delimiter}>{selected[0]}</{delimiter}>")
+        single_total = estimate_tokens(
+            f"<{delimiter}><![CDATA[{_cdata_escape(selected[0])}]]></{delimiter}>"
+        )
         if single_total > budget.max_context_tokens:
             raise ContextBudgetExceededError(
                 f"Single record ({single_total} tokens) exceeds "
@@ -658,7 +669,10 @@ def _enforce_budget_on_serialized(
         "format_context_for_prompt dropped %d records to fit token budget "
         "(%d tokens, limit %d)",
         dropped,
-        estimate_tokens(f"<{delimiter}>{'\n'.join(selected)}</{delimiter}>"),
+        estimate_tokens(
+            f"<{delimiter}><![CDATA[{_cdata_escape(chr(10).join(selected))}]]>"
+            f"</{delimiter}>"
+        ),
         budget.max_context_tokens,
     )
     return selected

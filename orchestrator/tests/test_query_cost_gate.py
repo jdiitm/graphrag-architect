@@ -57,7 +57,8 @@ class TestQueryCostGateInQueryEngine:
         )
         mock_driver = AsyncMock()
 
-        with patch.dict(os.environ, {"MAX_QUERY_COST": "5"}):
+        with patch.dict(os.environ, {"MAX_QUERY_COST": "5"}), \
+             patch("orchestrator.app.query_engine.validate_cypher_security"):
             with pytest.raises(CypherValidationError, match="cost"):
                 await _execute_sandboxed_read(
                     mock_driver, expensive_cypher, {},
@@ -78,7 +79,8 @@ class TestQueryCostGateInQueryEngine:
             __aexit__=AsyncMock(return_value=False),
         )
 
-        with patch.dict(os.environ, {"MAX_QUERY_COST": "50"}):
+        with patch.dict(os.environ, {"MAX_QUERY_COST": "50"}), \
+             patch("orchestrator.app.query_engine.validate_cypher_security"):
             result = await _execute_sandboxed_read(
                 mock_driver, cheap_cypher, {},
             )
@@ -100,7 +102,8 @@ class TestQueryCostGateInQueryEngine:
         )
 
         env_without_max = {k: v for k, v in os.environ.items() if k != "MAX_QUERY_COST"}
-        with patch.dict(os.environ, env_without_max, clear=True):
+        with patch.dict(os.environ, env_without_max, clear=True), \
+             patch("orchestrator.app.query_engine.validate_cypher_security"):
             result = await _execute_sandboxed_read(
                 mock_driver, reasonable_cypher, {},
             )

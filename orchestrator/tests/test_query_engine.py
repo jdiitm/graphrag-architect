@@ -1089,6 +1089,8 @@ class TestNeo4jDriverTimeout:
         with patch(
             "orchestrator.app.query_engine._get_query_timeout",
             return_value=17.5,
+        ), patch(
+            "orchestrator.app.query_engine.validate_cypher_security",
         ):
             await _execute_sandboxed_read(
                 mock_driver, "MATCH (n) RETURN n", {},

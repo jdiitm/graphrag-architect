@@ -10,7 +10,8 @@ import secrets
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, List, Set, Tuple
+import os
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 _DEFAULT_MAX_QUERY_CHARS = 4_000
 _DEFAULT_MAX_SOURCE_CHARS = 1_000_000
@@ -496,11 +497,29 @@ class PromptInjectionClassifier:
         return cleaned
 
 
+class HMACConfigurationError(Exception):
+    pass
+
+
 class HMACDelimiter:
     _key: bytes
 
-    def __init__(self) -> None:
-        self._key = secrets.token_bytes(32)
+    def __init__(self, key: Optional[bytes] = None) -> None:
+        self._key = key if key is not None else secrets.token_bytes(32)
+
+    @classmethod
+    def from_env(cls) -> HMACDelimiter:
+        deployment_mode = os.environ.get("DEPLOYMENT_MODE", "dev").lower()
+        raw_secret = os.environ.get("HMAC_DELIMITER_SECRET", "")
+        if raw_secret:
+            return cls(key=raw_secret.encode("utf-8"))
+        if deployment_mode == "production":
+            raise HMACConfigurationError(
+                "HMAC_DELIMITER_SECRET is required in production mode. "
+                "Set the HMAC_DELIMITER_SECRET environment variable to a "
+                "shared secret for cross-replica HMAC delimiter validation."
+            )
+        return cls()
 
     def generate(self) -> str:
         nonce = secrets.token_hex(12)
