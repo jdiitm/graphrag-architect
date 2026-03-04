@@ -95,6 +95,7 @@ def sanitize_query_input(
     cleaned = _strip_control_chars(raw)
     cleaned = cleaned[:max_chars]
     cleaned = _strip_xml_boundaries(cleaned)
+    cleaned = _apply_secret_filters(cleaned)
     cleaned = _apply_injection_filters(cleaned)
     return f"<user_query>{cleaned}</user_query>"
 
