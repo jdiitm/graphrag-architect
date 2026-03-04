@@ -38,6 +38,8 @@ class BlobReference:
 
 
 def _validate_tenant_key(key: str, tenant_id: str) -> None:
+    if not tenant_id:
+        raise TenantBlobAccessError("tenant_id is required")
     expected_prefix = f"{tenant_id}/"
     if not key.startswith(expected_prefix):
         raise TenantBlobAccessError(
