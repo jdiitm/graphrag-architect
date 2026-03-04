@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from orchestrator.app.tombstone_filter import (
-    TOMBSTONE_CHECK_QUERY,
     TOMBSTONE_CHECK_TENANT_QUERY,
     check_tombstoned_nodes,
     filter_tombstoned_results,
@@ -37,11 +36,11 @@ def _mock_driver(query_data: list[dict]) -> AsyncMock:
 
 class TestTombstoneCheckQuery:
     def test_query_uses_unwind(self) -> None:
-        assert "UNWIND" in TOMBSTONE_CHECK_QUERY
-        assert "$node_ids" in TOMBSTONE_CHECK_QUERY
+        assert "UNWIND" in TOMBSTONE_CHECK_TENANT_QUERY
+        assert "$node_ids" in TOMBSTONE_CHECK_TENANT_QUERY
 
     def test_query_filters_tombstoned(self) -> None:
-        assert "tombstoned_at IS NOT NULL" in TOMBSTONE_CHECK_QUERY
+        assert "tombstoned_at IS NOT NULL" in TOMBSTONE_CHECK_TENANT_QUERY
 
     def test_tenant_query_includes_tenant_filter(self) -> None:
         assert "$tenant_id" in TOMBSTONE_CHECK_TENANT_QUERY
@@ -49,6 +48,11 @@ class TestTombstoneCheckQuery:
 
 @pytest.mark.asyncio
 class TestCheckTombstonedNodes:
+    async def test_rejects_empty_tenant_id(self) -> None:
+        driver = _mock_driver([])
+        with pytest.raises(ValueError, match="tenant_id"):
+            await check_tombstoned_nodes(driver, ["svc-1"], "")
+
     async def test_returns_tombstoned_ids(self) -> None:
         driver = _mock_driver([
             {"node_id": "svc-stale-1"},
@@ -80,6 +84,13 @@ class TestCheckTombstonedNodes:
 
 @pytest.mark.asyncio
 class TestFilterTombstonedResults:
+    async def test_rejects_empty_tenant_id(self) -> None:
+        driver = _mock_driver([])
+        with pytest.raises(ValueError, match="tenant_id"):
+            await filter_tombstoned_results(
+                driver, [{"id": "svc-a", "score": 0.9}], "",
+            )
+
     async def test_removes_tombstoned_candidates(self) -> None:
         driver = _mock_driver([{"node_id": "stale-svc"}])
 

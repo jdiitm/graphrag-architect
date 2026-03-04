@@ -35,6 +35,14 @@ class TestRejectsWriteKeywords:
         with pytest.raises(CypherValidationError):
             validate_cypher_readonly("DROP INDEX my_index")
 
+    def test_rejects_foreach_write_body(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "MATCH (n:Service) "
+                "FOREACH (_ IN [1] | SET n.pwned = true) "
+                "RETURN n"
+            )
+
     def test_rejects_call_subquery(self):
         with pytest.raises(CypherValidationError):
             validate_cypher_readonly(
@@ -149,6 +157,13 @@ class TestAllowlistProcedures:
             "CALL dbms.components() YIELD name, versions RETURN name"
         )
         assert "CALL dbms.components" in result
+
+    def test_rejects_dbms_query_jmx(self):
+        with pytest.raises(CypherValidationError):
+            validate_cypher_readonly(
+                "CALL dbms.queryJmx('java.lang:type=Memory') "
+                "YIELD name, attributes RETURN name"
+            )
 
 
 class TestAllowsReadKeywords:

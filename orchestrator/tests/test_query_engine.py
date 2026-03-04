@@ -722,12 +722,12 @@ class TestVectorStoreWiring:
 
         fake_embedding = [0.1] * 10
         mock_store = AsyncMock()
-        mock_store.search = AsyncMock(return_value=[
+        mock_store.search_with_tenant = AsyncMock(return_value=[
             MagicMock(id="n1", score=0.95, metadata={"name": "auth-svc", "language": "go"}),
         ])
 
         mock_driver = MagicMock()
-        state = _make_state(base_query_state, query="auth-svc info", tenant_id="")
+        state = _make_state(base_query_state, query="auth-svc info", tenant_id="acme")
 
         with patch(
             "orchestrator.app.query_engine._VECTOR_STORE", mock_store,
@@ -737,7 +737,7 @@ class TestVectorStoreWiring:
         ):
             result = await _fetch_candidates(mock_driver, state)
 
-        mock_store.search.assert_called_once()
+        mock_store.search_with_tenant.assert_called_once()
         assert result[0]["name"] == "auth-svc"
         assert result[0]["score"] == 0.95
 

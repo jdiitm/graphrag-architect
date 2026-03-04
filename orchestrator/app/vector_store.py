@@ -271,16 +271,28 @@ class QdrantVectorStore:
         self,
         collection: str,
         query_vector: List[float],
+        tenant_id: str = "",
         limit: int = 10,
     ) -> List[SearchResult]:
         async def _do_search() -> List[SearchResult]:
             client = self._get_client()
+            kwargs: Dict[str, Any] = {
+                "collection_name": collection,
+                "query_vector": query_vector,
+                "limit": limit,
+            }
+            if tenant_id:
+                from qdrant_client.models import FieldCondition, Filter, MatchValue
+                kwargs["query_filter"] = Filter(
+                    must=[
+                        FieldCondition(
+                            key="tenant_id",
+                            match=MatchValue(value=tenant_id),
+                        ),
+                    ],
+                )
             results = await asyncio.wait_for(
-                client.search(
-                    collection_name=collection,
-                    query_vector=query_vector,
-                    limit=limit,
-                ),
+                client.search(**kwargs),
                 timeout=self._search_timeout,
             )
             return [

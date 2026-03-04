@@ -322,13 +322,23 @@ class OutboxDrainer:
         for event in pending:
             try:
                 if event.operation == "upsert":
-                    await self._vector_store.upsert(
-                        event.collection, event.vectors,
-                    )
+                    if event.tenant_id:
+                        await self._vector_store.upsert(
+                            event.collection, event.vectors, tenant_id=event.tenant_id,
+                        )
+                    else:
+                        await self._vector_store.upsert(
+                            event.collection, event.vectors,
+                        )
                 else:
-                    await self._vector_store.delete(
-                        event.collection, event.pruned_ids,
-                    )
+                    if event.tenant_id:
+                        await self._vector_store.delete(
+                            event.collection, event.pruned_ids, tenant_id=event.tenant_id,
+                        )
+                    else:
+                        await self._vector_store.delete(
+                            event.collection, event.pruned_ids,
+                        )
                 self._outbox.mark_emitted(event.event_id)
                 processed += 1
             except Exception as exc:
@@ -987,13 +997,23 @@ class DurableOutboxDrainer:
                 continue
             try:
                 if event.operation == "upsert":
-                    await self._vector_store.upsert(
-                        event.collection, event.vectors,
-                    )
+                    if event.tenant_id:
+                        await self._vector_store.upsert(
+                            event.collection, event.vectors, tenant_id=event.tenant_id,
+                        )
+                    else:
+                        await self._vector_store.upsert(
+                            event.collection, event.vectors,
+                        )
                 else:
-                    await self._vector_store.delete(
-                        event.collection, event.pruned_ids,
-                    )
+                    if event.tenant_id:
+                        await self._vector_store.delete(
+                            event.collection, event.pruned_ids, tenant_id=event.tenant_id,
+                        )
+                    else:
+                        await self._vector_store.delete(
+                            event.collection, event.pruned_ids,
+                        )
                 self._fence_record(scoped_fence_key, event.version)
                 if isinstance(self._store, VersionFenceStore):
                     await self._store.update_version_fence(
