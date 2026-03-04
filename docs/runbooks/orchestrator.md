@@ -14,10 +14,13 @@ depth and CPU (80% target). Exposes port 8000 with Prometheus scrape on `/metric
 `REDIS_CACHE_URL`, outbox/state via `REDIS_OUTBOX_URL` — tiered isolation since PR #272),
 LLM providers (Gemini, Claude).
 
-**Security hardening (PR #272):** Tenant wildcard bypass eliminated (anonymous requests
+**Security and reliability hardening (PR #272+):** Tenant wildcard bypass eliminated (anonymous requests
 receive `__anonymous__` sentinel). Cypher input capped at 64KB. Rate limiter fails closed
 on Redis failure (configurable via `RATE_LIMIT_FAIL_STRATEGY`). Unicode confusable
-normalization in prompt firewall. Token budget enforced at LLM synthesis.
+normalization in prompt firewall. Token budget enforced at LLM synthesis. Driver-executed Cypher
+queries with tenant context now pass through AST tenant-scope enforcement for all `MATCH` clauses.
+Supernode traversal sample windows are bounded to prevent fanout amplification, and async ingestion/query
+jobs emit periodic job-store heartbeats (`ASYNC_JOB_HEARTBEAT_INTERVAL_SECONDS`, default 30s) while running.
 
 ---
 
