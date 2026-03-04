@@ -67,6 +67,41 @@ class TestSampleSizeRespected:
         )
         assert len(results) == 25
 
+    @pytest.mark.asyncio
+    async def test_supernode_sample_size_is_capped(self) -> None:
+        degree_data = [{"degree": MAX_NODE_DEGREE + 1}]
+        captured_params: dict = {}
+        driver = AsyncMock()
+        session = AsyncMock()
+        call_count = {"n": 0}
+
+        async def _execute_read(tx_fn, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return degree_data
+            mock_tx = AsyncMock()
+            mock_result = AsyncMock()
+            mock_result.data = AsyncMock(return_value=[])
+            mock_tx.run = AsyncMock(return_value=mock_result)
+            await tx_fn(mock_tx)
+            if mock_tx.run.call_args is not None:
+                captured_params.update(mock_tx.run.call_args.kwargs)
+            return []
+
+        session.execute_read = _execute_read
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        driver.session = MagicMock(return_value=session)
+
+        await execute_hop(
+            driver=driver,
+            source_id="hub-node",
+            tenant_id="t1",
+            acl_params={"is_admin": True, "acl_labels": []},
+            sample_size=10_000,
+        )
+        assert captured_params.get("sample_size") == 200
+
 
 class TestNormalNodeUnchanged:
     @pytest.mark.asyncio
