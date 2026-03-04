@@ -11,6 +11,10 @@ from neo4j import READ_ACCESS, WRITE_ACCESS, AsyncDriver, AsyncManagedTransactio
 
 from orchestrator.app.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from orchestrator.app.config import HotTargetConfig
+from orchestrator.app.cypher_ast import (
+    inject_tenant_scope_all_matches,
+    validate_acl_coverage,
+)
 from orchestrator.app.extraction_models import (
     CallsEdge,
     ConsumesEdge,
@@ -21,10 +25,6 @@ from orchestrator.app.extraction_models import (
     ProducesEdge,
     ServiceNode,
     compute_content_hash,
-)
-from orchestrator.app.cypher_ast import (
-    inject_tenant_scope_all_matches,
-    validate_acl_coverage,
 )
 from orchestrator.app.neo4j_pool import get_query_timeout
 from orchestrator.app.ontology import (
