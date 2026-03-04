@@ -2,7 +2,7 @@
 
 A production-grade, multi-tenant GraphRAG system that analyzes distributed systems by building a knowledge graph from source code, infrastructure manifests, and message broker topologies. It answers multi-hop architectural questions using hybrid Vector + Cypher retrieval over Neo4j.
 
-> **4,306 Python tests** | **203 Go tests** | **Pylint 10/10** | **6 P0 security gaps closed** | **22-gap adversarial audit tracked**
+> **4,324 Python tests** | **203 Go tests** | **Pylint 10/10** | **6 P0 security gaps closed** | **22-gap adversarial audit tracked**
 
 For the full system specification — data model, functional requirements, security architecture, SLOs, and roadmap — see [docs/SPEC.md](docs/SPEC.md).
 
@@ -58,7 +58,7 @@ For the full system specification — data model, functional requirements, secur
 
 ```
 graphrag-architect/
-├── orchestrator/                  # Python orchestrator (94 modules, 4,306 tests)
+├── orchestrator/                  # Python orchestrator (94 modules, 4,324 tests)
 │   ├── app/                      # LangGraph DAGs, FastAPI, Neo4j, LLM extraction
 │   │   ├── main.py               # FastAPI app: /ingest, /query, /health, /metrics
 │   │   ├── graph_builder.py      # LangGraph ingestion DAG + streaming pipeline
@@ -72,7 +72,7 @@ graphrag-architect/
 │   │   ├── gdpr.py               # GDPR data export + erasure endpoints
 │   │   ├── data_residency.py     # Tenant region routing + data residency
 │   │   └── plugins/base.py       # Extensible plugin architecture
-│   ├── tests/                    # 347 test files (unit, e2e, contract, security)
+│   ├── tests/                    # 352 test files (unit, e2e, contract, security)
 │   │   ├── e2e/                  # Testcontainers-based E2E (Kafka → Go → Python → Neo4j)
 │   │   └── contract/             # HTTP API contract verification (Go ↔ Python)
 │   └── requirements.txt
@@ -153,7 +153,7 @@ export PROCESSOR_MODE="kafka"                     # kafka | ast | http
 ### 4. Run tests
 
 ```bash
-# Python tests (4,306 tests)
+# Python tests (4,324 tests)
 source .venv/bin/activate
 python -m pytest orchestrator/tests/ -v
 
@@ -170,7 +170,7 @@ The GitHub Actions CI runs 10 jobs on every push and PR:
 | Python lint | pylint | `orchestrator/` |
 | Python type check | mypy --strict | `orchestrator/app/` |
 | Python lint (style) | ruff | `orchestrator/` |
-| Python tests | pytest | 4,306 tests |
+| Python tests | pytest | 4,324 tests |
 | Go tests | go test -race | 203 tests (14 packages) |
 | Go lint | golangci-lint | `workers/ingestion/` |
 | Secret scanning | gitleaks | Full repo history |

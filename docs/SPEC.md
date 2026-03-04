@@ -249,7 +249,7 @@ graph TB
 
 **Current State (2 Deployable Services):**
 
-1. **Python Orchestrator** (`orchestrator/`): FastAPI application containing both the LangGraph ingestion DAG and query DAG, LLM extraction, Neo4j client, access control, tenant isolation, and observability. 94 Python modules, 347 test files, 4,306 tests.
+1. **Python Orchestrator** (`orchestrator/`): FastAPI application containing both the LangGraph ingestion DAG and query DAG, LLM extraction, Neo4j client, access control, tenant isolation, and observability. 94 Python modules, 352 test files, 4,324 tests.
 2. **Go Ingestion Workers** (`workers/ingestion/`): Kafka consumer with dispatcher, forwarding processor, DLQ handler, AST processor, blob forwarding, rate limiter, deduplication, outbox, healthz, and metrics server.
 
 **Target State (6 Logical Services) [Planned]:**
@@ -1447,7 +1447,7 @@ All endpoints are implemented. Core routes use unprefixed paths; domain APIs use
 | `/v1/tenants/{tenant_id}/repositories` | GET | Required | Ingested repositories for tenant |
 | `/v1/admin/schema/versions` | GET | Admin | Applied schema migration versions |
 | `/v1/admin/schema/migrate` | POST | Admin | Apply a schema migration |
-| `/v1/webhooks` | POST | Required | Register webhook callbacks |
+| `/v1/webhooks` | POST | Admin | Register webhook callbacks |
 
 **GDPR API (`orchestrator/app/gdpr.py`, prefix `/v1/tenants`):**
 
@@ -1742,7 +1742,7 @@ flowchart TD
     end
     G1 --> G2
     subgraph G2 ["Gate 2: Unit Tests [Implemented]"]
-        Py["pytest 4306 tests"]
+        Py["pytest 4324 tests"]
         Go["go test -race -cover"]
     end
     G2 --> G5["Gate 5: Build & Publish [Implemented]<br/>(Docker build)"]
@@ -1765,13 +1765,13 @@ flowchart TD
     end
 ```
 
-**Current CI (`.github/workflows/ci.yml`):** 10 jobs — `python-lint` (Pylint), `python-mypy` (mypy --strict), `python-ruff` (ruff), `python-test` (pytest, 4,306 tests), `go-lint` (golangci-lint), `go-test` (go test -race, 203 tests), `gitleaks` (secret scanning), `security-scan` (Trivy fs + SBOM), `docker-build` (build + Trivy image scan for orchestrator + ingestion-worker), `integration-test` (contract + E2E with Kafka + Neo4j services). All gates blocking.
+**Current CI (`.github/workflows/ci.yml`):** 10 jobs — `python-lint` (Pylint), `python-mypy` (mypy --strict), `python-ruff` (ruff), `python-test` (pytest, 4,324 tests), `go-lint` (golangci-lint), `go-test` (go test -race, 203 tests), `gitleaks` (secret scanning), `security-scan` (Trivy fs + SBOM), `docker-build` (build + Trivy image scan for orchestrator + ingestion-worker), `integration-test` (contract + E2E with Kafka + Neo4j services). All gates blocking.
 
 ### 16.3 Test Strategy
 
 | Layer | Count | Coverage Target | Infrastructure |
 |---|---|---|---|
-| Unit Tests | 4,306 Python (347 files), 203 Go (28 test files, 14 packages) | Python 80%, Go 70%, 100% on security-critical paths | In-process mocks |
+| Unit Tests | 4,324 Python (352 files), 203 Go (28 test files, 14 packages) | Python 80%, Go 70%, 100% on security-critical paths | In-process mocks |
 | Contract Tests | ~15 | Go worker ↔ Python orchestrator HTTP API | Pact |
 | Integration Tests | ~30 | Component interactions with real Neo4j + Kafka | Testcontainers |
 | E2E Tests | ~10 | Full pipeline (Kafka → Go → Python → Neo4j → query) | Testcontainers |
@@ -2044,9 +2044,11 @@ graph TB
 | **Enterprise** | Month 6-9 | Physical isolation. SOC2 controls. Secret management. | SOC2 Type I initiated, < 0.01% DLQ | **Complete** |
 | **Global Standard** | Month 9-12 | Multi-region. GDPR. Chaos tested. 100x scale. | 99.95% availability, DR tested | **Complete** |
 
-**Current State (March 2026):** All 61 production readiness items implemented. 4,306 Python tests (347 files, 94 modules), 203 Go tests (28 test files, 14 packages). CI pipeline: 10 jobs (pylint, pytest, mypy --strict, ruff, go test -race, golangci-lint, gitleaks, Trivy, Docker build + scan, integration tests). Pylint: 10.00/10.
+**Current State (March 2026):** All 61 production readiness items implemented. 4,324 Python tests (352 files, 94 modules), 203 Go tests (28 test files, 14 packages). CI pipeline: 10 jobs (pylint, pytest, mypy --strict, ruff, go test -race, golangci-lint, gitleaks, Trivy, Docker build + scan, integration tests). Pylint: 10.00/10.
 
 **P0 Security Hardening (PR #272):** 6 critical gaps closed from adversarial audit — tenant wildcard bypass eliminated, Cypher AST DoS prevention (64KB input cap + nesting depth limit), Redis tiered isolation (separate cache/outbox configs), token budget enforcement at LLM synthesis, rate limiter fail-closed default, Unicode confusable normalization in prompt firewall. 33 new tests, zero regressions. See `critical-audit-report.md` for full findings.
+
+**Tenant Boundary Hardening (PR #273):** Blob storage access now enforces tenant-scoped key prefixes (`_validate_tenant_key` in `blob_fetcher.py`, raises `TenantBlobAccessError` on cross-tenant access). Webhook registration requires admin role. Tenant admin API uses tenant-scoped Neo4j sessions (`_tenant_scoped_session`). See `audit-report.md` for full findings.
 
 ---
 
@@ -2252,6 +2254,7 @@ internal/
   processor/ast_processor.go        Go AST extraction via go/parser
   ratelimit/ratelimit.go            Token-bucket rate limiter
   telemetry/telemetry.go            OTEL TracerProvider, span helpers, trace context propagation
+  tlsconfig/tlsconfig.go            TLS configuration for mTLS connections
 ```
 
 **Python Orchestrator (`orchestrator/app/`) — 94 modules:**
@@ -2283,7 +2286,7 @@ checkpoint_store.py      LangGraph checkpointer (memory or Postgres)
 completion_tracker.py    Ingestion completion tracking
 ingestion_resume.py      Resumable ingestion support
 node_sink.py             IncrementalNodeSink, DurableNodeSink with namespace partitioning
-blob_fetcher.py          Blob fetching for ingestion
+blob_fetcher.py          Blob fetching with tenant boundary validation (TenantBlobAccessError)
 
 # Ingestion stages (modular pipeline)
 stages/__init__.py       IngestionStage protocol
@@ -2343,6 +2346,7 @@ prompt_sanitizer.py      Input sanitization, injection detection, Unicode confus
 guardrails.py            Query guardrails
 call_isolation.py        Call isolation boundaries
 gdpr.py                  GDPR-related logic (data export, erasure)
+tenant_admin_api.py      Tenant metadata, repository listing, schema migration, webhook registration (admin-gated)
 audit_log.py             Structured audit logging
 
 # Infrastructure clients
