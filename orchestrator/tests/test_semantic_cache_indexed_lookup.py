@@ -25,14 +25,14 @@ class TestIndexedLookupReplacesLinearScan:
         )
         cache = SemanticQueryCache(config=config)
         for i in range(150):
-            emb = _unit_embedding(64, i)
+            emb = _unit_embedding(256, i)
             cache.store(
                 f"query-{i}", emb, {"index": i},
                 tenant_id="t1",
             )
-        query_emb = _unit_embedding(64, 5)
+        query_emb = _unit_embedding(256, 5)
         result = cache.lookup(query_emb, tenant_id="t1")
-        assert result is not None
+        assert result == {"index": 5}
 
     def test_tenant_acl_index_exists_and_populated(self) -> None:
         cache = SemanticQueryCache(

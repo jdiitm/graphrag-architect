@@ -47,8 +47,9 @@ class TestServiceContainers:
         job = ci["jobs"]["integration-test"]
         neo4j = job["services"]["neo4j"]
         image = neo4j.get("image", "")
-        assert "5.26" in image or "5" in image.split(":")[1] if ":" in image else False, (
-            "neo4j service should use 5.x community image"
+        version = image.split(":")[1] if ":" in image else ""
+        assert version.startswith("5.") or version == "5", (
+            f"neo4j service should use 5.x community image, got '{image}'"
         )
 
     def test_neo4j_ports_exposed(self) -> None:

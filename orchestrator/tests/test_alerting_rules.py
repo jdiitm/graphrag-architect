@@ -34,6 +34,8 @@ class TestDLQSinkFailureAlert:
         assert alert is not None, (
             "Expected DLQSinkFailure alert in alerting.yaml"
         )
+        assert alert["alert"] == "DLQSinkFailure"
+        assert "expr" in alert
 
     def test_targets_correct_metric(self, alert_rules: list[dict]) -> None:
         alert = _find_alert(alert_rules, "DLQSinkFailure")

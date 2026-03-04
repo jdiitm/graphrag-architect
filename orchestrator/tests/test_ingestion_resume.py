@@ -73,7 +73,7 @@ class TestIngestionStatus:
             return removed, await store.get("old-thread")
 
         removed, after = asyncio.run(_run())
-        assert removed >= 1
+        assert removed == 1
         assert after is None
 
     def test_list_resumable(self, store: InMemoryStatusStore) -> None:
@@ -87,8 +87,7 @@ class TestIngestionStatus:
 
         resumable = asyncio.run(_run())
         thread_ids = [s.thread_id for s in resumable]
-        assert "failed-1" in thread_ids
-        assert "done-1" not in thread_ids
+        assert set(thread_ids) == {"running-1", "failed-1"}
 
     def test_concurrent_creates_safe(
         self, store: InMemoryStatusStore,

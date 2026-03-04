@@ -43,8 +43,8 @@ class TestSubgraphCacheSWR:
         initial_size = cache.stats().size
         cache.advance_generation()
         assert cache.stats().size == initial_size
-        assert cache.get("key1") is not None
-        assert cache.get("key2") is not None
+        assert cache.get("key1") == [{"name": "svc-a"}]
+        assert cache.get("key2") == [{"name": "svc-b"}]
 
     def test_invalidate_tenant_drops_entries_but_advance_does_not(self) -> None:
         cache = SubgraphCache(maxsize=64)

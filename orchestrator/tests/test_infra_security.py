@@ -60,6 +60,8 @@ class TestNetworkPolicyNamespaceRestriction:
         assert policy is not None, (
             "Expected allow-orchestrator-ingress NetworkPolicy"
         )
+        assert policy.get("kind") == "NetworkPolicy"
+        assert "ingress" in policy.get("spec", {})
 
     def test_ingestion_worker_rule_restricts_to_graphrag_namespace(
         self, network_policies: list[dict]
@@ -274,6 +276,7 @@ class TestSchemaInitNetworkPolicy:
             "A NetworkPolicy allowing neo4j-schema-init egress "
             "to Neo4j must exist"
         )
+        assert "egress" in policy.get("spec", {})
 
     def test_schema_init_egress_targets_neo4j_on_7687(
         self, network_policies: list[dict]
@@ -360,6 +363,7 @@ class TestKafkaEgressNetworkPolicy:
             "Without it, the deny-all policy blocks all inter-broker "
             "communication, preventing KRaft quorum formation."
         )
+        assert "egress" in policy.get("spec", {})
 
     def test_kafka_egress_selects_kafka_pods(
         self, network_policies: list[dict]

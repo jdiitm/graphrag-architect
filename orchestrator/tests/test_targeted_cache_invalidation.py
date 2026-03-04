@@ -88,7 +88,7 @@ class TestNodeTagsCleanedOnLruEviction:
         cache.put("q2", [{"svc": "mid"}], node_ids={"node-Y"})
         cache.put("q3", [{"svc": "new"}], node_ids={"node-Z"})
 
-        assert "node-X" not in cache._node_tags or not cache._node_tags["node-X"]
+        assert "node-X" not in cache._node_tags
 
         evicted = cache.invalidate_by_nodes({"node-X"})
         assert evicted == 0
@@ -102,8 +102,8 @@ class TestNodeTagsCleanedOnExplicitInvalidate:
 
         cache.invalidate("q1")
 
-        assert "node-A" not in cache._node_tags or not cache._node_tags["node-A"]
-        assert "node-B" not in cache._node_tags or not cache._node_tags["node-B"]
+        assert "node-A" not in cache._node_tags
+        assert "node-B" not in cache._node_tags
 
     def test_invalidate_tenant_cleans_node_tags(self) -> None:
         cache = SubgraphCache(maxsize=256)
@@ -113,8 +113,8 @@ class TestNodeTagsCleanedOnExplicitInvalidate:
 
         cache.invalidate_tenant("tenant_a")
 
-        assert "node-A" not in cache._node_tags or not cache._node_tags["node-A"]
-        assert "node-B" not in cache._node_tags or not cache._node_tags["node-B"]
+        assert "node-A" not in cache._node_tags
+        assert "node-B" not in cache._node_tags
         assert cache._node_tags.get("node-C") == {"tenant_b:q1"}
 
 

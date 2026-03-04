@@ -303,7 +303,7 @@ class TestSemanticCacheUsesVectorizedLookup:
         query_emb = [0.0] * 128
         query_emb[0] = 1.0
         result = cache.lookup(query_emb)
-        assert result is not None
+        assert result == {"idx": 0}
 
 
 class TestRedisSemanticQueryCacheInvalidateTenant:
