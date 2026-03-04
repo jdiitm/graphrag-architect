@@ -4,13 +4,6 @@ from typing import Any, Dict, List, Set
 
 from neo4j import AsyncDriver, AsyncManagedTransaction
 
-TOMBSTONE_CHECK_QUERY = (
-    "UNWIND $node_ids AS nid "
-    "MATCH (n {id: nid})-[r]->() "
-    "WHERE r.tombstoned_at IS NOT NULL "
-    "RETURN DISTINCT n.id AS node_id"
-)
-
 TOMBSTONE_CHECK_TENANT_QUERY = (
     "UNWIND $node_ids AS nid "
     "MATCH (n {id: nid, tenant_id: $tenant_id})-[r]->() "
@@ -22,17 +15,15 @@ TOMBSTONE_CHECK_TENANT_QUERY = (
 async def check_tombstoned_nodes(
     driver: AsyncDriver,
     node_ids: List[str],
-    tenant_id: str = "",
+    tenant_id: str,
 ) -> Set[str]:
     if not node_ids:
         return set()
 
-    if tenant_id:
-        query = TOMBSTONE_CHECK_TENANT_QUERY
-        params: Dict[str, Any] = {"node_ids": node_ids, "tenant_id": tenant_id}
-    else:
-        query = TOMBSTONE_CHECK_QUERY
-        params = {"node_ids": node_ids}
+    if not tenant_id:
+        raise ValueError("tenant_id is required for tombstone filtering")
+    query = TOMBSTONE_CHECK_TENANT_QUERY
+    params: Dict[str, Any] = {"node_ids": node_ids, "tenant_id": tenant_id}
 
     async def _tx(tx: AsyncManagedTransaction) -> Set[str]:
         result = await tx.run(query, **params)
@@ -46,7 +37,7 @@ async def check_tombstoned_nodes(
 async def filter_tombstoned_results(
     driver: AsyncDriver,
     candidates: List[Dict[str, Any]],
-    tenant_id: str = "",
+    tenant_id: str,
 ) -> List[Dict[str, Any]]:
     if not candidates:
         return []

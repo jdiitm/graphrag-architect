@@ -9,7 +9,7 @@ from orchestrator.app.cypher_tokenizer import (
 )
 
 _WRITE_KEYWORDS: FrozenSet[str] = frozenset({
-    "MERGE", "CREATE", "DELETE", "SET", "REMOVE", "DROP",
+    "MERGE", "CREATE", "DELETE", "SET", "REMOVE", "DROP", "FOREACH",
 })
 
 _DETACH_KEYWORD = "DETACH"
@@ -25,7 +25,6 @@ ALLOWED_PROCEDURES: FrozenSet[str] = frozenset({
     "db.schema.nodeTypeProperties",
     "db.schema.relTypeProperties",
     "dbms.components",
-    "dbms.queryJmx",
 })
 
 

@@ -175,7 +175,11 @@ class TestOutboxDrainer:
         outbox = VectorSyncOutbox()
         call_count = 0
 
-        async def _alternating_delete(collection: str, ids: list) -> int:
+        async def _alternating_delete(
+            collection: str,
+            ids: list,
+            tenant_id: str = "",
+        ) -> int:
             nonlocal call_count
             call_count += 1
             if call_count == 2:
@@ -293,6 +297,26 @@ class TestOutboxDrainerUpsertHandling:
         assert processed == 2
         mock_vs.delete.assert_called_once()
         mock_vs.upsert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_drainer_forwards_tenant_id_to_vector_store(self) -> None:
+        outbox = VectorSyncOutbox()
+        mock_vs = AsyncMock()
+        mock_vs.delete = AsyncMock(return_value=1)
+        event = VectorSyncEvent(
+            collection="svc",
+            pruned_ids=["id-1"],
+            tenant_id="tenant-a",
+        )
+        outbox.enqueue(event)
+
+        drainer = OutboxDrainer(outbox=outbox, vector_store=mock_vs)
+        processed = await drainer.process_once()
+
+        assert processed == 1
+        mock_vs.delete.assert_called_once_with(
+            "svc", ["id-1"], tenant_id="tenant-a",
+        )
 
 
 class TestRedisOutboxStore:
@@ -540,7 +564,12 @@ class SpyVectorStore:
         self.upsert_calls: List[Any] = []
         self.delete_calls: List[Any] = []
 
-    async def upsert(self, collection: str, vectors: List[Any]) -> int:
+    async def upsert(
+        self,
+        collection: str,
+        vectors: List[Any],
+        tenant_id: str = "",
+    ) -> int:
         from orchestrator.app.vector_store import VectorRecord
         for record in vectors:
             _ = record.id
@@ -549,11 +578,24 @@ class SpyVectorStore:
             assert isinstance(record, VectorRecord), (
                 f"Expected VectorRecord, got {type(record).__name__}"
             )
-        self.upsert_calls.append((collection, vectors))
+        self.upsert_calls.append({
+            "collection": collection,
+            "vectors": vectors,
+            "tenant_id": tenant_id,
+        })
         return len(vectors)
 
-    async def delete(self, collection: str, ids: List[str]) -> int:
-        self.delete_calls.append((collection, ids))
+    async def delete(
+        self,
+        collection: str,
+        ids: List[str],
+        tenant_id: str = "",
+    ) -> int:
+        self.delete_calls.append({
+            "collection": collection,
+            "ids": ids,
+            "tenant_id": tenant_id,
+        })
         return len(ids)
 
 
@@ -586,8 +628,10 @@ class TestDurableOutboxDrainerUpsertIntegration:
 
         assert processed == 1
         assert len(spy_vs.upsert_calls) == 1
-        call_collection, call_vectors = spy_vs.upsert_calls[0]
-        assert call_collection == "services"
+        call_payload = spy_vs.upsert_calls[0]
+        assert call_payload["collection"] == "services"
+        assert call_payload["tenant_id"] == ""
+        call_vectors = call_payload["vectors"]
         assert len(call_vectors) == 1
         assert isinstance(call_vectors[0], VectorRecord)
         assert call_vectors[0].id == "v1"
@@ -801,8 +845,29 @@ class TestDurableOutboxDrainerWithClaiming:
 
         assert processed == 1
         assert len(spy_vs.delete_calls) == 1
+        assert spy_vs.delete_calls[0]["tenant_id"] == ""
         remaining = await store.load_pending()
         assert len(remaining) == 0
+
+    @pytest.mark.asyncio
+    async def test_durable_drainer_forwards_tenant_id(self) -> None:
+        redis = ClaimableFakeRedis()
+        store = RedisOutboxStore(redis_conn=redis)
+        spy_vs = SpyVectorStore()
+        event = VectorSyncEvent(
+            collection="svc", pruned_ids=["a"], tenant_id="tenant-b",
+        )
+        await store.write_event(event)
+
+        drainer = DurableOutboxDrainer(
+            store=store, vector_store=spy_vs, max_retries=3,
+            worker_id="worker-tenant",
+        )
+        processed = await drainer.process_once()
+
+        assert processed == 1
+        assert len(spy_vs.delete_calls) == 1
+        assert spy_vs.delete_calls[0]["tenant_id"] == "tenant-b"
 
     @pytest.mark.asyncio
     async def test_drainer_prevents_parallel_processing(self) -> None:

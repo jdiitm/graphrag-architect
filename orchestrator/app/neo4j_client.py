@@ -595,23 +595,27 @@ class GraphRepository:
         self,
         ttl_days: int = 7,
         batch_size: int = 100,
+        tenant_id: str = "",
     ) -> int:
+        if not tenant_id:
+            raise ValueError("tenant_id is required for tombstone reaping")
         cutoff = (
             datetime.now(UTC) - timedelta(days=ttl_days)
         ).isoformat()
         total_reaped = 0
         while True:
             query = (
-                "MATCH ()-[r]->() "
+                "MATCH (n)-[r]->() "
                 "WHERE r.tombstoned_at IS NOT NULL "
                 "AND r.tombstoned_at < $cutoff "
+                "AND n.tenant_id = $tenant_id "
                 "WITH r LIMIT $batch_size "
                 "DELETE r RETURN count(r) AS reaped"
             )
             async with self._session() as session:
                 reaped = int(await session.execute_write(
                     self._run_reap, query=query,
-                    cutoff=cutoff, batch_size=batch_size,
+                    cutoff=cutoff, batch_size=batch_size, tenant_id=tenant_id,
                 ))
                 total_reaped += reaped
                 if reaped < batch_size:
@@ -624,9 +628,10 @@ class GraphRepository:
         query: str,
         cutoff: str,
         batch_size: int,
+        tenant_id: str = "",
     ) -> int:
         result = await tx.run(
-            query, cutoff=cutoff, batch_size=batch_size,
+            query, cutoff=cutoff, batch_size=batch_size, tenant_id=tenant_id,
         )
         record = await result.single()
         if record is None:

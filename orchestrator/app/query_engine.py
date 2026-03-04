@@ -828,15 +828,10 @@ async def _fetch_candidates_with_embedding(
     collection = _collection_for_tenant(tenant_id)
 
     if query_embedding is not None:
-        if tenant_id:
-            results = await _VECTOR_STORE.search_with_tenant(
-                collection, query_embedding,
-                tenant_id=tenant_id, limit=limit,
-            )
-        else:
-            results = await _VECTOR_STORE.search(
-                collection, query_embedding, limit=limit,
-            )
+        results = await _VECTOR_STORE.search_with_tenant(
+            collection, query_embedding,
+            tenant_id=tenant_id, limit=limit,
+        )
         candidates = _search_results_to_dicts(results)
         return await filter_tombstoned_results(driver, candidates, tenant_id)
 
