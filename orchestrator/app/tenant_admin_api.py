@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse
@@ -120,6 +121,19 @@ def _require_tenant_access(
         )
 
 
+_DEFAULT_DATABASE = "neo4j"
+
+
+@asynccontextmanager
+async def _tenant_scoped_session(
+    driver: Any, *, tenant_id: str, database: str = _DEFAULT_DATABASE,
+) -> AsyncIterator[Any]:
+    if not tenant_id:
+        raise ValueError("tenant_id is required for tenant-scoped session")
+    async with driver.session(database=database) as session:
+        yield session
+
+
 @tenant_router.get(
     "/{tenant_id}",
     response_model=TenantMetadataResponse,
@@ -141,7 +155,7 @@ async def get_tenant(
     ))
 
     driver = get_driver()
-    async with driver.session() as session:
+    async with _tenant_scoped_session(driver, tenant_id=tenant_id) as session:
         result = await session.execute_read(
             _run_read_query,
             "MATCH (n) WHERE n.tenant_id = $tenant_id "
@@ -174,7 +188,7 @@ async def get_tenant_repositories(
     _require_tenant_access(principal, tenant_id)
 
     driver = get_driver()
-    async with driver.session() as session:
+    async with _tenant_scoped_session(driver, tenant_id=tenant_id) as session:
         result = await session.execute_read(
             _run_read_query,
             "MATCH (r:Repository) WHERE r.tenant_id = $tenant_id "
@@ -275,6 +289,7 @@ async def register_webhook(
     authorization: Optional[str] = Header(default=None),
 ) -> JSONResponse:
     principal = _resolve_principal(authorization)
+    _require_admin(principal)
 
     webhook_id = str(uuid.uuid4())
     _webhook_store[webhook_id] = {

@@ -185,7 +185,7 @@ class TestWebhookRegistration:
                     "url": "https://example.com/hook",
                     "events": ["ingestion.completed"],
                 },
-                headers={"Authorization": f"Bearer {_VIEWER_TOKEN}"},
+                headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"},
             )
         assert resp.status_code == 201
         body = resp.json()
@@ -209,6 +209,82 @@ class TestAuthRequired:
             else:
                 resp = client.post(path, json=body)
         assert resp.status_code == 401, f"{method} {path} should require auth"
+
+
+class TestWebhookAdminRequired:
+
+    def test_viewer_cannot_register_webhook(self):
+        mock_driver, _ = _make_mock_driver()
+        with _patched_client(mock_driver) as client:
+            resp = client.post(
+                "/v1/webhooks",
+                json={
+                    "url": "https://example.com/hook",
+                    "events": ["ingestion.completed"],
+                },
+                headers={"Authorization": f"Bearer {_VIEWER_TOKEN}"},
+            )
+        assert resp.status_code == 403
+
+    def test_admin_can_register_webhook(self):
+        mock_driver, _ = _make_mock_driver()
+        with _patched_client(mock_driver) as client:
+            resp = client.post(
+                "/v1/webhooks",
+                json={
+                    "url": "https://example.com/hook",
+                    "events": ["ingestion.completed"],
+                },
+                headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"},
+            )
+        assert resp.status_code == 201
+
+
+class TestTenantScopedSessions:
+
+    def test_get_tenant_opens_session_with_database(self):
+        session_kwargs_log: List[Dict[str, Any]] = []
+        mock_driver, _ = _make_mock_driver([{"node_count": 5}])
+        original_session = mock_driver.session
+
+        @asynccontextmanager
+        async def _tracking_session(**kwargs):
+            session_kwargs_log.append(kwargs)
+            async with original_session(**kwargs) as s:
+                yield s
+
+        mock_driver.session = _tracking_session
+
+        with _patched_client(mock_driver) as client:
+            resp = client.get(
+                "/v1/tenants/platform",
+                headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        assert len(session_kwargs_log) == 1
+        assert "database" in session_kwargs_log[0]
+
+    def test_get_repositories_opens_session_with_database(self):
+        session_kwargs_log: List[Dict[str, Any]] = []
+        mock_driver, _ = _make_mock_driver([])
+        original_session = mock_driver.session
+
+        @asynccontextmanager
+        async def _tracking_session(**kwargs):
+            session_kwargs_log.append(kwargs)
+            async with original_session(**kwargs) as s:
+                yield s
+
+        mock_driver.session = _tracking_session
+
+        with _patched_client(mock_driver) as client:
+            resp = client.get(
+                "/v1/tenants/team-a/repositories",
+                headers={"Authorization": f"Bearer {_VIEWER_TOKEN}"},
+            )
+        assert resp.status_code == 200
+        assert len(session_kwargs_log) == 1
+        assert "database" in session_kwargs_log[0]
 
 
 class TestTenantIsolation:
