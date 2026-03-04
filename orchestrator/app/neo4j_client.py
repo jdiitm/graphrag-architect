@@ -22,6 +22,10 @@ from orchestrator.app.extraction_models import (
     ServiceNode,
     compute_content_hash,
 )
+from orchestrator.app.cypher_ast import (
+    inject_tenant_scope_all_matches,
+    validate_acl_coverage,
+)
 from orchestrator.app.neo4j_pool import get_query_timeout
 from orchestrator.app.ontology import (
     Ontology,
@@ -523,7 +527,10 @@ class GraphRepository:
         batch: List[Dict[str, Any]],
         tenant_id: str,
     ) -> None:
-        await tx.run(query, batch=batch, tenant_id=tenant_id)
+        scoped = query
+        if "MATCH" in query.upper() and not validate_acl_coverage(query, "tenant_id"):
+            scoped = inject_tenant_scope_all_matches(query, tenant_param="tenant_id")
+        await tx.run(scoped, batch=batch, tenant_id=tenant_id)
 
     async def prune_stale_edges(
         self,
@@ -579,13 +586,16 @@ class GraphRepository:
         timestamp: str,
         tenant_id: str = "",
     ) -> tuple[int, list[str]]:
+        scoped_query = query
+        if tenant_id and "MATCH" in query.upper() and not validate_acl_coverage(query, "tenant_id"):
+            scoped_query = inject_tenant_scope_all_matches(query, tenant_param="tenant_id")
         params: Dict[str, Any] = {
             "current_id": current_id,
             "timestamp": timestamp,
         }
         if tenant_id:
             params["tenant_id"] = tenant_id
-        result = await tx.run(query, **params)
+        result = await tx.run(scoped_query, **params)
         record = await result.single()
         if record is None:
             return 0, []
@@ -630,8 +640,11 @@ class GraphRepository:
         batch_size: int,
         tenant_id: str = "",
     ) -> int:
+        scoped_query = query
+        if tenant_id and "MATCH" in query.upper() and not validate_acl_coverage(query, "tenant_id"):
+            scoped_query = inject_tenant_scope_all_matches(query, tenant_param="tenant_id")
         result = await tx.run(
-            query, cutoff=cutoff, batch_size=batch_size, tenant_id=tenant_id,
+            scoped_query, cutoff=cutoff, batch_size=batch_size, tenant_id=tenant_id,
         )
         record = await result.single()
         if record is None:
