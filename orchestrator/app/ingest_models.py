@@ -61,14 +61,17 @@ class IngestJobStore:
         return job
 
     async def get(self, job_id: str) -> Optional[IngestJobResponse]:
+        self._evict_expired()
         return self._jobs.get(job_id)
 
     async def mark_running(self, job_id: str) -> None:
+        self._evict_expired()
         job = self._jobs.get(job_id)
         if job:
             job.status = JobStatus.RUNNING
 
     async def complete(self, job_id: str, result: IngestResponse) -> None:
+        self._evict_expired()
         job = self._jobs.get(job_id)
         if job:
             job.status = JobStatus.COMPLETED
@@ -76,6 +79,7 @@ class IngestJobStore:
             job.completed_at = time.time()
 
     async def fail(self, job_id: str, error: str) -> None:
+        self._evict_expired()
         job = self._jobs.get(job_id)
         if job:
             job.status = JobStatus.FAILED
@@ -83,6 +87,7 @@ class IngestJobStore:
             job.completed_at = time.time()
 
     async def heartbeat(self, job_id: str) -> None:
+        self._evict_expired()
         if job_id in self._mono:
             self._mono[job_id] = time.monotonic()
 

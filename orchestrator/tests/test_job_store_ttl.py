@@ -49,6 +49,14 @@ class TestQueryJobStoreHeartbeat:
         assert retrieved is not None
         assert retrieved.status.value == "running"
 
+    @pytest.mark.asyncio
+    async def test_get_evicts_expired_jobs_without_new_create(self):
+        store = QueryJobStore(ttl_seconds=0.01)
+        job = await store.create()
+        time.sleep(0.02)
+        retrieved = await store.get(job.job_id)
+        assert retrieved is None
+
 
 class TestIngestJobStoreHeartbeat:
     @pytest.mark.asyncio
@@ -64,6 +72,14 @@ class TestIngestJobStoreHeartbeat:
     async def test_heartbeat_nonexistent_job_is_noop(self):
         store = IngestJobStore(ttl_seconds=1.0)
         await store.heartbeat("nonexistent-id")
+
+    @pytest.mark.asyncio
+    async def test_get_evicts_expired_jobs_without_new_create(self):
+        store = IngestJobStore(ttl_seconds=0.01)
+        job = await store.create()
+        time.sleep(0.02)
+        retrieved = await store.get(job.job_id)
+        assert retrieved is None
 
 
 class TestMainUsesConfigurableTTL:

@@ -40,6 +40,7 @@ async def _execute_read_tx(
 MAX_HOPS = 5
 MAX_VISITED = 50
 MAX_NODE_DEGREE = 500
+MAX_SUPERNODE_SAMPLE_SIZE = 200
 COLLECTION_MULTIPLIER = 2.0
 
 _DEFAULT_DEGREE_THRESHOLD = 200
@@ -441,6 +442,14 @@ async def _run_sampled_query(
     return result
 
 
+def _sanitize_supernode_sample_size(sample_size: int) -> int:
+    if sample_size < 1:
+        return 1
+    if sample_size > MAX_SUPERNODE_SAMPLE_SIZE:
+        return MAX_SUPERNODE_SAMPLE_SIZE
+    return sample_size
+
+
 async def execute_hop(
     driver: AsyncDriver,
     source_id: str,
@@ -456,6 +465,7 @@ async def execute_hop(
 ) -> List[Dict[str, Any]]:
     provider = TenantSecurityProvider()
     degree_params = {"source_id": source_id, "tenant_id": tenant_id}
+    effective_sample_size = _sanitize_supernode_sample_size(sample_size)
 
     degree_tx_params: Dict[str, Any] = degree_params
 
@@ -475,7 +485,7 @@ async def execute_hop(
         "source_id": source_id,
         "tenant_id": tenant_id,
         "limit": limit,
-        "sample_size": sample_size,
+        "sample_size": effective_sample_size,
         "min_pagerank": 0.0,
         **acl_params,
     }
@@ -492,7 +502,7 @@ async def execute_hop(
             if degree > max_degree:
                 logger.warning(
                     "Sampling super-node %s with degree %d (threshold %d, sample %d)",
-                    source_id, degree, max_degree, sample_size,
+                    source_id, degree, max_degree, effective_sample_size,
                 )
                 if query_embedding is not None:
                     semantic_template = (
@@ -501,13 +511,13 @@ async def execute_hop(
                     )
                     return await _run_sampled_query(
                         session, source_id, tenant_id, acl_params,
-                        sample_size, timeout, template=semantic_template,
+                        effective_sample_size, timeout, template=semantic_template,
                         query_embedding=query_embedding,
                         similarity_threshold=similarity_threshold,
                     )
                 return await _run_sampled_query(
                     session, source_id, tenant_id, acl_params,
-                    sample_size, timeout, template=sampled_query,
+                    effective_sample_size, timeout, template=sampled_query,
                 )
 
         params: Dict[str, Any] = {
@@ -540,6 +550,7 @@ async def execute_batched_hop(
 ) -> List[Dict[str, Any]]:
     if not source_ids:
         return []
+    effective_per_source_limit = _sanitize_supernode_sample_size(per_source_limit)
 
     degree_map = await batch_check_degrees(
         driver, source_ids, tenant_id, timeout=timeout,
@@ -564,7 +575,7 @@ async def execute_batched_hop(
             "frontier_ids": normal_frontier,
             "tenant_id": tenant_id,
             "limit": limit,
-            "per_source_limit": per_source_limit,
+            "per_source_limit": effective_per_source_limit,
             "min_pagerank": 0.0,
             **acl_params,
         }
@@ -591,7 +602,7 @@ async def execute_batched_hop(
             tenant_id=tenant_id,
             acl_params=acl_params,
             timeout=timeout,
-            sample_size=per_source_limit,
+            sample_size=effective_per_source_limit,
             query_embedding=query_embedding,
             similarity_threshold=similarity_threshold,
         )
