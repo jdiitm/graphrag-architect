@@ -33,7 +33,9 @@ For the full system specification — data model, functional requirements, secur
 
 **Retrieval** — Hybrid VectorCypher approach: keyword classifier routes entity lookups to vector search, single-hop to vector + 1-hop Cypher, multi-hop to agentic iterative Cypher generation, and aggregate queries to DRIFT-inspired hybrid retrieval. LLM synthesizes natural-language answers from graph context.
 
-**Access Control** — Zanzibar-inspired permission filtering: `SecurityPrincipal` resolved from request headers (anonymous requests receive `__anonymous__` sentinel — wildcard bypass eliminated), `CypherPermissionFilter` injects ACL `WHERE` clauses into all Cypher queries at query-time. HMAC request signing between Go workers and Python orchestrator. Dual-key rotation with grace period. Fail-closed rate limiting on Redis failure.
+**Access Control** — Zanzibar-inspired permission filtering: `SecurityPrincipal` resolved from request headers (anonymous requests receive `__anonymous__` sentinel — wildcard bypass eliminated), `CypherPermissionFilter` injects ACL `WHERE` clauses into all Cypher queries at query-time, and AST-level tenant-scope rewriting enforces tenant predicates on driver-executed Cypher that includes `MATCH` scopes. HMAC request signing between Go workers and Python orchestrator. Dual-key rotation with grace period. Fail-closed rate limiting on Redis failure.
+
+**Reliability hardening** — Supernode expansion now clamps sample windows to bounded limits to prevent pathological fanout amplification. Async `/query` and `/ingest` jobs send periodic heartbeat refreshes (`ASYNC_JOB_HEARTBEAT_INTERVAL_SECONDS`) during long-running execution so status leases remain live until terminal completion.
 
 **Observability** — OpenTelemetry distributed tracing across the full pipeline: FastAPI auto-instrumentation, manual spans on all 14 LangGraph DAG nodes, Go spans on Kafka poll/dispatch/process/DLQ/commit, trace context propagation via `traceparent` headers across Go-HTTP-Python boundary. SLO-based error budgets with Prometheus recording rules and 8 Grafana dashboards.
 
