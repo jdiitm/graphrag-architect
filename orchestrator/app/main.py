@@ -4,7 +4,7 @@ import binascii
 import inspect
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any, AsyncIterator, Dict, Generator, List, Optional
 
 from fastapi import FastAPI, Header, HTTPException
@@ -84,6 +84,7 @@ _TENANT_LIMITER = create_rate_limiter(
 
 
 _DEFAULT_SYNC_INGEST_TIMEOUT = 120.0
+_DEFAULT_ASYNC_HEARTBEAT_INTERVAL = 30.0
 _ASYNC_JOB_MAX_INFLIGHT = max(1, int(os.environ.get("ASYNC_JOB_MAX_INFLIGHT", "128")))
 _ACTIVE_QUERY_TASKS: set[asyncio.Task[Any]] = set()
 _ACTIVE_INGEST_TASKS: set[asyncio.Task[Any]] = set()
@@ -97,6 +98,24 @@ def _get_sync_ingest_timeout() -> float:
         except ValueError:
             return _DEFAULT_SYNC_INGEST_TIMEOUT
     return _DEFAULT_SYNC_INGEST_TIMEOUT
+
+
+def _get_async_job_heartbeat_interval() -> float:
+    raw = os.environ.get("ASYNC_JOB_HEARTBEAT_INTERVAL_SECONDS", "")
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            return _DEFAULT_ASYNC_HEARTBEAT_INTERVAL
+    return _DEFAULT_ASYNC_HEARTBEAT_INTERVAL
+
+
+async def _heartbeat_loop(job_store: Any, job_id: str, interval: float) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        await job_store.heartbeat(job_id)
 
 
 def _get_active_ingestion_graph() -> Any:
@@ -555,9 +574,16 @@ async def _run_ingest_job(
 ) -> None:
     await _INGEST_JOB_STORE.mark_running(job_id)
     await _INGEST_JOB_STORE.heartbeat(job_id)
+    interval = _get_async_job_heartbeat_interval()
+    heartbeat_task = asyncio.create_task(
+        _heartbeat_loop(_INGEST_JOB_STORE, job_id, interval)
+    )
     sem = get_ingestion_semaphore()
     acquired, token = await sem.try_acquire()
     if not acquired:
+        heartbeat_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat_task
         await _INGEST_JOB_STORE.fail(job_id, "Too many concurrent ingestion requests")
         return
     try:
@@ -570,6 +596,9 @@ async def _run_ingest_job(
         logger.exception("Background ingest job %s failed", job_id)
         await _INGEST_JOB_STORE.fail(job_id, str(exc))
     finally:
+        heartbeat_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat_task
         await sem.release(token)
 
 
@@ -732,6 +761,8 @@ async def query(
 async def _run_query_job(job_id: str, initial_state: Dict[str, Any]) -> None:
     await _JOB_STORE.mark_running(job_id)
     await _JOB_STORE.heartbeat(job_id)
+    interval = _get_async_job_heartbeat_interval()
+    heartbeat_task = asyncio.create_task(_heartbeat_loop(_JOB_STORE, job_id, interval))
     try:
         graph_input: Any = initial_state
         result = await query_graph.ainvoke(graph_input)
@@ -740,6 +771,10 @@ async def _run_query_job(job_id: str, initial_state: Dict[str, Any]) -> None:
     except Exception as exc:
         logger.exception("Background query job %s failed", job_id)
         await _JOB_STORE.fail(job_id, str(exc))
+    finally:
+        heartbeat_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat_task
 
 
 @app.get(

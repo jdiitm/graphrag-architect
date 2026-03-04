@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 
@@ -129,3 +130,53 @@ class TestHeartbeatWiredInProduction:
             from orchestrator.app.main import _run_ingest_job
             await _run_ingest_job(job.job_id, [])
             store.heartbeat.assert_called_with(job.job_id)
+
+    @pytest.mark.asyncio
+    async def test_run_query_job_periodic_heartbeat_for_slow_job(self, monkeypatch):
+        from unittest.mock import AsyncMock, patch
+
+        store = QueryJobStore(ttl_seconds=3600.0)
+        job = await store.create()
+
+        async def _slow_query(_):
+            await asyncio.sleep(0.05)
+            return {
+                "answer": "test", "sources": [],
+                "complexity": "entity_lookup", "retrieval_path": "vector",
+            }
+
+        monkeypatch.setenv("ASYNC_JOB_HEARTBEAT_INTERVAL_SECONDS", "0.01")
+        with patch("orchestrator.app.main._JOB_STORE", store), \
+             patch("orchestrator.app.main.query_graph") as mg:
+            mg.ainvoke = _slow_query
+            store.heartbeat = AsyncMock()
+            from orchestrator.app.main import _run_query_job
+            await _run_query_job(job.job_id, {"query": "test"})
+            assert store.heartbeat.await_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_run_ingest_job_periodic_heartbeat_for_slow_job(self, monkeypatch):
+        from unittest.mock import AsyncMock, patch
+
+        store = IngestJobStore(ttl_seconds=3600.0)
+        job = await store.create()
+        mock_sem = AsyncMock()
+        mock_sem.try_acquire = AsyncMock(return_value=(True, "tok"))
+        mock_sem.release = AsyncMock()
+
+        async def _slow_ingest(_):
+            await asyncio.sleep(0.05)
+            return {
+                "commit_status": "success", "extracted_nodes": [],
+                "extraction_errors": [],
+            }
+
+        monkeypatch.setenv("ASYNC_JOB_HEARTBEAT_INTERVAL_SECONDS", "0.01")
+        with patch("orchestrator.app.main._INGEST_JOB_STORE", store), \
+             patch("orchestrator.app.main.ingestion_graph") as mg, \
+             patch("orchestrator.app.main.get_ingestion_semaphore", return_value=mock_sem):
+            mg.ainvoke = _slow_ingest
+            store.heartbeat = AsyncMock()
+            from orchestrator.app.main import _run_ingest_job
+            await _run_ingest_job(job.job_id, [])
+            assert store.heartbeat.await_count >= 2
