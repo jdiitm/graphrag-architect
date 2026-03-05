@@ -16,13 +16,13 @@ from orchestrator.app.access_control import (
 from orchestrator.app.audit_log import AuditAction, AuditEvent, SecurityAuditLogger
 from orchestrator.app.config import AuthConfig
 from orchestrator.app.neo4j_pool import get_driver
-from orchestrator.app.tenant_isolation import (
-    IsolationMode,
-    TenantEnforcingDriver,
-)
 from orchestrator.app.schema_evolution import (
     InMemoryVersionStore,
     MigrationRegistry,
+)
+from orchestrator.app.tenant_isolation import (
+    IsolationMode,
+    TenantEnforcingDriver,
 )
 
 logger = logging.getLogger(__name__)

@@ -34,7 +34,6 @@ from orchestrator.app.access_control import (
 from orchestrator.app.agentic_traversal import run_traversal
 from orchestrator.app.audit_log import SecurityAuditLogger
 from orchestrator.app.call_isolation import validate_call_subquery_acl
-from orchestrator.app.tenant_security import TenantSecurityProvider
 from orchestrator.app.circuit_breaker import (
     CircuitBreakerConfig,
     CircuitOpenError,
@@ -102,6 +101,7 @@ from orchestrator.app.subgraph_cache import (
     create_subgraph_cache,
 )
 from orchestrator.app.telemetry_ports import get_metrics_port, get_tracing_port
+from orchestrator.app.tenant_security import TenantSecurityProvider
 from orchestrator.app.tombstone_filter import filter_tombstoned_results
 from orchestrator.app.vector_store import (
     SearchResult,

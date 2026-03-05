@@ -59,6 +59,7 @@ from orchestrator.app.query_models import (
     create_job_store,
 )
 from orchestrator.app.query_templates import TemplateCatalog
+from orchestrator.app.request_signing import verify_request_signature
 from orchestrator.app.tenant_admin_api import (
     admin_router as tenant_admin_router,
 )
@@ -66,7 +67,6 @@ from orchestrator.app.tenant_admin_api import (
     tenant_router,
     webhook_router,
 )
-from orchestrator.app.request_signing import verify_request_signature
 from orchestrator.app.tenant_isolation import TenantContext
 from orchestrator.app.tenant_security import TenantScopeVerifier
 from orchestrator.app.token_bucket import create_rate_limiter

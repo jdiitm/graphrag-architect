@@ -5,12 +5,12 @@ import hashlib
 import hmac
 import html
 import math
+import os
 import re
 import secrets
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
-import os
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 _DEFAULT_MAX_QUERY_CHARS = 4_000
